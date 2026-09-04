@@ -1,0 +1,8 @@
+/build
+
+# IDE
+.idea/
+
+/cmake-build-debug/
+
+/.internaldocs/
