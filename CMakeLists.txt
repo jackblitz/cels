@@ -8,7 +8,7 @@ endif()
 set(CMAKE_C_STANDARD 99)
 
 if(WIN32)
-    set(CELS_PLATFORM_DIR "windows")
+    set(CELS_PLATFORM_DIR "window")
 elseif(APPLE)
     set(CELS_PLATFORM_DIR "macos")
 elseif(UNIX)
@@ -25,3 +25,56 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CELS_OUTPUT_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CELS_OUTPUT_DIR}/libs")
 
 add_executable(cels main.c)
+target_link_libraries(cels PRIVATE
+    cels_slottable
+)
+
+# Compiler warning flags per Section 1 of coding-standards-c99.md
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# Composition engine library
+add_library(cels_slottable STATIC
+    src/composition/slottable/slot_table.c
+    src/composition/composer.c
+)
+target_include_directories(cels_slottable PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# Test suite: Slot Table
+add_executable(test_slot_table
+    test/test_slot_table.c
+)
+target_link_libraries(test_slot_table PRIVATE
+    cels_slottable
+)
+set_target_properties(test_slot_table PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CELS_OUTPUT_DIR}/test"
+)
+
+# Test suite: Composer & Diffing Engine
+add_executable(test_composer
+    test/test_composer.c
+)
+target_link_libraries(test_composer PRIVATE
+    cels_slottable
+)
+set_target_properties(test_composer PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CELS_OUTPUT_DIR}/test"
+)
+
+# Copy the MinGW pthread runtime DLL next to the test binaries if the
+# toolchain links it dynamically.
+if(CELS_PLATFORM_DIR STREQUAL "window")
+    get_filename_component(MINGW_BIN_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
+    if(EXISTS "${MINGW_BIN_DIR}/libwinpthread-1.dll")
+        add_custom_command(TARGET test_composer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${MINGW_BIN_DIR}/libwinpthread-1.dll"
+                "${CELS_OUTPUT_DIR}/test/"
+            COMMENT "Copying libwinpthread-1.dll to ${CELS_OUTPUT_DIR}/test"
+        )
+    endif()
+endif()
