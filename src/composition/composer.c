@@ -1,8 +1,11 @@
 #include "composition/composer.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "flecs.h"
 
 #define CELS_ASSERT(condition) assert(condition)
 
@@ -18,22 +21,23 @@
 
 static CELS_THREAD_LOCAL CelsComposer *s_currentComposer = NULL;
 static CELS_THREAD_LOCAL CelsComposer s_defaultComposer;
-
+static CELS_THREAD_LOCAL CEL_CompositionScope s_lastComposition;
 
 /**
  * Prunes trailing unvisited groups and their slots from the gap buffer.
  *
- * @param table      Target slot table. Non-NULL.
+ * @param cmp        Target composer. Non-NULL.
  * @param startIndex Logical group index where pruning begins.
  * @param count      Number of consecutive groups to remove.
  */
 static void
-PruneGroups(CelsSlotTable *table, uint32_t startIndex, uint32_t count)
+PruneGroups(CelsComposer *cmp, uint32_t startIndex, uint32_t count)
 {
-    if (count == 0) {
+    if (count == 0 || cmp == NULL || cmp->table == NULL) {
         return;
     }
 
+    CelsSlotTable *table = cmp->table;
     const CelsResult moveRes = CelsSlotTableMoveGapTo(table, startIndex);
     CELS_ASSERT(moveRes == CELS_OK);
 
@@ -43,6 +47,9 @@ PruneGroups(CelsSlotTable *table, uint32_t startIndex, uint32_t count)
     uint32_t staleSlots = 0;
     for (uint32_t i = 0; i < count; i++) {
         staleSlots += (uint32_t)staleGroups[i].slotCount;
+        if (cmp->stage != NULL && staleGroups[i].entityId != 0) {
+            ecs_delete(cmp->stage, (ecs_entity_t)staleGroups[i].entityId);
+        }
     }
 
     const uint32_t slotGapEnd = table->slotGapStart + table->slotGapLen;
@@ -73,17 +80,19 @@ CelsComposerBegin(CelsComposer *cmp, CelsSlotTable *table)
     cmp->skipCount = 0;
     cmp->parentStack[0] = UINT32_MAX;
     cmp->groupEndStack[0] = CelsSlotTableGroupCount(table);
+    cmp->entityStack[0] = 0;
 }
 
 /**
- * Enters an existing group matching key, or inserts a new group into the gap.
+ * Enters an existing group matching id, or inserts a new group into the gap.
+ * Automatically creates and parents a Flecs entity if a stage is bound.
  *
  * @param cmp Target composer. Non-NULL.
- * @param key Stable callsite key.
+ * @param id  Stable callsite ID.
  * @return true if entered successfully, false on capacity exhaustion.
  */
 bool
-CelsComposerGroupStart(CelsComposer *cmp, uint32_t key)
+CelsComposerGroupStartId(CelsComposer *cmp, CelsId id)
 {
     CELS_ASSERT(cmp != NULL);
     CELS_ASSERT(cmp->table != NULL);
@@ -93,24 +102,40 @@ CelsComposerGroupStart(CelsComposer *cmp, uint32_t key)
     }
 
     CelsSlotTable *table = cmp->table;
+    const uint32_t key = id.id;
 
     // 1. Cache Hit: Group at readerIndex matches key.
-    // Bounded by the CURRENT parent's own expected subtree end (not the
-    // table's total group count): a match found beyond that bound belongs to
-    // an unrelated sibling/cousin subtree and must never be adopted here.
     const uint32_t currentBound = cmp->groupEndStack[cmp->parentStackTop];
     if (cmp->readerIndex < currentBound) {
         uint32_t phys = 0;
         const CelsResult res =
             CelsSlotTableGroupToPhysicalIdx(table, cmp->readerIndex, &phys);
         if (res == CELS_OK && table->groups[phys].key == key) {
-            const CelsSlotGroup *group = &table->groups[phys];
+            CelsSlotGroup *group = &table->groups[phys];
             cmp->parentStackTop++;
             cmp->parentStack[cmp->parentStackTop] = cmp->readerIndex;
             cmp->groupEndStack[cmp->parentStackTop] =
                 cmp->readerIndex + 1u + (uint32_t)group->groupSize;
             cmp->currentSlot = 0;
             cmp->readerIndex++;
+
+            if (group->entityId != 0) {
+                cmp->entityStack[cmp->parentStackTop] = group->entityId;
+            } else if (cmp->stage != NULL && id.stringId.chars != NULL) {
+                ecs_entity_desc_t desc = { 0 };
+                desc.name = id.stringId.chars;
+                const ecs_entity_t parent =
+                    (ecs_entity_t)cmp->entityStack[cmp->parentStackTop - 1];
+                if (parent != 0) {
+                    desc.parent = parent;
+                }
+                const ecs_entity_t e = ecs_entity_init(cmp->stage, &desc);
+                group->entityId = (uint64_t)e;
+                cmp->entityStack[cmp->parentStackTop] = (uint64_t)e;
+            } else {
+                cmp->entityStack[cmp->parentStackTop] = 0;
+            }
+
             return true;
         }
     }
@@ -128,8 +153,21 @@ CelsComposerGroupStart(CelsComposer *cmp, uint32_t key)
         ? UINT32_MAX
         : cmp->parentStack[cmp->parentStackTop];
 
+    uint64_t newEntityId = 0;
+    if (cmp->stage != NULL && id.stringId.chars != NULL) {
+        ecs_entity_desc_t desc = { 0 };
+        desc.name = id.stringId.chars;
+        const ecs_entity_t parent =
+            (ecs_entity_t)cmp->entityStack[cmp->parentStackTop];
+        if (parent != 0) {
+            desc.parent = parent;
+        }
+        const ecs_entity_t e = ecs_entity_init(cmp->stage, &desc);
+        newEntityId = (uint64_t)e;
+    }
+
     const CelsSlotGroup newGroup = {
-        .entityId = 0,
+        .entityId = newEntityId,
         .key = key,
         .parentIndex = parentIndex,
         .slotIndex = table->slotGapStart,
@@ -144,10 +182,6 @@ CelsComposerGroupStart(CelsComposer *cmp, uint32_t key)
     table->groupGapStart++;
     table->groupGapLen--;
 
-    // Every currently open ancestor (including the pass-wide base frame at
-    // index 0) now owns one more descendant group, so their expected subtree
-    // ends must grow in lockstep or a later sibling lookup would use a
-    // stale, too-small bound.
     for (uint32_t i = 0; i <= cmp->parentStackTop; i++) {
         cmp->groupEndStack[i]++;
     }
@@ -155,10 +189,17 @@ CelsComposerGroupStart(CelsComposer *cmp, uint32_t key)
     cmp->parentStackTop++;
     cmp->parentStack[cmp->parentStackTop] = newLogicalIndex;
     cmp->groupEndStack[cmp->parentStackTop] = newLogicalIndex + 1u;
+    cmp->entityStack[cmp->parentStackTop] = newEntityId;
     cmp->currentSlot = 0;
     cmp->readerIndex++;
 
     return true;
+}
+
+bool
+CelsComposerGroupStart(CelsComposer *cmp, uint32_t key)
+{
+    return CelsComposerGroupStartId(cmp, CelsIdFromKey(key));
 }
 
 /**
@@ -179,7 +220,7 @@ CelsComposerGroupEnd(CelsComposer *cmp)
     // 1. Prune vanished child groups that were not visited in this pass
     if (cmp->readerIndex < expectedEnd) {
         const uint32_t staleCount = expectedEnd - cmp->readerIndex;
-        PruneGroups(cmp->table, cmp->readerIndex, staleCount);
+        PruneGroups(cmp, cmp->readerIndex, staleCount);
 
         // Mirror of the increment in CelsComposerGroupStart: every ancestor
         // still open OUTSIDE the group being closed just lost staleCount
@@ -346,6 +387,62 @@ CelsComposerGetDefault(void)
     return &s_defaultComposer;
 }
 
+/**
+ * Returns the Flecs stage associated with the composer, if any.
+ *
+ * @param cmp Pointer to composer. If NULL, queries current ambient composer.
+ * @return Flecs stage handle (ecs_world_t*), or NULL if no stage is bound.
+ */
+struct ecs_world_t *
+CelsComposerGetStage(const CelsComposer *cmp)
+{
+    if (cmp == NULL) {
+        cmp = s_currentComposer;
+    }
+    return cmp != NULL ? cmp->stage : NULL;
+}
+
+/**
+ * Returns the Flecs stage associated with the current ambient composer.
+ *
+ * @return Flecs stage handle (struct ecs_world_t*), or NULL if outside pass or no stage.
+ */
+struct ecs_world_t *
+CelsComposerGetCurrentStage(void)
+{
+    return s_currentComposer != NULL ? s_currentComposer->stage : NULL;
+}
+
+uint64_t
+CelsComposerGetEntity(const CelsComposer *cmp)
+{
+    if (cmp == NULL) {
+        cmp = s_currentComposer;
+    }
+    if (cmp == NULL || cmp->parentStackTop == 0) {
+        return 0;
+    }
+    return cmp->entityStack[cmp->parentStackTop];
+}
+
+uint64_t
+CelsComposerGetCurrentEntity(void)
+{
+    return CelsComposerGetEntity(NULL);
+}
+
+CEL_CompositionScope
+CelsComposerGetLastCompositionScope(void)
+{
+    return s_lastComposition;
+}
+
+CEL_CompositionScope
+CelsComposerGetLastComposition(void)
+{
+    return s_lastComposition;
+}
+
 /* ========================================================================= */
 /* Table Registry & Lifecycle (Automatic Table Assignment)                   */
 /* ========================================================================= */
@@ -469,29 +566,38 @@ CelsTableRegistryFindGroup(uint32_t key, CelsSlotTable **outTable)
 
 /**
  * Initializes ambient context and begins root composition for CEL_CompositionScope.
- * If table is NULL, automatically assigns and acquires a persistent table for key.
+ * If table is NULL, automatically assigns and acquires a persistent table for id.
  *
  * @param cmp   Optional explicit composer (NULL uses thread-local default).
  * @param table Optional target slot table (NULL automatically acquires from registry).
- * @param key   Root callsite key.
+ * @param id    Root callsite ID.
  * @return Initialized scope tracking ambient restoration and group status.
  */
 CelsComposerScope
-CelsComposerScopeEnter(CelsComposer *cmp, CelsSlotTable *table, uint32_t key)
+CelsComposerScopeEnter(CelsComposer *cmp, CelsSlotTable *table, CelsId id)
 {
-    if (table == NULL) {
-        table = CelsTableRegistryAcquire(key);
-    }
-    CELS_ASSERT(table != NULL);
-
     CelsComposerScope scope;
     scope.prev = s_currentComposer;
-    scope.curr = (cmp != NULL) ? cmp : &s_defaultComposer;
+    scope.curr = (cmp != NULL)
+        ? cmp
+        : (s_currentComposer != NULL ? s_currentComposer : &s_defaultComposer);
 
     s_currentComposer = scope.curr;
 
+    if (table == NULL) {
+        if (scope.curr != &s_defaultComposer && scope.curr->table != NULL) {
+            table = scope.curr->table;
+        } else {
+            table = CelsTableRegistryAcquire(id.id);
+        }
+    }
+    CELS_ASSERT(table != NULL);
+
+    struct ecs_world_t *const savedStage = scope.curr->stage;
     CelsComposerBegin(scope.curr, table);
-    if (!CelsComposerGroupStart(scope.curr, key)) {
+    scope.curr->stage = savedStage;
+
+    if (!CelsComposerGroupStartId(scope.curr, id)) {
         s_currentComposer = scope.prev;
         scope.curr = NULL;
         scope.active = 0;
@@ -499,7 +605,18 @@ CelsComposerScopeEnter(CelsComposer *cmp, CelsSlotTable *table, uint32_t key)
     }
 
     scope.active = 1;
+
+    s_lastComposition.id = id;
+    s_lastComposition.entity = scope.curr->entityStack[scope.curr->parentStackTop];
+    s_lastComposition.groupCount = CelsSlotTableGroupCount(table);
+
     return scope;
+}
+
+CelsComposerScope
+CelsComposerScopeEnterKey(CelsComposer *cmp, CelsSlotTable *table, uint32_t key)
+{
+    return CelsComposerScopeEnter(cmp, table, CelsIdFromKey(key));
 }
 
 /**
@@ -513,7 +630,14 @@ CelsComposerScopeExit(CelsComposerScope *scope)
     CELS_ASSERT(scope != NULL);
 
     if (scope->curr != NULL && scope->active != 0) {
+        if (scope->curr->table != NULL) {
+            s_lastComposition.groupCount =
+                CelsSlotTableGroupCount(scope->curr->table);
+        }
         CelsComposerGroupEnd(scope->curr);
+        if (scope->curr == &s_defaultComposer) {
+            scope->curr->table = NULL;
+        }
     }
     s_currentComposer = scope->prev;
     scope->active = 0;
@@ -522,17 +646,23 @@ CelsComposerScopeExit(CelsComposerScope *scope)
 /**
  * Enters child group in the current ambient composer for CEL_Compose.
  *
- * @param key Stable callsite key.
+ * @param id Stable callsite ID.
  * @return 1 on success, 0 on failure or missing ambient context.
  */
 int32_t
-CelsComposerGroupEnter(uint32_t key)
+CelsComposerGroupEnter(CelsId id)
 {
     CelsComposer *cmp = s_currentComposer;
     if (cmp == NULL) {
         return 0;
     }
-    return CelsComposerGroupStart(cmp, key) ? 1 : 0;
+    return CelsComposerGroupStartId(cmp, id) ? 1 : 0;
+}
+
+int32_t
+CelsComposerGroupEnterKey(uint32_t key)
+{
+    return CelsComposerGroupEnter(CelsIdFromKey(key));
 }
 
 /**
@@ -551,16 +681,16 @@ CelsComposerGroupLeave(void)
  * Enters child group with explicit composer for CEL_Compose.
  *
  * @param cmp Target composer. Non-NULL.
- * @param key Stable callsite key.
+ * @param id  Stable callsite ID.
  * @return 1 on success, 0 on failure.
  */
 int32_t
-CelsComposerGroupEnterExplicit(CelsComposer *cmp, uint32_t key)
+CelsComposerGroupEnterExplicit(CelsComposer *cmp, CelsId id)
 {
     if (cmp == NULL) {
         return 0;
     }
-    return CelsComposerGroupStart(cmp, key) ? 1 : 0;
+    return CelsComposerGroupStartId(cmp, id) ? 1 : 0;
 }
 
 /**
@@ -741,7 +871,7 @@ CelsComposerObservableEnter(CelsComposer *cmp,
  * @return 1 if changed or first mount (enter block), 0 if skipped or failed.
  */
 int32_t
-CelsComposerGroupEnterStateful(uint32_t key,
+CelsComposerGroupEnterStateful(CelsId id,
                                const void *stateData,
                                size_t stateSize)
 {
@@ -749,7 +879,7 @@ CelsComposerGroupEnterStateful(uint32_t key,
     if (cmp == NULL) {
         return 0;
     }
-    if (!CelsComposerGroupStart(cmp, key)) {
+    if (!CelsComposerGroupStartId(cmp, id)) {
         return 0;
     }
     const bool changed = CelsComposerChanged(cmp, stateData, stateSize);
@@ -765,21 +895,21 @@ CelsComposerGroupEnterStateful(uint32_t key,
  * Explicit composer variant of CelsComposerGroupEnterStateful.
  *
  * @param cmp       Target composer. Non-NULL.
- * @param key       Stable callsite key.
+ * @param id        Stable callsite ID.
  * @param stateData Pointer to state struct/variable to diff. Non-NULL.
  * @param stateSize Size of state struct/variable in bytes.
  * @return 1 if changed or first mount (enter block), 0 if skipped or failed.
  */
 int32_t
 CelsComposerGroupEnterStatefulExplicit(CelsComposer *cmp,
-                                       uint32_t key,
+                                       CelsId id,
                                        const void *stateData,
                                        size_t stateSize)
 {
     if (cmp == NULL) {
         return 0;
     }
-    if (!CelsComposerGroupStart(cmp, key)) {
+    if (!CelsComposerGroupStartId(cmp, id)) {
         return 0;
     }
     const bool changed = CelsComposerChanged(cmp, stateData, stateSize);

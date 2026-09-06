@@ -16,9 +16,10 @@
 #define TEST_ASSERT(cond)                                                      \
     do {                                                                       \
         if (!(cond)) {                                                         \
-            fprintf(stderr, "Assertion failed: %s at %s:%d\n",                 \
-                    #cond, __FILE__, __LINE__);                                \
-            assert(cond);                                                      \
+            printf("\n[ASSERTION FAILED]: %s at %s:%d\n",                      \
+                   #cond, __FILE__, __LINE__);                                 \
+            fflush(stdout);                                                    \
+            exit(1);                                                           \
         }                                                                      \
     } while (0)
 
@@ -38,20 +39,20 @@ static int g_rootSkipCount = 0;
 static void
 ComposablePlayer(CelsComposer *cmp, CelsSlotTable *table, const PlayerState *state)
 {
-    CEL_CompositionScope(cmp, table, KEY_APP_ROOT) {
+    CEL_Composition(cmp, table, CEL_Key(KEY_APP_ROOT)) {
         cel_watch(*state) {
             printf("  [Exec] Root Node (State Changed: HP=%d, Shield=%s)\n",
                    state->health, state->has_shield ? "ON" : "OFF");
 
             // Subtree 1: Mesh
-            CEL_Compose(KEY_CHILD_A) {
+            CEL_Compose(CEL_Key(KEY_CHILD_A)) {
                 printf("    [Exec] Mesh Subtree rendering...\n");
                 g_meshExecCount++;
             }
 
             // Subtree 2: Shield VFX (Conditional)
             if (state->has_shield) {
-                CEL_Compose(KEY_CHILD_B) {
+                CEL_Compose(CEL_Key(KEY_CHILD_B)) {
                     printf("    [Exec] Shield VFX Subtree rendering...\n");
                     g_shieldExecCount++;
                 }
@@ -224,7 +225,7 @@ static int g_inventoryItemExecs = 0;
 static void
 ComposableInventoryItem(uint32_t slotKey, int itemCount)
 {
-    CEL_Compose(slotKey) {
+    CEL_Compose(CEL_Key(slotKey)) {
         cel_watch(itemCount) {
             g_inventoryItemExecs++;
         }
@@ -248,7 +249,7 @@ TestDslMacroAmbientContext(void)
 
     // Pass 1: Initial mount using ambient default composer
     g_inventoryItemExecs = 0;
-    CEL_CompositionScope(&table, 0x1000) {
+    CEL_Composition(&table, CEL_Key(0x1000)) {
         TEST_ASSERT(CelsComposerGetCurrent() != NULL);
         ComposableInventoryItem(0x1001, potionCount);
     }
@@ -259,7 +260,7 @@ TestDslMacroAmbientContext(void)
     // Pass 2: Identical state -> ComposableInventoryItem should skip in O(1)
     // (Also testing CEL_Scope shorthand alias)
     g_inventoryItemExecs = 0;
-    CEL_Scope(&table, 0x1000) {
+    CEL_Scope(&table, CEL_Key(0x1000)) {
         ComposableInventoryItem(0x1001, potionCount);
     }
     TEST_ASSERT(CelsComposerGetCurrent() == NULL);
@@ -269,7 +270,7 @@ TestDslMacroAmbientContext(void)
     // Pass 3: Mutated state -> Potion count changes to 10 -> executes
     potionCount = 10;
     g_inventoryItemExecs = 0;
-    CEL_CompositionScope(&table, 0x1000) {
+    CEL_Composition(&table, CEL_Key(0x1000)) {
         ComposableInventoryItem(0x1001, potionCount);
     }
     TEST_ASSERT(CelsComposerGetCurrent() == NULL);
@@ -291,7 +292,7 @@ static void
 ComposableItemCard(const ItemCardState *state)
 {
     // Style B: CEL_Compose enters group AND diffs *state in one construct!
-    CEL_Compose(0x2001, *state) {
+    CEL_Compose(CEL_Key(0x2001), *state) {
         g_styleBChildExecs++;
 
         // Test CEL_remember: local ephemeral UI state in the slot table
@@ -327,7 +328,7 @@ TestStyleBComposeAndRemember(void)
     // Pass 1: Initial mount -> Style B executes block (clickCount seeded to 0)
     g_styleBChildExecs = 0;
     g_lastObservedClicks = -1;
-    CEL_Scope(&table, 0x2000) {
+    CEL_Scope(&table, CEL_Key(0x2000)) {
         ComposableItemCard(&item);
     }
     TEST_ASSERT(g_styleBChildExecs == 1);
@@ -336,7 +337,7 @@ TestStyleBComposeAndRemember(void)
 
     // Pass 2: Identical state -> Style B skips in O(1)!
     g_styleBChildExecs = 0;
-    CEL_Scope(&table, 0x2000) {
+    CEL_Scope(&table, CEL_Key(0x2000)) {
         ComposableItemCard(&item);
     }
     TEST_ASSERT(g_styleBChildExecs == 0); // Completely skipped in O(1)!
@@ -346,7 +347,7 @@ TestStyleBComposeAndRemember(void)
     // clickCount was mutated to 1 in Pass 1, and should be preserved here!
     item.quantity = 2;
     g_styleBChildExecs = 0;
-    CEL_Scope(&table, 0x2000) {
+    CEL_Scope(&table, CEL_Key(0x2000)) {
         ComposableItemCard(&item);
     }
     TEST_ASSERT(g_styleBChildExecs == 1);
@@ -355,7 +356,7 @@ TestStyleBComposeAndRemember(void)
     // Pass 4: State changes (quantity = 3) -> clickCount should now be 2!
     item.quantity = 3;
     g_styleBChildExecs = 0;
-    CEL_Scope(&table, 0x2000) {
+    CEL_Scope(&table, CEL_Key(0x2000)) {
         ComposableItemCard(&item);
     }
     TEST_ASSERT(g_styleBChildExecs == 1);
@@ -385,7 +386,7 @@ CEL_CompositionScope_Decl(GameHudScope, const HudCardState *state);
 void
 ComposableHudStatus(void)
 {
-    CEL_Compose(0x3002) {
+    CEL_Compose(CEL_Key(0x3002)) {
         g_hudStatusExecs++;
     }
 }
@@ -393,7 +394,7 @@ ComposableHudStatus(void)
 void
 ComposableHudCard(const HudCardState *state)
 {
-    CEL_Compose(0x3001, *state) {
+    CEL_Compose(CEL_Key(0x3001), *state) {
         g_hudCardExecs++;
 
         // Test cel_remember from cels.h
@@ -410,13 +411,14 @@ ComposableHudCard(const HudCardState *state)
     }
 }
 
-void
+CEL_CompositionScope
 GameHudScope(const HudCardState *state)
 {
-    // 1-argument CEL_CompositionScope: assigns and manages its own slot table!
-    CEL_CompositionScope(0x3000) {
+    // 1-argument CEL_Composition: assigns and manages its own slot table!
+    CEL_Composition(CEL_Key(0x3000)) {
         ComposableHudCard(state);
     }
+    return CEL_CompositionDone();
 }
 
 static void
@@ -441,7 +443,7 @@ TestHeaderVariantsAndCompositionScope(void)
     g_hudStatusExecs = 0;
     GameHudScope(&state);
 
-    TEST_ASSERT(g_hudCardExecs == 0); // Skipped in O(1)!
+    TEST_ASSERT(g_hudCardExecs == 0); // Whole card subtree skipped!
     TEST_ASSERT(g_hudStatusExecs == 0); // Child also skipped!
 
     // Pass 3: State changes -> score = 250 -> recomposes in same table
@@ -455,7 +457,7 @@ TestHeaderVariantsAndCompositionScope(void)
     TEST_ASSERT(g_lastObservedTaps == 1); // Preserved from Pass 1!
 
     // Pass 4: Out of scope -> Free the table back up using CEL_Dispose!
-    CEL_Dispose(0x3000);
+    CEL_Dispose(CEL_Key(0x3000));
 
     // Pass 5: Calling again after dispose -> Fresh mount into newly assigned table!
     g_hudCardExecs = 0;
@@ -467,7 +469,7 @@ TestHeaderVariantsAndCompositionScope(void)
     TEST_ASSERT(g_lastObservedTaps == 0); // Reset to 0 because previous table was freed!
 
     // Clean up
-    CEL_Dispose(0x3000);
+    CEL_Dispose(CEL_Key(0x3000));
 
     printf("  PASSED: TestHeaderVariantsAndCompositionScope\n");
 }
@@ -500,11 +502,11 @@ TestEcsQueryObserver(void)
     // Pass 1: Initial mount -> CEL_query executes
     g_queryBodyExecs = 0;
     g_queryEntityChildExecs = 0;
-    CEL_CompositionScope(&table, 0x4000) {
+    CEL_Composition(&table, CEL_Key(0x4000)) {
         CEL_query(query) {
             g_queryBodyExecs++;
             for (int i = 0; i < query.entityCount; i++) {
-                CEL_Compose(0x4100 + (uint32_t)i) {
+                CEL_Compose(CEL_Key(0x4100 + (uint32_t)i)) {
                     g_queryEntityChildExecs++;
                 }
             }
@@ -517,11 +519,11 @@ TestEcsQueryObserver(void)
     // Pass 2: Identical query state -> CEL_query skips in O(1)!
     g_queryBodyExecs = 0;
     g_queryEntityChildExecs = 0;
-    CEL_CompositionScope(&table, 0x4000) {
+    CEL_Composition(&table, CEL_Key(0x4000)) {
         CEL_query(query) {
             g_queryBodyExecs++;
             for (int i = 0; i < query.entityCount; i++) {
-                CEL_Compose(0x4100 + (uint32_t)i) {
+                CEL_Compose(CEL_Key(0x4100 + (uint32_t)i)) {
                     g_queryEntityChildExecs++;
                 }
             }
@@ -536,11 +538,11 @@ TestEcsQueryObserver(void)
     query.entityCount = 3;
     g_queryBodyExecs = 0;
     g_queryEntityChildExecs = 0;
-    CEL_CompositionScope(&table, 0x4000) {
+    CEL_Composition(&table, CEL_Key(0x4000)) {
         CEL_query(query) {
             g_queryBodyExecs++;
             for (int i = 0; i < query.entityCount; i++) {
-                CEL_Compose(0x4100 + (uint32_t)i) {
+                CEL_Compose(CEL_Key(0x4100 + (uint32_t)i)) {
                     g_queryEntityChildExecs++;
                 }
             }
@@ -589,7 +591,7 @@ TestFlecsQueryObservableDiff(void)
     memset(&g_capturedPrevQuery, 0, sizeof(g_capturedPrevQuery));
     memset(&g_capturedCurrQuery, 0, sizeof(g_capturedCurrQuery));
 
-    CEL_CompositionScope(&table, 0x5000) {
+    CEL_Composition(&table, CEL_Key(0x5000)) {
         FlecsEnemyQuery prevQuery;
         CEL_observable(query, prevQuery) {
             g_observableExecCount++;
@@ -605,7 +607,7 @@ TestFlecsQueryObservableDiff(void)
 
     // Pass 2: Identical state (no ECS systems touched matching entities)
     g_observableExecCount = 0;
-    CEL_CompositionScope(&table, 0x5000) {
+    CEL_Composition(&table, CEL_Key(0x5000)) {
         FlecsEnemyQuery prevQuery;
         CEL_observable(query, prevQuery) {
             g_observableExecCount++;
@@ -622,7 +624,7 @@ TestFlecsQueryObservableDiff(void)
     query.totalPartyHp = 140;
 
     g_observableExecCount = 0;
-    CEL_CompositionScope(&table, 0x5000) {
+    CEL_Composition(&table, CEL_Key(0x5000)) {
         FlecsEnemyQuery prevQuery;
         // Test CEL_Observeable alias as well
         CEL_Observeable(query, prevQuery) {
@@ -646,7 +648,7 @@ TestFlecsQueryObservableDiff(void)
     query.totalPartyHp = 70;
 
     g_observableExecCount = 0;
-    CEL_CompositionScope(&table, 0x5000) {
+    CEL_Composition(&table, CEL_Key(0x5000)) {
         FlecsEnemyQuery prevQuery;
         cel_observable(query, prevQuery) {
             g_observableExecCount++;
@@ -672,28 +674,28 @@ TestClayStyleNamesAndCompositionLookup(void)
     printf("Running TestClayStyleNamesAndCompositionLookup...\n");
 
     // 1. FNV-1a Hash Distinctness & Index Offsets
-    const uint32_t nameHud = CEL_Name("PlayerHud");
-    const uint32_t nameHealth = CEL_Name("HealthBar");
-    const uint32_t nameMana = CEL_Name("ManaBar");
-    TEST_ASSERT(nameHud != 0);
-    TEST_ASSERT(nameHealth != 0);
-    TEST_ASSERT(nameMana != 0);
-    TEST_ASSERT(nameHealth != nameMana);
-    TEST_ASSERT(nameHealth != nameHud);
+    const CelsId nameHud = CEL_Name("PlayerHud");
+    const CelsId nameHealth = CEL_Name("HealthBar");
+    const CelsId nameMana = CEL_Name("ManaBar");
+    TEST_ASSERT(nameHud.id != 0);
+    TEST_ASSERT(nameHealth.id != 0);
+    TEST_ASSERT(nameMana.id != 0);
+    TEST_ASSERT(nameHealth.id != nameMana.id);
+    TEST_ASSERT(nameHealth.id != nameHud.id);
 
-    const uint32_t slot0 = CEL_Name("Slot", 0);
-    const uint32_t slot1 = CEL_Name("Slot", 1);
-    const uint32_t slot1Alias = CEL_NameI("Slot", 1);
-    TEST_ASSERT(slot0 != slot1);
-    TEST_ASSERT(slot1 == slot1Alias);
+    const CelsId slot0 = CEL_Name("Slot", 0);
+    const CelsId slot1 = CEL_Name("Slot", 1);
+    const CelsId slot1Alias = CEL_NameI("Slot", 1);
+    TEST_ASSERT(slot0.id != slot1.id);
+    TEST_ASSERT(slot1.id == slot1Alias.id);
 
     // 2. Parent-Scoped Local Names (Clay CLAY_ID_LOCAL equivalent)
-    const uint32_t parentCardA = CEL_Name("CardA");
-    const uint32_t parentCardB = CEL_Name("CardB");
-    const uint32_t btnA = CEL_NameScoped("CardA", "CloseBtn");
-    const uint32_t btnB = CEL_NameScoped("CardB", "CloseBtn");
-    TEST_ASSERT(btnA != btnB);
-    TEST_ASSERT(parentCardA != parentCardB);
+    const CelsId parentCardA = CEL_Name("CardA");
+    const CelsId parentCardB = CEL_Name("CardB");
+    const CelsId btnA = CEL_NameScoped("CardA", "CloseBtn");
+    const CelsId btnB = CEL_NameScoped("CardB", "CloseBtn");
+    TEST_ASSERT(btnA.id != btnB.id);
+    TEST_ASSERT(parentCardA.id != parentCardB.id);
 
     // 3. Composition with CEL_Name (replacing raw numbers like 0x0101)
     int health = 100;
@@ -702,7 +704,7 @@ TestClayStyleNamesAndCompositionLookup(void)
     int manaRenderCount = 0;
 
     // Pass 1: Initial mount using CEL_Name instead of raw numbers
-    CEL_CompositionScope(CEL_Name("PlayerHud")) {
+    CEL_Composition(CEL_Name("PlayerHud")) {
         // Child 1: Stateful Compose with CEL_Name
         CEL_Compose(CEL_Name("HealthBar"), health) {
             healthRenderCount++;
@@ -731,18 +733,18 @@ TestClayStyleNamesAndCompositionLookup(void)
     // 4. Finding Compositions by CEL_Name outside the composition pass
     CelsCompositionRef healthRef = CEL_Find(CEL_Name("HealthBar"));
     TEST_ASSERT(healthRef.found == true);
-    TEST_ASSERT(healthRef.key == CEL_Name("HealthBar"));
+    TEST_ASSERT(healthRef.key == CEL_Name("HealthBar").id);
     TEST_ASSERT(healthRef.group != NULL);
     TEST_ASSERT(healthRef.slots != NULL);
     TEST_ASSERT(*(int *)healthRef.slots == 100); // Verify remembered HP in slot memory!
 
     CelsCompositionRef manaRef = CEL_FindByName("ManaBar");
     TEST_ASSERT(manaRef.found == true);
-    TEST_ASSERT(manaRef.key == CEL_Name("ManaBar"));
+    TEST_ASSERT(manaRef.key == CEL_Name("ManaBar").id);
 
     CelsCompositionRef slotRef2 = CEL_Find(CEL_NameI("InventorySlot", 2));
     TEST_ASSERT(slotRef2.found == true);
-    TEST_ASSERT(slotRef2.key == CEL_NameI("InventorySlot", 2));
+    TEST_ASSERT(slotRef2.key == CEL_NameI("InventorySlot", 2).id);
 
     CelsCompositionRef nonExistentRef = CEL_FindByName("NonExistentNode");
     TEST_ASSERT(nonExistentRef.found == false);
@@ -753,7 +755,7 @@ TestClayStyleNamesAndCompositionLookup(void)
     healthRenderCount = 0;
     manaRenderCount = 0;
 
-    CEL_CompositionScope(CEL_Name("PlayerHud")) {
+    CEL_Composition(CEL_Name("PlayerHud")) {
         CEL_Compose(CEL_Name("HealthBar"), health) {
             healthRenderCount++;
             int *cachedHp = cel_remember(health);
@@ -890,6 +892,9 @@ TestGroupStartRespectsParentSubtreeBound(void)
 int
 main(void)
 {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
     printf("====================================================\n");
     printf(" Starting Cels Composer & Diffing Engine Test Suite\n");
     printf("====================================================\n");

@@ -10,7 +10,7 @@
  *     // Initialize slab and table...
  *
  *     // Root view (like Android Compose setContent)
- *     CEL_CompositionScope(&table, KEY_APP_ROOT) {
+ *     CEL_Composition(&table, KEY_APP_ROOT) {
  *         // cel_watch diffs parameter state; automatically skips subtree in O(1)
  *         // if identical, or executes the block if changed.
  *         cel_watch(*playerState) {
@@ -43,19 +43,25 @@
 #define _CEL_CAT2(a, b) a##b
 #define _CEL_CAT(a, b) _CEL_CAT2(a, b)
 
+struct ecs_world_t;
+typedef struct CelsComposer CelsComposer;
+typedef CelsComposer Composer;
+
 /**
  * Inline composer cursor tracking hierarchical diffing and pruning.
- * Fields ordered largest to smallest (pointer -> 32-bit arrays/integers).
+ * Fields ordered largest to smallest (pointers -> 32-bit arrays/integers).
  */
-typedef struct CelsComposer {
+struct CelsComposer {
     CelsSlotTable *table;
+    struct ecs_world_t *stage;
     uint32_t readerIndex;
     uint32_t currentSlot;
     uint32_t parentStackTop;
     uint32_t skipCount;
     uint32_t parentStack[CELS_COMPOSER_MAX_DEPTH];
     uint32_t groupEndStack[CELS_COMPOSER_MAX_DEPTH];
-} CelsComposer;
+    uint64_t entityStack[CELS_COMPOSER_MAX_DEPTH];
+};
 
 /**
  * Stack scope guard for ambient composer context during root composition passes.
@@ -88,18 +94,14 @@ typedef struct CelsId {
 } CelsId;
 
 /**
- * Reference to a found composition group in the slot table.
+ * Composition completion result returned by root view functions.
  */
-typedef struct CelsCompositionRef {
-    bool found;
-    uint32_t key;
-    uint32_t logicalIndex;
-    uint16_t slotCount;
-    uint16_t groupSize;
-    uint16_t nodeCount;
-    CelsSlotGroup *group;
-    CelsSlotValue *slots;
-} CelsCompositionRef;
+typedef struct CEL_CompositionScope {
+    CelsId id;
+    uint64_t entity;
+    uint32_t groupCount;
+} CEL_CompositionScope;
+typedef CEL_CompositionScope CelsCompositionScope;
 
 /**
  * 32-bit FNV-1a string hashing for stable composable keys and Clay-style element IDs.
@@ -154,6 +156,58 @@ CelsHashStringWithBase(const char *str, uint32_t baseId, uint32_t offset)
     return hash;
 }
 
+/**
+ * Constructs a CelsId from a string label and optional numeric offset.
+ */
+static inline CelsId
+CelsIdMake(const char *str, uint32_t offset)
+{
+    CelsId cid;
+    cid.id = CelsHashString(str, offset);
+    cid.offset = offset;
+    cid.baseId = 0;
+    cid.stringId.isStatic = true;
+    cid.stringId.chars = str;
+    uint32_t len = 0;
+    if (str != NULL) {
+        while (str[len] != '\0') {
+            len++;
+        }
+    }
+    cid.stringId.length = len;
+    return cid;
+}
+
+/**
+ * Constructs a CelsId from an existing 32-bit key.
+ */
+static inline CelsId
+CelsIdFromKey(uint32_t key)
+{
+    CelsId cid;
+    cid.id = key;
+    cid.offset = 0;
+    cid.baseId = 0;
+    cid.stringId.isStatic = true;
+    cid.stringId.chars = NULL;
+    cid.stringId.length = 0;
+    return cid;
+}
+
+/**
+ * Reference to a found composition group in the slot table.
+ */
+typedef struct CelsCompositionRef {
+    bool found;
+    uint32_t key;
+    uint32_t logicalIndex;
+    uint16_t slotCount;
+    uint16_t groupSize;
+    uint16_t nodeCount;
+    CelsSlotGroup *group;
+    CelsSlotValue *slots;
+} CelsCompositionRef;
+
 /* ========================================================================= */
 /* Core Lifecycle & Traversal API                                            */
 /* ========================================================================= */
@@ -165,6 +219,16 @@ CelsHashStringWithBase(const char *str, uint32_t baseId, uint32_t offset)
  * @param table Pointer to the target slot table. Non-NULL.
  */
 void CelsComposerBegin(CelsComposer *cmp, CelsSlotTable *table);
+
+/**
+ * Enters an existing group matching id, or inserts a new group into the gap.
+ * Automatically creates and parents an associated Flecs entity if a stage is bound.
+ *
+ * @param cmp Pointer to the composer. Non-NULL.
+ * @param id  Stable callsite ID (hash key + optional string name).
+ * @return true if entered successfully, false on capacity exhaustion.
+ */
+bool CelsComposerGroupStartId(CelsComposer *cmp, CelsId id);
 
 /**
  * Enters an existing group matching key, or inserts a new group into the gap.
@@ -235,6 +299,21 @@ void CelsComposerSetCurrent(CelsComposer *cmp);
 CelsComposer *CelsComposerGetDefault(void);
 
 /**
+ * Returns the Flecs stage associated with the composer, if any.
+ *
+ * @param cmp Pointer to composer. If NULL, queries current ambient composer.
+ * @return Flecs stage handle (struct ecs_world_t*), or NULL if no stage is bound.
+ */
+struct ecs_world_t *CelsComposerGetStage(const CelsComposer *cmp);
+
+/**
+ * Returns the Flecs stage associated with the current ambient composer.
+ *
+ * @return Flecs stage handle (struct ecs_world_t*), or NULL if outside pass or no stage.
+ */
+struct ecs_world_t *CelsComposerGetCurrentStage(void);
+
+/**
  * Acquires or creates a persistent CelsSlotTable for a given composition root key.
  * If a table already exists for the key, it is reused to preserve recomposition caching.
  *
@@ -265,17 +344,45 @@ void CelsTableRegistryReset(void);
 CelsSlotGroup *CelsTableRegistryFindGroup(uint32_t key, CelsSlotTable **outTable);
 
 /**
+ * Returns the Flecs entity associated with the currently active cel.
+ *
+ * @return Active ecs_entity_t handle, or 0 if outside cel or no stage.
+ */
+uint64_t CelsComposerGetCurrentEntity(void);
+
+/**
+ * Returns the Flecs entity associated with the composer's currently active group.
+ *
+ * @param cmp Pointer to composer. If NULL, queries current ambient composer.
+ * @return Active ecs_entity_t handle, or 0 if outside cel or no stage.
+ */
+uint64_t CelsComposerGetEntity(const CelsComposer *cmp);
+
+/**
+ * Returns the completed composition result from the last root scope.
+ */
+CEL_CompositionScope CelsComposerGetLastCompositionScope(void);
+CEL_CompositionScope CelsComposerGetLastComposition(void);
+
+/**
  * Initializes ambient context and begins root composition for CEL_CompositionScope.
- * If table is NULL, automatically acquires/assigns its own persistent table for key.
+ * If table is NULL, automatically acquires/assigns its own persistent table for id.
  *
  * @param cmp   Optional explicit composer (NULL uses thread-local default).
  * @param table Optional target slot table (NULL automatically acquires from registry).
- * @param key   Root callsite key.
+ * @param id    Root callsite ID.
  * @return Initialized scope tracking ambient restoration and group status.
  */
 CelsComposerScope CelsComposerScopeEnter(CelsComposer *cmp,
                                          CelsSlotTable *table,
-                                         uint32_t key);
+                                         CelsId id);
+
+/**
+ * Backwards compatibility wrapper for integer keys.
+ */
+CelsComposerScope CelsComposerScopeEnterKey(CelsComposer *cmp,
+                                            CelsSlotTable *table,
+                                            uint32_t key);
 
 /**
  * Concludes root composition pass and restores previous ambient context.
@@ -287,10 +394,15 @@ void CelsComposerScopeExit(CelsComposerScope *scope);
 /**
  * Enters child group in the current ambient composer for CEL_Compose.
  *
- * @param key Stable callsite key.
+ * @param id Stable callsite ID.
  * @return 1 on success, 0 on failure or missing ambient context.
  */
-int32_t CelsComposerGroupEnter(uint32_t key);
+int32_t CelsComposerGroupEnter(CelsId id);
+
+/**
+ * Backwards compatibility wrapper for integer keys.
+ */
+int32_t CelsComposerGroupEnterKey(uint32_t key);
 
 /**
  * Leaves child group in the current ambient composer for CEL_Compose.
@@ -301,10 +413,10 @@ void CelsComposerGroupLeave(void);
  * Enters child group with explicit composer for CEL_Compose.
  *
  * @param cmp Target composer. Non-NULL.
- * @param key Stable callsite key.
+ * @param id  Stable callsite ID.
  * @return 1 on success, 0 on failure.
  */
-int32_t CelsComposerGroupEnterExplicit(CelsComposer *cmp, uint32_t key);
+int32_t CelsComposerGroupEnterExplicit(CelsComposer *cmp, CelsId id);
 
 /**
  * Leaves child group with explicit composer for CEL_Compose.
@@ -347,12 +459,12 @@ CelsCompositionRef CelsComposerFind(const CelsComposer *cmp, uint32_t key);
  * If the state is identical, automatically skips the group in O(1) and leaves
  * the group immediately, returning 0 so the child block never executes.
  *
- * @param key       Stable callsite key.
+ * @param id        Stable callsite ID.
  * @param stateData Pointer to state struct/variable to diff. Non-NULL.
  * @param stateSize Size of state struct/variable in bytes.
  * @return 1 if changed or first mount (enter block), 0 if skipped or failed.
  */
-int32_t CelsComposerGroupEnterStateful(uint32_t key,
+int32_t CelsComposerGroupEnterStateful(CelsId id,
                                        const void *stateData,
                                        size_t stateSize);
 
@@ -360,13 +472,13 @@ int32_t CelsComposerGroupEnterStateful(uint32_t key,
  * Explicit composer variant of CelsComposerGroupEnterStateful.
  *
  * @param cmp       Target composer. Non-NULL.
- * @param key       Stable callsite key.
+ * @param id        Stable callsite ID.
  * @param stateData Pointer to state struct/variable to diff. Non-NULL.
  * @param stateSize Size of state struct/variable in bytes.
  * @return 1 if changed or first mount (enter block), 0 if skipped or failed.
  */
 int32_t CelsComposerGroupEnterStatefulExplicit(CelsComposer *cmp,
-                                               uint32_t key,
+                                               CelsId id,
                                                const void *stateData,
                                                size_t stateSize);
 
@@ -442,22 +554,24 @@ void *CelsComposerRemember(CelsComposer *cmp,
 /* ========================================================================= */
 /* Declarative DSL Macros                                                    */
 /* ========================================================================= */
+/* Declarative DSL Macros                                                    */
+/* ========================================================================= */
 
-#define _CEL_COMPOSITION_SCOPE_IMPL(cmp, table, key, uid)                     \
-    for (CelsComposerScope uid = CelsComposerScopeEnter((cmp), (table), (key));\
+#define _CEL_COMPOSITION_SCOPE_IMPL(cmp, table, id, uid)                      \
+    for (CelsComposerScope uid = CelsComposerScopeEnter((cmp), (table), (id)); \
          uid.active;                                                           \
          CelsComposerScopeExit(&uid))
 
-#define _CEL_COMPOSITION_SCOPE_3(cmp, table, key)                             \
-    _CEL_COMPOSITION_SCOPE_IMPL((cmp), (table), (key),                         \
+#define _CEL_COMPOSITION_SCOPE_3(cmp, table, id)                               \
+    _CEL_COMPOSITION_SCOPE_IMPL((cmp), (table), (id),                          \
                                 _CEL_CAT(_cel_scope_, __LINE__))
 
-#define _CEL_COMPOSITION_SCOPE_2(table, key)                                  \
-    _CEL_COMPOSITION_SCOPE_IMPL(NULL, (table), (key),                          \
+#define _CEL_COMPOSITION_SCOPE_2(table, id)                                    \
+    _CEL_COMPOSITION_SCOPE_IMPL(NULL, (table), (id),                           \
                                 _CEL_CAT(_cel_scope_, __LINE__))
 
-#define _CEL_COMPOSITION_SCOPE_1(key)                                          \
-    _CEL_COMPOSITION_SCOPE_IMPL(NULL, NULL, (key),                             \
+#define _CEL_COMPOSITION_SCOPE_1(id)                                           \
+    _CEL_COMPOSITION_SCOPE_IMPL(NULL, NULL, (id),                              \
                                 _CEL_CAT(_cel_scope_, __LINE__))
 
 #define _CEL_COMPOSITION_SCOPE_DISPATCH(_1, _2, _3, NAME, ...) NAME
@@ -466,59 +580,57 @@ void *CelsComposerRemember(CelsComposer *cmp,
  * @brief Root composition view scope (Android Compose setContent equivalent).
  *
  * Supports:
- * - 1-argument: CEL_CompositionScope(key) -> automatically acquires and manages its own slot table!
- * - 2-argument: CEL_CompositionScope(table, key) -> uses caller's explicit slot table.
- * - 3-argument: CEL_CompositionScope(cmp, table, key) -> uses explicit composer and table.
+ * - 1-argument: CEL_Composition(id) -> automatically acquires and manages its own slot table!
+ * - 2-argument: CEL_Composition(table, id) -> uses caller's explicit slot table.
+ * - 3-argument: CEL_Composition(cmp, table, id) -> uses explicit composer and table.
  *
  * Automatically initializes the pass, opens root group on '{', and closes
  * group & restores ambient context on '}'.
  */
-#define CEL_CompositionScope(...)                                              \
+#define CEL_Composition(...)                                                   \
     _CEL_COMPOSITION_SCOPE_DISPATCH(                                           \
         __VA_ARGS__, _CEL_COMPOSITION_SCOPE_3, _CEL_COMPOSITION_SCOPE_2,        \
         _CEL_COMPOSITION_SCOPE_1, 0)(__VA_ARGS__)
-#define CELS_COMPOSITION_SCOPE(...) CEL_CompositionScope(__VA_ARGS__)
+#define CELS_COMPOSITION(...) CEL_Composition(__VA_ARGS__)
 
 /* Shorthand aliases */
-#define CEL_Scope(...) CEL_CompositionScope(__VA_ARGS__)
-#define CELS_SCOPE(...) CEL_CompositionScope(__VA_ARGS__)
-#define CEL_Composition(...) CEL_CompositionScope(__VA_ARGS__)
-#define CELS_COMPOSITION(...) CEL_CompositionScope(__VA_ARGS__)
+#define CEL_Scope(...) CEL_Composition(__VA_ARGS__)
+#define CELS_SCOPE(...) CEL_Composition(__VA_ARGS__)
 
 /* Disposal / Freeing macro */
-#define CEL_Dispose(key) CelsTableRegistryRelease(key)
-#define cel_dispose(key) CelsTableRegistryRelease(key)
-#define CELS_DISPOSE(key) CelsTableRegistryRelease(key)
+#define CEL_Dispose(_cels_id_expr) CelsTableRegistryRelease((_cels_id_expr).id)
+#define cel_dispose(_cels_id_expr) CEL_Dispose(_cels_id_expr)
+#define CELS_DISPOSE(_cels_id_expr) CEL_Dispose(_cels_id_expr)
 
 
 /* --- CEL_Compose Implementation (Style B & Stateless) --- */
 
-#define _CEL_COMPOSE_IMPL_STATEFUL(key, state_ptr, state_size, uid)            \
+#define _CEL_COMPOSE_IMPL_STATEFUL(id, state_ptr, state_size, uid)             \
     for (int32_t uid = CelsComposerGroupEnterStateful(                         \
-             (key), (state_ptr), (state_size));                                \
+             (id), (state_ptr), (state_size));                                 \
          uid;                                                                  \
          CelsComposerGroupLeave(), uid = 0)
 
-#define _CEL_COMPOSE_IMPL_STATELESS(key, uid)                                  \
-    for (int32_t uid = CelsComposerGroupEnter(key); uid;                       \
+#define _CEL_COMPOSE_IMPL_STATELESS(id, uid)                                   \
+    for (int32_t uid = CelsComposerGroupEnter(id); uid;                        \
          CelsComposerGroupLeave(), uid = 0)
 
-#define _CEL_COMPOSE_IMPL_EXPLICIT_STATEFUL(cmp, key, state_ptr, state_size, uid) \
+#define _CEL_COMPOSE_IMPL_EXPLICIT_STATEFUL(cmp, id, state_ptr, state_size, uid) \
     for (int32_t uid = CelsComposerGroupEnterStatefulExplicit(                 \
-             (cmp), (key), (state_ptr), (state_size));                         \
+             (cmp), (id), (state_ptr), (state_size));                          \
          uid;                                                                  \
          CelsComposerGroupLeaveExplicit(cmp), uid = 0)
 
-#define _CEL_COMPOSE_3(cmp, key, state)                                        \
-    _CEL_COMPOSE_IMPL_EXPLICIT_STATEFUL((cmp), (key), &(state), sizeof(state), \
+#define _CEL_COMPOSE_3(cmp, id, state)                                         \
+    _CEL_COMPOSE_IMPL_EXPLICIT_STATEFUL((cmp), (id), &(state), sizeof(state),  \
                                         _CEL_CAT(_cel_cmp_, __LINE__))
 
-#define _CEL_COMPOSE_2(key, state)                                             \
-    _CEL_COMPOSE_IMPL_STATEFUL((key), &(state), sizeof(state),                 \
+#define _CEL_COMPOSE_2(id, state)                                              \
+    _CEL_COMPOSE_IMPL_STATEFUL((id), &(state), sizeof(state),                  \
                                _CEL_CAT(_cel_cmp_, __LINE__))
 
-#define _CEL_COMPOSE_1(key)                                                    \
-    _CEL_COMPOSE_IMPL_STATELESS((key), _CEL_CAT(_cel_cmp_, __LINE__))
+#define _CEL_COMPOSE_1(id)                                                     \
+    _CEL_COMPOSE_IMPL_STATELESS((id), _CEL_CAT(_cel_cmp_, __LINE__))
 
 #define _CEL_COMPOSE_DISPATCH(_1, _2, _3, NAME, ...) NAME
 
@@ -526,9 +638,9 @@ void *CelsComposerRemember(CelsComposer *cmp,
  * @brief Declare a child composable node in the composition hierarchy.
  *
  * Supports:
- * - Stateless: CEL_Compose(key)
- * - Style B (Stateful): CEL_Compose(key, state) - diffs state and skips in O(1)
- * - Explicit: CEL_Compose(cmp, key, state)
+ * - Stateless: CEL_Compose(id)
+ * - Style B (Stateful): CEL_Compose(id, state) - diffs state and skips in O(1)
+ * - Explicit: CEL_Compose(cmp, id, state)
  *
  * Automatically opens group on '{' and closes/prunes on '}'.
  */
@@ -720,15 +832,16 @@ void *CelsComposerRemember(CelsComposer *cmp,
     CelsComposerChanged((cmp), &(variable), sizeof(variable))
 
 /* ========================================================================= */
+/* ========================================================================= */
 /* Name, ID & Entity Macros (inspired by Nic Barker's Clay UI)               */
 /* ========================================================================= */
 
-#define _CEL_NAME_1(str) CelsHashString((str), 0)
-#define _CEL_NAME_2(str, idx) CelsHashString((str), (uint32_t)(idx))
+#define _CEL_NAME_1(str) CelsIdMake((str), 0)
+#define _CEL_NAME_2(str, idx) CelsIdMake((str), (uint32_t)(idx))
 #define _CEL_NAME_DISPATCH(_1, _2, NAME, ...) NAME
 
 /**
- * @brief Produces a stable 32-bit FNV-1a hash key from a unique string name.
+ * @brief Produces a unique CelsId containing a 32-bit FNV-1a hash key and string name.
  * Inspired by Nic Barker's Clay UI (CLAY_ID / CLAY_IDI).
  *
  * Supports:
@@ -740,38 +853,122 @@ void *CelsComposerRemember(CelsComposer *cmp,
 #define cel_name(...) CEL_Name(__VA_ARGS__)
 #define CEL_NAME(...) CEL_Name(__VA_ARGS__)
 
-#define CEL_NameI(str, idx) CelsHashString((str), (uint32_t)(idx))
-#define cel_name_i(str, idx) CelsHashString((str), (uint32_t)(idx))
+#define CEL_NameI(str, idx) CelsIdMake((str), (uint32_t)(idx))
+#define cel_name_i(str, idx) CelsIdMake((str), (uint32_t)(idx))
 
 /**
- * @brief Produces a 32-bit hash scoped under the currently active parent group.
- * Equivalent to Clay's CLAY_ID_LOCAL.
+ * @brief Creates a CelsId from an existing 32-bit integer key.
+ */
+#define CEL_Key(k) CelsIdFromKey((uint32_t)(k))
+#define cel_key(k) CEL_Key(k)
+
+/**
+ * @brief Produces a unique CelsId scoped under the currently active parent group.
  */
 #define CEL_NameLocal(str)                                                     \
-    CelsHashStringWithBase((str), CelsComposerGetCurrentKey(NULL), 0)
+    CelsIdMake((str), CelsComposerGetCurrentKey(NULL))
 #define cel_name_local(str) CEL_NameLocal(str)
 
 #define CEL_NameLocalI(str, idx)                                               \
-    CelsHashStringWithBase((str), CelsComposerGetCurrentKey(NULL), (uint32_t)(idx))
+    CelsIdMake((str), CelsComposerGetCurrentKey(NULL) ^ (uint32_t)(idx))
 #define cel_name_local_i(str, idx) CEL_NameLocalI(str, idx)
 
 #define CEL_NameScoped(parent_name, child_name)                                \
-    CelsHashStringWithBase((child_name), CEL_Name(parent_name), 0)
+    CelsIdMake((child_name), CelsHashString((parent_name), 0))
 #define cel_name_scoped(parent_name, child_name) CEL_NameScoped(parent_name, child_name)
 
 /**
  * @brief Finds the CelsSlotGroup associated with a composition name or key.
  */
-#define CEL_FindGroup(name_or_key) CelsComposerFindGroup(NULL, (name_or_key), NULL)
-#define cel_find_group(name_or_key) CEL_FindGroup(name_or_key)
+#define CEL_FindGroup(_cels_id_expr) CelsComposerFindGroup(NULL, (_cels_id_expr).id, NULL)
+#define cel_find_group(_cels_id_expr) CEL_FindGroup(_cels_id_expr)
 
 /**
  * @brief Finds a composition and returns a CelsCompositionRef.
  */
-#define CEL_Find(name_or_key) CelsComposerFind(NULL, (name_or_key))
-#define cel_find(name_or_key) CEL_Find(name_or_key)
+#define CEL_Find(_cels_id_expr) CelsComposerFind(NULL, (_cels_id_expr).id)
+#define cel_find(_cels_id_expr) CEL_Find(_cels_id_expr)
 
 /**
  * @brief Convenience string-literal lookup macro.
  */
 #define CEL_FindByName(str) CEL_Find(CEL_Name(str))
+
+/* ========================================================================= */
+/* Component DSL & Entity Management Macros                                   */
+/* ========================================================================= */
+
+/**
+ * @brief Declares a component struct and its Flecs component identifier.
+ *
+ * Example:
+ * @code
+ *     CEL_Component(Position) {
+ *         float x;
+ *         float y;
+ *     };
+ * @endcode
+ */
+#define CEL_Component(Type)                                                    \
+    typedef struct Type Type;                                                  \
+    ECS_COMPONENT_DECLARE(Type);                                               \
+    struct Type
+
+/**
+ * @brief Registers a component with the Flecs world.
+ *
+ * Example:
+ * @code
+ *     CEL_RegisterComponent(world, Position);
+ * @endcode
+ */
+#define CEL_RegisterComponent(world, Type)                                     \
+    do {                                                                        \
+        ECS_COMPONENT_DEFINE((world), Type);                                    \
+        const ecs_entity_t _cels_dummy = ecs_new(world);                        \
+        Type _cels_val;                                                         \
+        memset(&_cels_val, 0, sizeof(_cels_val));                               \
+        ecs_set_id((world), _cels_dummy, ecs_id(Type), sizeof(Type), &_cels_val); \
+        ecs_delete((world), _cels_dummy);                                       \
+    } while (0)
+
+/**
+ * @brief Returns the active cel's Flecs entity handle.
+ */
+#define CEL_Entity() CelsComposerGetCurrentEntity()
+#define cel_entity() CelsComposerGetCurrentEntity()
+
+/**
+ * @brief Sets component data on the active cel's Flecs entity.
+ *
+ * Automatically resolves the active worker stage and current cel entity.
+ *
+ * Example:
+ * @code
+ *     CEL_Has(Position, { .x = 10.0f, .y = 20.0f });
+ * @endcode
+ */
+#define CEL_Has(Component, ...)                                                \
+    ecs_set(CelsComposerGetCurrentStage(),                                     \
+            (ecs_entity_t)CelsComposerGetCurrentEntity(),                      \
+            Component,                                                         \
+            __VA_ARGS__)
+
+/**
+ * @brief Adds a tag / marker component to the active cel's Flecs entity.
+ *
+ * Example:
+ * @code
+ *     CEL_Tag(IsPlayer);
+ * @endcode
+ */
+#define CEL_Tag(Tag)                                                           \
+    ecs_add(CelsComposerGetCurrentStage(),                                     \
+            (ecs_entity_t)CelsComposerGetCurrentEntity(),                      \
+            Tag)
+
+/**
+ * @brief Concludes root composition view and returns the completed composition scope.
+ */
+#define CEL_CompositionScopeDone() CelsComposerGetLastCompositionScope()
+#define CEL_CompositionDone() CelsComposerGetLastCompositionScope()
