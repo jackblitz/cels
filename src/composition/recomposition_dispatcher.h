@@ -370,6 +370,23 @@ CelsResult CelsCompositionHostInvalidate(CelsCompositionHost *host,
                                          CelsComposableId composable);
 
 /**
+ * Renumbers queued composable ids at or above a threshold by a delta.
+ *
+ * Queued ids are logical group indices captured before the walk, so a
+ * structural change made during the walk renumbers what they refer to. An id
+ * left stale invalidates whichever composable now holds that number. Same
+ * failure as a stale parentIndex or a stale subscription, in the third and
+ * last place an id is held outside the slot table.
+ *
+ * @param host      Host whose queue is renumbered. NULL is accepted and ignored.
+ * @param threshold Lowest queued id affected by the renumbering.
+ * @param delta     Amount to add to each affected id. Zero is a no-op.
+ */
+void CelsCompositionHostShiftInvalidations(CelsCompositionHost *host,
+                                           CelsComposableId threshold,
+                                           int32_t delta);
+
+/**
  * Marks a root Composition for destruction by key.
  *
  * This is the only way to tear a Composition down. The mark is consumed at the

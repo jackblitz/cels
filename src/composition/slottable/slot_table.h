@@ -319,6 +319,33 @@ void CelsSlotTableGroupClearFlags(CelsSlotTable *table,
 void CelsSlotTableClearAllFlags(CelsSlotTable *table);
 
 /**
+ * Renumbers every parentIndex at or above a threshold by a signed delta.
+ *
+ * parentIndex names a LOGICAL group index, and inserting or removing groups
+ * renumbers every logical index after the change point. A parentIndex left
+ * naming its old number silently points at an unrelated group.
+ *
+ * That is not a cosmetic inconsistency: CelsSlotTableGroupInvalidate climbs
+ * this chain to place CONTAINS_INVALIDATED, so a stale link puts the flag on
+ * the wrong group, the walk O(1)-skips past the composable that actually
+ * changed, and the state updates while the tree does not. It is precisely the
+ * silent failure the flags exist to prevent. Every structural change must call
+ * this — an inserting caller with delta +1, a removing caller with -count.
+ *
+ * The threshold is expressed in the numbering being left behind. Insertions
+ * should call before advancing the gap; removals after widening it. In both
+ * cases groups sitting inside the gap are skipped, so the group being inserted
+ * and the groups being removed are naturally excluded.
+ *
+ * @param table     Pointer to the CelsSlotTable. NULL is accepted and ignored.
+ * @param threshold Lowest logical parent index affected by the renumbering.
+ * @param delta     Amount to add to each affected parentIndex. Zero is a no-op.
+ */
+void CelsSlotTableGroupsShiftParents(CelsSlotTable *table,
+                                     uint32_t threshold,
+                                     int32_t delta);
+
+/**
  * Searches active groups in the table for a group matching the given key.
  *
  * @param table         Pointer to the CelsSlotTable. Non-NULL.

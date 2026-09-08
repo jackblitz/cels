@@ -298,6 +298,35 @@ CelsSlotTableClearAllFlags(CelsSlotTable *table)
     }
 }
 
+void
+CelsSlotTableGroupsShiftParents(CelsSlotTable *table,
+                                uint32_t threshold,
+                                int32_t delta)
+{
+    if (table == NULL || delta == 0) {
+        return;
+    }
+
+    // Walk physically rather than logically: the caller is mid-renumbering, so
+    // logical indices are exactly the thing that cannot be trusted right now.
+    // Groups inside the gap are skipped, which is what excludes the group being
+    // inserted and the groups being removed.
+    const uint32_t gapEnd = table->groupGapStart + table->groupGapLen;
+    for (uint32_t physical = 0; physical < table->groupCapacity; ++physical) {
+        if (physical >= table->groupGapStart && physical < gapEnd) {
+            continue;
+        }
+
+        CelsSlotGroup *const group = &table->groups[physical];
+        if (group->parentIndex == UINT32_MAX
+            || group->parentIndex < threshold) {
+            continue;
+        }
+        group->parentIndex =
+            (uint32_t)((int64_t)group->parentIndex + (int64_t)delta);
+    }
+}
+
 /**
  * Searches active groups in the table for a group matching the given key.
  *

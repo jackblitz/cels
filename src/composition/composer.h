@@ -50,6 +50,14 @@ typedef CelsComposer Composer;
 /**
  * Inline composer cursor tracking hierarchical diffing and pruning.
  * Fields ordered largest to smallest (pointers -> 32-bit arrays/integers).
+ *
+ * forceRunStack carries the invalidation gate down the open-group stack. It is
+ * written once per group, on entry, from that group's CelsGroupFlags and from
+ * whether the group was just mounted; the flags themselves are cleared at the
+ * same moment. Every skip decision taken while the group is open — Style B
+ * diffing, cel_watch, CEL_query, CEL_observable — reads it, because all of them
+ * skip the WHOLE group subtree and would otherwise strand an invalidated
+ * descendant behind an unchanged ancestor.
  */
 struct CelsComposer {
     CelsSlotTable *table;
@@ -61,6 +69,7 @@ struct CelsComposer {
     uint32_t parentStack[CELS_COMPOSER_MAX_DEPTH];
     uint32_t groupEndStack[CELS_COMPOSER_MAX_DEPTH];
     uint64_t entityStack[CELS_COMPOSER_MAX_DEPTH];
+    bool forceRunStack[CELS_COMPOSER_MAX_DEPTH];
 };
 
 /**
@@ -224,6 +233,11 @@ void CelsComposerBegin(CelsComposer *cmp, CelsSlotTable *table);
  * Enters an existing group matching id, or inserts a new group into the gap.
  * Automatically creates and parents an associated Flecs entity if a stage is bound.
  *
+ * Entering latches the group's invalidation gate: the group's CelsGroupFlags
+ * are read, recorded as "this body must run whatever the diff says", and then
+ * cleared. A cache miss mounts the group and fires the transaction context's
+ * onCreate before returning, so the body about to run can already rely on it.
+ *
  * @param cmp Pointer to the composer. Non-NULL.
  * @param id  Stable callsite ID (hash key + optional string name).
  * @return true if entered successfully, false on capacity exhaustion.
@@ -241,6 +255,12 @@ bool CelsComposerGroupStart(CelsComposer *cmp, uint32_t key);
 
 /**
  * Leaves the current group, updating subtree span and pruning vanished nodes.
+ *
+ * Child slots the pass never visited are pruned here. Each pruned composable is
+ * unsubscribed from every reactive cell it read, then reported through the
+ * transaction context's onDestroy, and only then is its space reclaimed — ids
+ * are reused, so a subscription outliving its composable would alias onto the
+ * next occupant of the slot.
  *
  * @param cmp Pointer to the composer. Non-NULL.
  */
@@ -260,6 +280,11 @@ bool CelsComposerChanged(CelsComposer *cmp, const void *data, size_t size);
 
 /**
  * Skips the active group's nested subtree in O(1) time.
+ *
+ * This is the raw cursor jump, and it does NOT consult the invalidation gate:
+ * cel_skip() is an explicit instruction from the caller, and the gated skips
+ * (Style B, cel_watch, CEL_query, CEL_observable) apply the gate themselves
+ * before calling it.
  *
  * @param cmp Pointer to the composer. Non-NULL.
  */
@@ -484,6 +509,12 @@ CelsCompositionRef CelsComposerFind(const CelsComposer *cmp, uint32_t key);
  * If the state is identical, automatically skips the group in O(1) and leaves
  * the group immediately, returning 0 so the child block never executes.
  *
+ * The gate is two-way: the body runs if the group is INVALIDATED, or CONTAINS
+ * an invalidated descendant, or its parameters changed, or it was just mounted;
+ * otherwise the subtree is skipped. There is no "descend without running" mode,
+ * because a child's call site lives inside its parent's body — running the body
+ * is the only way down.
+ *
  * @param id        Stable callsite ID.
  * @param stateData Pointer to state struct/variable to diff. Non-NULL.
  * @param stateSize Size of state struct/variable in bytes.
@@ -510,10 +541,16 @@ int32_t CelsComposerGroupEnterStatefulExplicit(CelsComposer *cmp,
 /**
  * Diffs data against active group; skips subtree in O(1) if unchanged.
  *
+ * Unchanged data only skips when the active group's invalidation gate is clear.
+ * A group carrying INVALIDATED or CONTAINS_INVALIDATED on entry runs its block
+ * regardless of the diff, which is what lets the walk reach a descendant that
+ * was invalidated from outside.
+ *
  * @param cmp  Optional composer (NULL uses ambient composer).
  * @param data Pointer to input data. Non-NULL.
  * @param size Byte size of input data.
- * @return true if data changed (enter block), false if identical (skipped).
+ * @return true if data changed or the gate forces a run (enter block), false if
+ *         identical and skipped.
  */
 bool CelsComposerWatchEnter(CelsComposer *cmp, const void *data, size_t size);
 
@@ -526,6 +563,9 @@ bool CelsComposerWatchEnter(CelsComposer *cmp, const void *data, size_t size);
  *   compares the query's match tick against the slot table cache.
  * - If unchanged: calls CelsComposerGroupSkip and returns false (bypassing the loop).
  * - If changed: updates slot cache and returns true (recomposes matching entities).
+ *
+ * An unchanged query still enters its block when the active group's
+ * invalidation gate forces a run — see CelsComposerWatchEnter.
  *
  * @param cmp       Optional composer (NULL uses ambient composer).
  * @param queryData Pointer to query descriptor, handle, or tick struct. Non-NULL.
@@ -542,6 +582,10 @@ bool CelsComposerQueryEnter(CelsComposer *cmp,
  * If changed: copies the BEFORE-recomposition data from the slot table into
  * outPrevious (if non-NULL), updates the slot table cache in-place with the new
  * data, and returns true.
+ *
+ * Unchanged data that cannot be skipped — because the active group's
+ * invalidation gate forces a run — enters the block with outPrevious equal to
+ * the current data, since nothing about the observable actually moved.
  *
  * @param cmp         Optional composer (NULL uses ambient composer).
  * @param data        Pointer to current data snapshot. Non-NULL.

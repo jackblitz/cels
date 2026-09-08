@@ -7,6 +7,9 @@
 
 #include "flecs.h"
 
+#include "composition/recomposition_dispatcher.h"
+#include "composition/state.h"
+
 #define CELS_ASSERT(condition) assert(condition)
 
 #if defined(_MSC_VER)
@@ -24,7 +27,105 @@ static CELS_THREAD_LOCAL CelsComposer s_defaultComposer;
 static CELS_THREAD_LOCAL CEL_CompositionScope s_lastComposition;
 
 /**
+ * Reports whether the composer's active group must run its body whatever the
+ * parameter diff says.
+ *
+ * The answer was latched on entering the group, from that group's
+ * CelsGroupFlags plus whether it had just been mounted, because entering also
+ * clears those flags. Every gated skip consults this, and every gated skip
+ * jumps over the group's ENTIRE subtree — so a false negative here is exactly
+ * the silent failure the flags exist to prevent: the state changes and the tree
+ * does not.
+ *
+ * @param cmp Composer to query. NULL, or a composer with no group open, is
+ *            treated as "nothing forces a run".
+ * @return true if the active group's body must run regardless of diffing.
+ */
+static bool
+ComposerActiveGroupForcesRun(const CelsComposer *cmp)
+{
+    if (cmp == NULL || cmp->parentStackTop == 0) {
+        return false;
+    }
+    return cmp->forceRunStack[cmp->parentStackTop];
+}
+
+/**
+ * Latches the invalidation gate for a group the composer has just entered, and
+ * clears that group's flags.
+ *
+ * Clearing on entry is what stops a flag sticking forever: any cel_update
+ * raised while the body runs lands back on the host's invalidation queue and is
+ * picked up by the next drain iteration, so the flag has served its purpose the
+ * moment the walk commits to descending.
+ *
+ * @param cmp          Target composer, positioned on the entered group.
+ *                     Non-NULL.
+ * @param composable   Logical group index just entered.
+ * @param newlyMounted true when the group was inserted this pass, which forces
+ *                     a run because there is no cached state to compare with.
+ */
+static void
+ComposerGateLatch(CelsComposer *cmp,
+                  CelsComposableId composable,
+                  bool newlyMounted)
+{
+    CELS_ASSERT(cmp != NULL);
+    CELS_ASSERT(cmp->parentStackTop > 0);
+
+    const uint16_t flags = CelsSlotTableGroupFlags(cmp->table, composable);
+    cmp->forceRunStack[cmp->parentStackTop] =
+        newlyMounted || (flags != (uint16_t)CELS_GROUP_FLAG_NONE);
+
+    CelsSlotTableGroupClearFlags(cmp->table, composable);
+}
+
+/**
+ * Renumbers every stored composable id after a structural change.
+ *
+ * A CelsComposableId is a logical group index, so inserting or removing groups
+ * renumbers it — and ids are held in three places, only one of which the slot
+ * table owns: group parentIndex links, reactive-cell watcher lists, and the
+ * host's invalidation queue. All three must move together. Any one left stale
+ * refers to whichever composable now occupies that number, which means the
+ * wrong composable is invalidated, or CONTAINS_INVALIDATED lands on the wrong
+ * group and the walk O(1)-skips the one that actually changed. Nothing fails
+ * visibly at the moment the ids go stale, which is what makes this worth
+ * centralising in one place rather than open-coding per call site.
+ *
+ * @param cmp       Composer performing the change. Non-NULL, with a table.
+ * @param threshold Lowest logical index affected by the renumbering.
+ * @param delta     Amount to add to each affected id. Zero is a no-op.
+ */
+static void
+ComposerShiftComposableIds(CelsComposer *cmp, uint32_t threshold, int32_t delta)
+{
+    CELS_ASSERT(cmp != NULL);
+    CELS_ASSERT(cmp->table != NULL);
+
+    if (delta == 0) {
+        return;
+    }
+
+    CelsSlotTableGroupsShiftParents(cmp->table, threshold, delta);
+
+    // Only meaningful while a host is composing; outside a walk (the composer
+    // is also driven directly by tests) there is nothing external holding ids.
+    CelsCompositionHost *const host = CelsInvalidationContextGet();
+    if (host != NULL) {
+        CelsMutableStateShiftComposables(host, threshold, delta);
+        CelsCompositionHostShiftInvalidations(host, threshold, delta);
+    }
+}
+
+/**
  * Prunes trailing unvisited groups and their slots from the gap buffer.
+ *
+ * Each pruned composable is first unsubscribed from every reactive cell it
+ * read, then reported through the transaction context, and only then is its
+ * space reclaimed. That order is load-bearing: ids are reused, so a
+ * subscription that outlives its composable aliases onto the next occupant of
+ * the slot and a later update invalidates the wrong composable.
  *
  * @param cmp        Target composer. Non-NULL.
  * @param startIndex Logical group index where pruning begins.
@@ -43,9 +144,15 @@ PruneGroups(CelsComposer *cmp, uint32_t startIndex, uint32_t count)
 
     const uint32_t gapEnd = table->groupGapStart + table->groupGapLen;
     const CelsSlotGroup *staleGroups = &table->groups[gapEnd];
+    CelsCompositionHost *const host = CelsInvalidationContextGet();
 
     uint32_t staleSlots = 0;
     for (uint32_t i = 0; i < count; i++) {
+        const CelsComposableId pruned = (CelsComposableId)(startIndex + i);
+
+        CelsMutableStateUnsubscribe(host, pruned);
+        CelsTransactionNotifyDestroy(pruned);
+
         staleSlots += (uint32_t)staleGroups[i].slotCount;
         if (cmp->stage != NULL && staleGroups[i].entityId != 0) {
             ecs_delete(cmp->stage, (ecs_entity_t)staleGroups[i].entityId);
@@ -59,6 +166,13 @@ PruneGroups(CelsComposer *cmp, uint32_t startIndex, uint32_t count)
 
     table->groupGapLen += count;
     table->slotGapLen += staleSlots;
+
+    // Removing count groups renumbers everything above them downward. Done
+    // after the gap widened, so the removed groups are inside it and excluded,
+    // and after the unsubscribe loop above, so the dying composables' own
+    // subscriptions are already gone rather than being renumbered onto a
+    // survivor.
+    ComposerShiftComposableIds(cmp, startIndex + count, -(int32_t)count);
 }
 
 /**
@@ -81,11 +195,17 @@ CelsComposerBegin(CelsComposer *cmp, CelsSlotTable *table)
     cmp->parentStack[0] = UINT32_MAX;
     cmp->groupEndStack[0] = CelsSlotTableGroupCount(table);
     cmp->entityStack[0] = 0;
+    cmp->forceRunStack[0] = false;
 }
 
 /**
  * Enters an existing group matching id, or inserts a new group into the gap.
  * Automatically creates and parents a Flecs entity if a stage is bound.
+ *
+ * Both paths latch the invalidation gate for the entered group (see
+ * ComposerGateLatch). The cache-miss path additionally fires onCreate before
+ * returning, so a freshly mounted composable's body can rely on its own
+ * onCreate having already run this same pass.
  *
  * @param cmp Target composer. Non-NULL.
  * @param id  Stable callsite ID.
@@ -112,12 +232,16 @@ CelsComposerGroupStartId(CelsComposer *cmp, CelsId id)
             CelsSlotTableGroupToPhysicalIdx(table, cmp->readerIndex, &phys);
         if (res == CELS_OK && table->groups[phys].key == key) {
             CelsSlotGroup *group = &table->groups[phys];
+            const CelsComposableId entered =
+                (CelsComposableId)cmp->readerIndex;
             cmp->parentStackTop++;
             cmp->parentStack[cmp->parentStackTop] = cmp->readerIndex;
             cmp->groupEndStack[cmp->parentStackTop] =
                 cmp->readerIndex + 1u + (uint32_t)group->groupSize;
             cmp->currentSlot = 0;
             cmp->readerIndex++;
+
+            ComposerGateLatch(cmp, entered, false);
 
             if (group->entityId != 0) {
                 cmp->entityStack[cmp->parentStackTop] = group->entityId;
@@ -178,6 +302,12 @@ CelsComposerGroupStartId(CelsComposer *cmp, CelsId id)
         .flags = 0
     };
 
+    // Inserting here renumbers every logical index from newLogicalIndex up, so
+    // every id naming one of them has to move with it. Done before the gap
+    // advances, while the old numbering is still the live one; the slot about
+    // to hold newGroup is inside the gap and so is skipped.
+    ComposerShiftComposableIds(cmp, newLogicalIndex, 1);
+
     table->groups[table->groupGapStart] = newGroup;
     table->groupGapStart++;
     table->groupGapLen--;
@@ -192,6 +322,17 @@ CelsComposerGroupStartId(CelsComposer *cmp, CelsId id)
     cmp->entityStack[cmp->parentStackTop] = newEntityId;
     cmp->currentSlot = 0;
     cmp->readerIndex++;
+
+    ComposerGateLatch(cmp, (CelsComposableId)newLogicalIndex, true);
+
+    // Fired here, with the composer already positioned on the new group and
+    // before the caller runs the body, because a body is allowed to read
+    // whatever its own onCreate set up — CEL_Composable() must already resolve.
+    const CelsComposableId parentComposable = (parentIndex == UINT32_MAX)
+        ? CELS_COMPOSABLE_ID_INVALID
+        : (CelsComposableId)parentIndex;
+    CelsTransactionNotifyCreate((CelsComposableId)newLogicalIndex,
+                                parentComposable, key);
 
     return true;
 }
@@ -709,10 +850,14 @@ CelsComposerGroupLeaveExplicit(CelsComposer *cmp)
 /**
  * Diffs data against active group; skips subtree in O(1) if unchanged.
  *
+ * The diff is only one input to the gate. Skipping here jumps the cursor past
+ * the whole subtree, so an invalidated descendant would never be reached; the
+ * active group's latched gate vetoes the skip in exactly that case.
+ *
  * @param cmp  Optional composer (NULL uses ambient composer).
  * @param data Pointer to input data. Non-NULL.
  * @param size Byte size of input data.
- * @return true if data changed (enter block), false if identical (skipped).
+ * @return true if changed or the gate forces a run, false if skipped.
  */
 bool
 CelsComposerWatchEnter(CelsComposer *cmp, const void *data, size_t size)
@@ -724,7 +869,7 @@ CelsComposerWatchEnter(CelsComposer *cmp, const void *data, size_t size)
     CELS_ASSERT(cmp->parentStackTop > 0);
 
     const bool changed = CelsComposerChanged(cmp, data, size);
-    if (!changed) {
+    if (!changed && !ComposerActiveGroupForcesRun(cmp)) {
         CelsComposerGroupSkip(cmp);
         return false;
     }
@@ -761,7 +906,7 @@ CelsComposerQueryEnter(CelsComposer *cmp,
      * - If changed: CelsComposerChanged updates the slot and returns true.
      */
     const bool changed = CelsComposerChanged(cmp, queryData, querySize);
-    if (!changed) {
+    if (!changed && !ComposerActiveGroupForcesRun(cmp)) {
         CelsComposerGroupSkip(cmp);
         return false;
     }
@@ -826,10 +971,21 @@ CelsComposerObservableEnter(CelsComposer *cmp,
         }
 
         if (match) {
-            // Unchanged: skip active group in O(1) immediately!
             cmp->currentSlot += neededWords;
-            CelsComposerGroupSkip(cmp);
-            return false;
+
+            if (!ComposerActiveGroupForcesRun(cmp)) {
+                // Unchanged and nothing below is invalidated: skip in O(1).
+                CelsComposerGroupSkip(cmp);
+                return false;
+            }
+
+            // Forced to run so the walk can reach an invalidated descendant.
+            // Nothing about the observable itself moved, so "before" and "now"
+            // are the same value.
+            if (outPrevious != NULL) {
+                memcpy(outPrevious, cachedData, size);
+            }
+            return true;
         }
 
         // Mutated: copy BEFORE-recomposition data to outPrevious
@@ -865,10 +1021,16 @@ CelsComposerObservableEnter(CelsComposer *cmp,
  * Enters child group and diffs input state in the current ambient composer.
  * If identical, skips subtree in O(1) and leaves group immediately.
  *
- * @param key       Stable callsite key.
+ * This is the Style B gate in full: run the body if the group is INVALIDATED,
+ * or CONTAINS_INVALIDATED, or its parameters changed, or it was just mounted;
+ * otherwise skip the subtree. Two outcomes, not three — descending without
+ * running is impossible when the child call sites are the parent's body.
+ *
+ * @param id        Stable callsite ID.
  * @param stateData Pointer to state struct/variable to diff. Non-NULL.
  * @param stateSize Size of state struct/variable in bytes.
- * @return 1 if changed or first mount (enter block), 0 if skipped or failed.
+ * @return 1 if changed, invalidated or first mount (enter block), 0 if skipped
+ *         or failed.
  */
 int32_t
 CelsComposerGroupEnterStateful(CelsId id,
@@ -883,7 +1045,7 @@ CelsComposerGroupEnterStateful(CelsId id,
         return 0;
     }
     const bool changed = CelsComposerChanged(cmp, stateData, stateSize);
-    if (!changed) {
+    if (!changed && !ComposerActiveGroupForcesRun(cmp)) {
         CelsComposerGroupSkip(cmp);
         CelsComposerGroupEnd(cmp);
         return 0;
@@ -898,7 +1060,8 @@ CelsComposerGroupEnterStateful(CelsId id,
  * @param id        Stable callsite ID.
  * @param stateData Pointer to state struct/variable to diff. Non-NULL.
  * @param stateSize Size of state struct/variable in bytes.
- * @return 1 if changed or first mount (enter block), 0 if skipped or failed.
+ * @return 1 if changed, invalidated or first mount (enter block), 0 if skipped
+ *         or failed.
  */
 int32_t
 CelsComposerGroupEnterStatefulExplicit(CelsComposer *cmp,
@@ -913,7 +1076,7 @@ CelsComposerGroupEnterStatefulExplicit(CelsComposer *cmp,
         return 0;
     }
     const bool changed = CelsComposerChanged(cmp, stateData, stateSize);
-    if (!changed) {
+    if (!changed && !ComposerActiveGroupForcesRun(cmp)) {
         CelsComposerGroupSkip(cmp);
         CelsComposerGroupEnd(cmp);
         return 0;

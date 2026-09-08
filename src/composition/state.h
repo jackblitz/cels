@@ -180,6 +180,29 @@ void CelsMutableStateUnsubscribe(CelsCompositionHost *host,
                                  CelsComposableId composable);
 
 /**
+ * Renumbers subscribed composable ids at or above a threshold by a delta.
+ *
+ * A CelsComposableId is a logical group index, so inserting or removing groups
+ * renumbers it — and a watcher list records those ids, outside the slot table
+ * where nothing else can fix them up. Left stale, a subscription silently
+ * refers to whichever composable now occupies that number, and the next update
+ * invalidates the wrong one. This is the same failure mode as a stale
+ * parentIndex, in the one place the slot table cannot reach.
+ *
+ * Called by the composer at every structural change: +1 from the insertion
+ * point when a group is inserted, -count from the end of the removed range
+ * when groups are pruned. Watchers already collapsed to host granularity carry
+ * CELS_COMPOSABLE_ID_INVALID and are left alone.
+ *
+ * @param host      Host whose subscriptions are renumbered. NULL is ignored.
+ * @param threshold Lowest composable id affected by the renumbering.
+ * @param delta     Amount to add to each affected id. Zero is a no-op.
+ */
+void CelsMutableStateShiftComposables(CelsCompositionHost *host,
+                                      CelsComposableId threshold,
+                                      int32_t delta);
+
+/**
  * Removes every subscription belonging to a host, whatever the composable.
  *
  * Called by CelsSessionDestroy: cells outlive sessions, and a surviving
