@@ -7,8 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "flecs.h"
-
 #define TEST_ASSERT(cond)                                                      \
     do {                                                                       \
         if (!(cond)) {                                                         \
@@ -18,65 +16,6 @@
             exit(1);                                                           \
         }                                                                      \
     } while (0)
-
-/* ========================================================================= */
-/* Component Definitions using CEL_Component                                 */
-/* ========================================================================= */
-
-CEL_Component(Position) {
-    float x;
-    float y;
-};
-
-CEL_Component(Health) {
-    int32_t current;
-    int32_t max;
-};
-
-CEL_Component(IsHeader) {
-    char dummy;
-};
-
-CEL_Component(IsPlayer) {
-    char dummy;
-};
-
-/* ========================================================================= */
-/* Composable Root View & State                                              */
-/* ========================================================================= */
-
-static bool g_showSubmenu = false;
-static float g_playerX = 100.0f;
-static float g_playerY = 200.0f;
-static int32_t g_playerHp = 100;
-
-CEL_CompositionScope
-MyRootView(void)
-{
-    CEL_Composition(CEL_Name("AppRoot")) {
-        CEL_Compose(CEL_Name("Header")) {
-            CEL_Has(Position, { .x = 0.0f, .y = 0.0f });
-            CEL_Tag(IsHeader);
-
-            CEL_Compose(CEL_Name("Title")) {
-                // Nested child of Header
-            }
-        }
-
-        CEL_Compose(CEL_Name("PlayerHud")) {
-            CEL_Has(Position, { .x = g_playerX, .y = g_playerY });
-            CEL_Has(Health, { .current = g_playerHp, .max = 100 });
-            CEL_Tag(IsPlayer);
-        }
-
-        if (g_showSubmenu) {
-            CEL_Compose(CEL_Name("Submenu")) {
-                CEL_Has(Position, { .x = 50.0f, .y = 50.0f });
-            }
-        }
-    }
-    return CEL_CompositionDone();
-}
 
 /* ========================================================================= */
 /* Synchronous recompose pass: state, root view and callbacks                */
@@ -199,41 +138,33 @@ SeqRootView(void)
 }
 
 /**
- * Opens a Flecs world and a session driven only by CelsSessionRecompose.
+ * Opens a session driven only by CelsSessionRecompose.
  *
  * @param maxDrainIterations Convergence bound, or 0 for the default.
- * @param outWorld           Receives the new world. Non-NULL.
  * @param outSession         Receives the initialized session. Non-NULL.
  */
 static void
 SeqSessionOpen(uint32_t maxDrainIterations,
-               ecs_world_t **outWorld,
                CelsSession *outSession)
 {
-    ecs_world_t *const world = ecs_init();
-    TEST_ASSERT(world != NULL);
-
     CelsSessionConfig config;
     memset(&config, 0, sizeof(config));
     config.compositionScope = SeqRootView;
-    config.workerCount = 1;
     config.maxComposables = 32;
     config.maxDrainIterations = maxDrainIterations;
     config.transactionContext.onCreate = SeqOnCreate;
     config.transactionContext.onDestroy = SeqOnDestroy;
 
-    TEST_ASSERT(CelsSessionInit(outSession, world, &config) == CELS_OK);
-    *outWorld = world;
+    TEST_ASSERT(CelsSessionInit(outSession, &config) == CELS_OK);
 }
 
 /**
- * Tears down a session opened with SeqSessionOpen and its world.
+ * Tears down a session opened with SeqSessionOpen.
  */
 static void
-SeqSessionClose(ecs_world_t *world, CelsSession *session)
+SeqSessionClose(CelsSession *session)
 {
     CelsSessionDestroy(session);
-    ecs_fini(world);
 }
 
 /**
@@ -245,9 +176,8 @@ SeqRecomposeSuiteRun(void)
 {
     printf("\n[Step 9] Sequential recompose: drain loop and lifecycle...\n");
 
-    ecs_world_t *world = NULL;
     CelsSession session;
-    SeqSessionOpen(0, &world, &session);
+    SeqSessionOpen(0, &session);
 
     // 9.1 First pass composes; a second pass with nothing owed runs nothing.
     SeqCountersReset();
@@ -267,8 +197,6 @@ SeqRecomposeSuiteRun(void)
 
     const CEL_CompositionScope scope = CelsSessionGetCompositionScope(&session);
     TEST_ASSERT(scope.groupCount == 3);
-    const ecs_entity_t seqRootEntity = (ecs_entity_t)scope.entity;
-    TEST_ASSERT(seqRootEntity != 0);
 
     // 9.2 A queued invalidation reaches its target, and ONLY its target carries
     // INVALIDATED; the spine above it carries CONTAINS_INVALIDATED so no
@@ -352,7 +280,6 @@ SeqRecomposeSuiteRun(void)
     TEST_ASSERT(g_seqLeafRuns == 0);
     TEST_ASSERT(session.pendingDestroyCount == 0);
     TEST_ASSERT(CelsSlotTableGroupCount(&session.rootHost.slotTable) == 0);
-    TEST_ASSERT(!ecs_is_alive(world, seqRootEntity));
     printf("  -> Composition destroyed before composing: one onDestroy for "
            "the root, subtree cleaned up silently\n");
 
@@ -364,7 +291,7 @@ SeqRecomposeSuiteRun(void)
     TEST_ASSERT(g_seqRootRuns == 1);
     TEST_ASSERT(CelsSlotTableGroupCount(&session.rootHost.slotTable) == 3);
 
-    SeqSessionClose(world, &session);
+    SeqSessionClose(&session);
 }
 
 /**
@@ -375,9 +302,8 @@ SeqCycleSuiteRun(void)
 {
     printf("\n[Step 10] Sequential recompose: runaway invalidation cycle...\n");
 
-    ecs_world_t *world = NULL;
     CelsSession session;
-    SeqSessionOpen(3, &world, &session);
+    SeqSessionOpen(3, &session);
 
     SeqCountersReset();
     g_seqSelfInvalidations = 100;
@@ -398,7 +324,7 @@ SeqCycleSuiteRun(void)
     TEST_ASSERT(session.rootHost.invalidationCount == 0);
     printf("  -> Next call resumed from the surviving queue and settled\n");
 
-    SeqSessionClose(world, &session);
+    SeqSessionClose(&session);
 }
 
 /**
@@ -409,20 +335,17 @@ SeqSlabSizingSuiteRun(void)
 {
     printf("\n[Step 11] maxComposables derives slab size and group count...\n");
 
-    ecs_world_t *world = ecs_init();
-    TEST_ASSERT(world != NULL);
 
     CelsSessionConfig config;
     memset(&config, 0, sizeof(config));
     config.compositionScope = SeqRootView;
-    config.workerCount = 1;
     config.maxComposables = 128;
     // Deliberately wrong by hand: a composable budget must override both.
     config.slabSize = 65536;
     config.maxGroups = 2;
 
     CelsSession session;
-    TEST_ASSERT(CelsSessionInit(&session, world, &config) == CELS_OK);
+    TEST_ASSERT(CelsSessionInit(&session, &config) == CELS_OK);
     TEST_ASSERT(CelsSessionGetSlabSize(&session) == 16384);
     TEST_ASSERT(CelsSlotTableGroupCapacity(&session.rootHost.slotTable) == 128);
     // 128 bytes each: 32 structural, 96 of slots = 12 words per composable.
@@ -433,26 +356,19 @@ SeqSlabSizingSuiteRun(void)
     printf("  -> maxComposables=128 derived a 16KB slab, 128 groups\n");
 
     CelsSessionDestroy(&session);
-    ecs_fini(world);
 
-    // A budget smaller than one page still gets one whole page. A fresh world
-    // per session: the dispatcher names its pipeline phases, and Flecs rejects
-    // a second "OnRecompose" in a world that already has one.
-    world = ecs_init();
-    TEST_ASSERT(world != NULL);
+    // A budget smaller than one page still gets one whole page.
 
     memset(&config, 0, sizeof(config));
     config.compositionScope = SeqRootView;
-    config.workerCount = 1;
     config.maxComposables = 10;
 
-    TEST_ASSERT(CelsSessionInit(&session, world, &config) == CELS_OK);
+    TEST_ASSERT(CelsSessionInit(&session, &config) == CELS_OK);
     TEST_ASSERT(CelsSessionGetSlabSize(&session) == 4096);
     TEST_ASSERT(CelsSlotTableGroupCapacity(&session.rootHost.slotTable) == 10);
     printf("  -> maxComposables=10 rounded up to a single 4KB page\n");
 
     CelsSessionDestroy(&session);
-    ecs_fini(world);
 }
 
 /* ========================================================================= */
@@ -466,159 +382,9 @@ main(void)
     setvbuf(stderr, NULL, _IONBF, 0);
 
     printf("==============================================================\n");
-    printf("  CELS Task 4: CelsSession & Flecs Entity Lifecycle Test      \n");
-    printf("==============================================================\n\n");
+    printf("  CELS Session & Recompose Pass Test Suite                    \n");
+    printf("==============================================================\n");
 
-    // 1. Initialize Flecs world
-    printf("[Step 1] Initializing developer-owned Flecs world...\n");
-    ecs_world_t *world = ecs_init();
-    TEST_ASSERT(world != NULL);
-
-    // 2. Register components with Flecs
-    printf("[Step 2] Registering components with CEL_RegisterComponent...\n");
-    CEL_RegisterComponent(world, Position);
-    CEL_RegisterComponent(world, Health);
-    CEL_RegisterComponent(world, IsHeader);
-    CEL_RegisterComponent(world, IsPlayer);
-
-    // 3. Initialize CelsSession
-    printf("[Step 3] Initializing CelsSession with 4 workers and MyRootView...\n");
-    CelsSession session;
-    const CelsResult initRes = CelsSessionInit(&session, world, &(CelsSessionConfig){
-        .workerCount = 4,
-        .compositionScope = MyRootView,
-        .slabSize = 4096,
-        .maxGroups = 32
-    });
-    TEST_ASSERT(initRes == CELS_OK);
-    TEST_ASSERT(session.world == world);
-    TEST_ASSERT(session.rootEntity != 0);
-    TEST_ASSERT(session.compositionScope == MyRootView);
-    TEST_ASSERT(session.slabSize == 4096);
-    TEST_ASSERT(CelsSessionGetSlabSize(&session) == 4096);
-    TEST_ASSERT(CelsSessionIsDirty(&session) == true);
-
-    CEL_CompositionScope preScope = CelsSessionGetCompositionScope(&session);
-    TEST_ASSERT(preScope.entity == session.rootEntity);
-    TEST_ASSERT(preScope.groupCount == 0);
-
-    // 4. Frame 1: Initial composition
-    printf("[Step 4] Frame 1: Progressing world (initial composition)...\n");
-    bool progressOk = ecs_progress(world, 0.016f);
-    TEST_ASSERT(progressOk);
-    TEST_ASSERT(CelsSessionIsDirty(&session) == false);
-
-    // Verify entity creation and naming
-    ecs_entity_t appRoot = ecs_lookup(world, "AppRoot");
-    TEST_ASSERT(appRoot != 0);
-    printf("  -> Found entity 'AppRoot' (id: %llu)\n", (unsigned long long)appRoot);
-
-    CEL_CompositionScope postScope = CelsSessionGetCompositionScope(&session);
-    TEST_ASSERT(postScope.entity == appRoot);
-    TEST_ASSERT(postScope.groupCount == 4);
-
-    ecs_entity_t header = ecs_lookup_child(world, appRoot, "Header");
-    TEST_ASSERT(header != 0);
-    printf("  -> Found child entity 'Header' (id: %llu)\n", (unsigned long long)header);
-
-    ecs_entity_t title = ecs_lookup_child(world, header, "Title");
-    TEST_ASSERT(title != 0);
-    printf("  -> Found grandchild entity 'Title' (id: %llu)\n", (unsigned long long)title);
-
-    ecs_entity_t playerHud = ecs_lookup_child(world, appRoot, "PlayerHud");
-    TEST_ASSERT(playerHud != 0);
-    printf("  -> Found child entity 'PlayerHud' (id: %llu)\n", (unsigned long long)playerHud);
-
-    // Verify hierarchy parenting
-    TEST_ASSERT(ecs_get_parent(world, header) == appRoot);
-    TEST_ASSERT(ecs_get_parent(world, title) == header);
-    TEST_ASSERT(ecs_get_parent(world, playerHud) == appRoot);
-
-    // Verify components set via CEL_Has
-    const Position *posHeader = ecs_get(world, header, Position);
-    TEST_ASSERT(posHeader != NULL);
-    TEST_ASSERT(posHeader->x == 0.0f && posHeader->y == 0.0f);
-
-    const Position *posPlayer = ecs_get(world, playerHud, Position);
-    TEST_ASSERT(posPlayer != NULL);
-    TEST_ASSERT(posPlayer->x == 100.0f && posPlayer->y == 200.0f);
-
-    const Health *hpPlayer = ecs_get(world, playerHud, Health);
-    TEST_ASSERT(hpPlayer != NULL);
-    TEST_ASSERT(hpPlayer->current == 100 && hpPlayer->max == 100);
-
-    // Verify tags set via CEL_Tag
-    TEST_ASSERT(ecs_has(world, header, IsHeader));
-    TEST_ASSERT(ecs_has(world, playerHud, IsPlayer));
-
-    // Verify Submenu was not rendered
-    ecs_entity_t submenu = ecs_lookup_child(world, appRoot, "Submenu");
-    TEST_ASSERT(submenu == 0);
-
-    // 5. Frame 2: Recomposition with entity reuse (cache hit)
-    printf("\n[Step 5] Frame 2: Recomposition entity reuse test...\n");
-    CelsSessionMarkDirty(&session);
-    TEST_ASSERT(CelsSessionIsDirty(&session) == true);
-
-    progressOk = ecs_progress(world, 0.016f);
-    TEST_ASSERT(progressOk);
-
-    // Verify entities are identical (reused from slot table, not re-allocated)
-    TEST_ASSERT(ecs_lookup(world, "AppRoot") == appRoot);
-    TEST_ASSERT(ecs_lookup_child(world, appRoot, "Header") == header);
-    TEST_ASSERT(ecs_lookup_child(world, header, "Title") == title);
-    TEST_ASSERT(ecs_lookup_child(world, appRoot, "PlayerHud") == playerHud);
-    printf("  CONFIRMED: All Flecs entity IDs were preserved across recomposition!\n");
-
-    // 6. Frame 3: Branch addition
-    printf("\n[Step 6] Frame 3: Dynamic branch insertion (Submenu)...\n");
-    g_showSubmenu = true;
-    g_playerX = 150.0f;
-    g_playerHp = 75;
-    CelsSessionMarkDirty(&session);
-
-    progressOk = ecs_progress(world, 0.016f);
-    TEST_ASSERT(progressOk);
-
-    submenu = ecs_lookup_child(world, appRoot, "Submenu");
-    TEST_ASSERT(submenu != 0);
-    printf("  -> Dynamic branch 'Submenu' created (id: %llu)\n", (unsigned long long)submenu);
-    TEST_ASSERT(ecs_get_parent(world, submenu) == appRoot);
-
-    const Position *posSubmenu = ecs_get(world, submenu, Position);
-    TEST_ASSERT(posSubmenu != NULL);
-    TEST_ASSERT(posSubmenu->x == 50.0f && posSubmenu->y == 50.0f);
-
-    // Verify updated component values on existing entity
-    posPlayer = ecs_get(world, playerHud, Position);
-    TEST_ASSERT(posPlayer != NULL);
-    TEST_ASSERT(posPlayer->x == 150.0f);
-
-    hpPlayer = ecs_get(world, playerHud, Health);
-    TEST_ASSERT(hpPlayer != NULL);
-    TEST_ASSERT(hpPlayer->current == 75);
-
-    // 7. Frame 4: Vanishing branch pruning
-    printf("\n[Step 7] Frame 4: Vanishing branch pruning test...\n");
-    g_showSubmenu = false;
-    CelsSessionMarkDirty(&session);
-
-    progressOk = ecs_progress(world, 0.016f);
-    TEST_ASSERT(progressOk);
-
-    // Verify Submenu entity was automatically deleted from Flecs world
-    TEST_ASSERT(!ecs_is_alive(world, submenu));
-    TEST_ASSERT(ecs_lookup_child(world, appRoot, "Submenu") == 0);
-    printf("  CONFIRMED: 'Submenu' entity automatically pruned on branch exit!\n");
-
-    // 8. Cleanup
-    printf("\n[Step 8] Destroying CelsSession and Flecs world...\n");
-    CelsSessionDestroy(&session);
-    ecs_fini(world);
-
-    // 9-11. The synchronous recompose pass, on its own worlds. Each suite owns
-    // one world at a time: ecs_id(CelsCompositionHost) is a single global, so
-    // two live worlds would leave one session holding the other's component id.
     SeqRecomposeSuiteRun();
     SeqCycleSuiteRun();
     SeqSlabSizingSuiteRun();

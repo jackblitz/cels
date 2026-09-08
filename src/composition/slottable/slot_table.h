@@ -86,7 +86,7 @@ typedef uint32_t CelsComposableId;
 #define CELS_COMPOSABLE_ID_INVALID UINT32_MAX
 
 /**
- * Owning composition host, defined in recomposition_dispatcher.h.
+ * Owning composition host, defined in session.h.
  *
  * The typedef lives here, in the header every module already includes, because
  * C99 forbids repeating a typedef — declaring it in each header that needs the
@@ -103,7 +103,7 @@ typedef struct CelsCompositionHost CelsCompositionHost;
  * Assign either, both or neither — an unset callback is skipped.
  *
  * Declared in this header, rather than beside the Session that owns one,
- * because both the composer (which fires them) and the dispatcher (which holds
+ * because both the composer (which fires them) and the session (which holds
  * them) need the type, and neither should include the other's header.
  */
 typedef struct CelsTransactionContext {
@@ -145,15 +145,15 @@ typedef uint64_t CelsSlotValue;
  * Total size is exactly 32 bytes (2 groups per 64-byte cache line).
  */
 typedef struct CelsSlotGroup {
-    uint64_t entityId;     // Associated ECS / Flecs entity ID (0 if none)
+    uint64_t userData;     // Opaque caller word; CELS never interprets it
     uint32_t key;          // Stable callsite key / hash
     uint32_t parentIndex;  // Logical index of parent group (UINT32_MAX if root)
     uint32_t slotIndex;    // Physical/anchored index in slots array
     uint32_t aux;          // Auxiliary user tag / flags
     uint16_t slotCount;    // Number of word slots owned directly by this group
     uint16_t groupSize;    // Transitive child groups in subtree (for O(1) skip)
-    uint16_t nodeCount;    // Materialized ECS/UI nodes in subtree
-    uint16_t flags;        // Reserved lifecycle / dirty flags
+    uint16_t nodeCount;    // Caller-defined node tally for the subtree
+    uint16_t flags;        // CelsGroupFlags invalidation bits
 } CelsSlotGroup;
 
 /**
@@ -470,13 +470,13 @@ CelsResult CelsSlotWriterGapMoveTo(CelsSlotWriter *writer,
  *
  * @param writer Pointer to the CelsSlotWriter. Non-NULL.
  * @param key Stable callsite key.
- * @param entityId Associated ECS entity ID (or 0).
+ * @param userData Opaque caller word stored verbatim on the group (or 0).
  * @param outGroupIndex Optional pointer receiving new logical group index.
  * @return CELS_OK or CELS_ERROR_CAPACITY_EXCEEDED.
  */
 CelsResult CelsSlotWriterGroupStart(CelsSlotWriter *writer,
                                     uint32_t key,
-                                    uint64_t entityId,
+                                    uint64_t userData,
                                     uint32_t *outGroupIndex);
 
 /**

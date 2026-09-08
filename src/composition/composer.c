@@ -5,26 +5,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "flecs.h"
-
-#include "composition/recomposition_dispatcher.h"
+#include "composition/session.h"
 #include "composition/state.h"
 
 #define CELS_ASSERT(condition) assert(condition)
 
-#if defined(_MSC_VER)
-#define CELS_THREAD_LOCAL __declspec(thread)
-#elif defined(__GNUC__) || defined(__clang__)
-#define CELS_THREAD_LOCAL __thread
-#elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
-#define CELS_THREAD_LOCAL _Thread_local
-#else
-#define CELS_THREAD_LOCAL
-#endif
-
-static CELS_THREAD_LOCAL CelsComposer *s_currentComposer = NULL;
-static CELS_THREAD_LOCAL CelsComposer s_defaultComposer;
-static CELS_THREAD_LOCAL CEL_CompositionScope s_lastComposition;
+// Composition runs on one thread by design (see session.h), so the ambient
+// cursor is a plain static. Nothing here is reentrant across threads, and the
+// contract says so rather than paying for thread-local storage to pretend
+// otherwise.
+static CelsComposer *s_currentComposer = NULL;
+static CelsComposer s_defaultComposer;
+static CEL_CompositionScope s_lastComposition;
 
 /**
  * Reports whether the composer's active group must run its body whatever the
@@ -154,9 +146,6 @@ PruneGroups(CelsComposer *cmp, uint32_t startIndex, uint32_t count)
         CelsTransactionNotifyDestroy(pruned);
 
         staleSlots += (uint32_t)staleGroups[i].slotCount;
-        if (cmp->stage != NULL && staleGroups[i].entityId != 0) {
-            ecs_delete(cmp->stage, (ecs_entity_t)staleGroups[i].entityId);
-        }
     }
 
     const uint32_t slotGapEnd = table->slotGapStart + table->slotGapLen;
@@ -194,13 +183,11 @@ CelsComposerBegin(CelsComposer *cmp, CelsSlotTable *table)
     cmp->skipCount = 0;
     cmp->parentStack[0] = UINT32_MAX;
     cmp->groupEndStack[0] = CelsSlotTableGroupCount(table);
-    cmp->entityStack[0] = 0;
     cmp->forceRunStack[0] = false;
 }
 
 /**
  * Enters an existing group matching id, or inserts a new group into the gap.
- * Automatically creates and parents a Flecs entity if a stage is bound.
  *
  * Both paths latch the invalidation gate for the entered group (see
  * ComposerGateLatch). The cache-miss path additionally fires onCreate before
@@ -243,23 +230,6 @@ CelsComposerGroupStartId(CelsComposer *cmp, CelsId id)
 
             ComposerGateLatch(cmp, entered, false);
 
-            if (group->entityId != 0) {
-                cmp->entityStack[cmp->parentStackTop] = group->entityId;
-            } else if (cmp->stage != NULL && id.stringId.chars != NULL) {
-                ecs_entity_desc_t desc = { 0 };
-                desc.name = id.stringId.chars;
-                const ecs_entity_t parent =
-                    (ecs_entity_t)cmp->entityStack[cmp->parentStackTop - 1];
-                if (parent != 0) {
-                    desc.parent = parent;
-                }
-                const ecs_entity_t e = ecs_entity_init(cmp->stage, &desc);
-                group->entityId = (uint64_t)e;
-                cmp->entityStack[cmp->parentStackTop] = (uint64_t)e;
-            } else {
-                cmp->entityStack[cmp->parentStackTop] = 0;
-            }
-
             return true;
         }
     }
@@ -277,21 +247,7 @@ CelsComposerGroupStartId(CelsComposer *cmp, CelsId id)
         ? UINT32_MAX
         : cmp->parentStack[cmp->parentStackTop];
 
-    uint64_t newEntityId = 0;
-    if (cmp->stage != NULL && id.stringId.chars != NULL) {
-        ecs_entity_desc_t desc = { 0 };
-        desc.name = id.stringId.chars;
-        const ecs_entity_t parent =
-            (ecs_entity_t)cmp->entityStack[cmp->parentStackTop];
-        if (parent != 0) {
-            desc.parent = parent;
-        }
-        const ecs_entity_t e = ecs_entity_init(cmp->stage, &desc);
-        newEntityId = (uint64_t)e;
-    }
-
     const CelsSlotGroup newGroup = {
-        .entityId = newEntityId,
         .key = key,
         .parentIndex = parentIndex,
         .slotIndex = table->slotGapStart,
@@ -319,7 +275,6 @@ CelsComposerGroupStartId(CelsComposer *cmp, CelsId id)
     cmp->parentStackTop++;
     cmp->parentStack[cmp->parentStackTop] = newLogicalIndex;
     cmp->groupEndStack[cmp->parentStackTop] = newLogicalIndex + 1u;
-    cmp->entityStack[cmp->parentStackTop] = newEntityId;
     cmp->currentSlot = 0;
     cmp->readerIndex++;
 
@@ -528,50 +483,6 @@ CelsComposerGetDefault(void)
     return &s_defaultComposer;
 }
 
-/**
- * Returns the Flecs stage associated with the composer, if any.
- *
- * @param cmp Pointer to composer. If NULL, queries current ambient composer.
- * @return Flecs stage handle (ecs_world_t*), or NULL if no stage is bound.
- */
-struct ecs_world_t *
-CelsComposerGetStage(const CelsComposer *cmp)
-{
-    if (cmp == NULL) {
-        cmp = s_currentComposer;
-    }
-    return cmp != NULL ? cmp->stage : NULL;
-}
-
-/**
- * Returns the Flecs stage associated with the current ambient composer.
- *
- * @return Flecs stage handle (struct ecs_world_t*), or NULL if outside pass or no stage.
- */
-struct ecs_world_t *
-CelsComposerGetCurrentStage(void)
-{
-    return s_currentComposer != NULL ? s_currentComposer->stage : NULL;
-}
-
-uint64_t
-CelsComposerGetEntity(const CelsComposer *cmp)
-{
-    if (cmp == NULL) {
-        cmp = s_currentComposer;
-    }
-    if (cmp == NULL || cmp->parentStackTop == 0) {
-        return 0;
-    }
-    return cmp->entityStack[cmp->parentStackTop];
-}
-
-uint64_t
-CelsComposerGetCurrentEntity(void)
-{
-    return CelsComposerGetEntity(NULL);
-}
-
 CEL_CompositionScope
 CelsComposerGetLastCompositionScope(void)
 {
@@ -734,9 +645,7 @@ CelsComposerScopeEnter(CelsComposer *cmp, CelsSlotTable *table, CelsId id)
     }
     CELS_ASSERT(table != NULL);
 
-    struct ecs_world_t *const savedStage = scope.curr->stage;
     CelsComposerBegin(scope.curr, table);
-    scope.curr->stage = savedStage;
 
     if (!CelsComposerGroupStartId(scope.curr, id)) {
         s_currentComposer = scope.prev;
@@ -748,7 +657,6 @@ CelsComposerScopeEnter(CelsComposer *cmp, CelsSlotTable *table, CelsId id)
     scope.active = 1;
 
     s_lastComposition.id = id;
-    s_lastComposition.entity = scope.curr->entityStack[scope.curr->parentStackTop];
     s_lastComposition.groupCount = CelsSlotTableGroupCount(table);
 
     return scope;
@@ -897,14 +805,9 @@ CelsComposerQueryEnter(CelsComposer *cmp,
     CELS_ASSERT(cmp->parentStackTop > 0);
     CELS_ASSERT(queryData != NULL);
 
-    /*
-     * Flecs Integration Notes:
-     * - When queryData represents an ecs_query_t* or query wrapper, we check:
-     *     uint64_t currentTick = ecs_query_changed(query) ? query->match_tick : cachedTick;
-     * - In the slot table, we diff currentTick against cachedSlot.
-     * - If unchanged: CelsComposerGroupSkip(cmp) skips the entire query in O(1).
-     * - If changed: CelsComposerChanged updates the slot and returns true.
-     */
+    // CELS does not model queries. It diffs whatever change token the caller
+    // hands it — a version counter, a tick, a hash — and skips the whole
+    // subtree in O(1) when that token has not moved.
     const bool changed = CelsComposerChanged(cmp, queryData, querySize);
     if (!changed && !ComposerActiveGroupForcesRun(cmp)) {
         CelsComposerGroupSkip(cmp);
@@ -915,7 +818,7 @@ CelsComposerQueryEnter(CelsComposer *cmp,
 }
 
 /**
- * Diffs an observable state or Flecs query against the slot table cache.
+ * Diffs an observable value against the slot table cache.
  * If unchanged: skips the active group in O(1) time and returns false.
  * If changed: copies the BEFORE-recomposition data from the slot table into
  * outPrevious (if non-NULL), updates the slot table cache in-place with the new
@@ -1090,12 +993,8 @@ CelsComposerGroupEnterStatefulExplicit(CelsComposer *cmp,
  * On subsequent recompositions, returns a pointer to the existing slot without
  * overwriting changes.
  *
- * Flecs Architecture Notes:
- * - Ephemeral UI state (e.g. isHovered, scrollOffset) is retained in the slot table
- *   without polluting the Flecs world with throwaway entities.
- * - When bridging to Flecs-backed entities, CelsSlotGroup.entityId stores the
- *   Flecs ecs_entity_t handle. When the group vanishes from the slot table,
- *   CelsComposerGroupEnd can automatically trigger ecs_delete on that handle.
+ * Ephemeral state lives in the slot table and is reclaimed with the composable
+ * that remembered it.
  *
  * @param cmp         Optional composer (NULL uses ambient composer).
  * @param initialData Pointer to initial seed data, or NULL for zero-init.

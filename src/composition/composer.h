@@ -43,7 +43,6 @@
 #define _CEL_CAT2(a, b) a##b
 #define _CEL_CAT(a, b) _CEL_CAT2(a, b)
 
-struct ecs_world_t;
 typedef struct CelsComposer CelsComposer;
 typedef CelsComposer Composer;
 
@@ -61,14 +60,12 @@ typedef CelsComposer Composer;
  */
 struct CelsComposer {
     CelsSlotTable *table;
-    struct ecs_world_t *stage;
     uint32_t readerIndex;
     uint32_t currentSlot;
     uint32_t parentStackTop;
     uint32_t skipCount;
     uint32_t parentStack[CELS_COMPOSER_MAX_DEPTH];
     uint32_t groupEndStack[CELS_COMPOSER_MAX_DEPTH];
-    uint64_t entityStack[CELS_COMPOSER_MAX_DEPTH];
     bool forceRunStack[CELS_COMPOSER_MAX_DEPTH];
 };
 
@@ -107,7 +104,6 @@ typedef struct CelsId {
  */
 typedef struct CEL_CompositionScope {
     CelsId id;
-    uint64_t entity;
     uint32_t groupCount;
 } CEL_CompositionScope;
 typedef CEL_CompositionScope CelsCompositionScope;
@@ -231,7 +227,6 @@ void CelsComposerBegin(CelsComposer *cmp, CelsSlotTable *table);
 
 /**
  * Enters an existing group matching id, or inserts a new group into the gap.
- * Automatically creates and parents an associated Flecs entity if a stage is bound.
  *
  * Entering latches the group's invalidation gate: the group's CelsGroupFlags
  * are read, recorded as "this body must run whatever the diff says", and then
@@ -324,21 +319,6 @@ void CelsComposerSetCurrent(CelsComposer *cmp);
 CelsComposer *CelsComposerGetDefault(void);
 
 /**
- * Returns the Flecs stage associated with the composer, if any.
- *
- * @param cmp Pointer to composer. If NULL, queries current ambient composer.
- * @return Flecs stage handle (struct ecs_world_t*), or NULL if no stage is bound.
- */
-struct ecs_world_t *CelsComposerGetStage(const CelsComposer *cmp);
-
-/**
- * Returns the Flecs stage associated with the current ambient composer.
- *
- * @return Flecs stage handle (struct ecs_world_t*), or NULL if outside pass or no stage.
- */
-struct ecs_world_t *CelsComposerGetCurrentStage(void);
-
-/**
  * Acquires or creates a persistent CelsSlotTable for a given composition root key.
  * If a table already exists for the key, it is reused to preserve recomposition caching.
  *
@@ -367,21 +347,6 @@ void CelsTableRegistryReset(void);
  * @return Pointer to CelsSlotGroup, or NULL if not found.
  */
 CelsSlotGroup *CelsTableRegistryFindGroup(uint32_t key, CelsSlotTable **outTable);
-
-/**
- * Returns the Flecs entity associated with the currently active cel.
- *
- * @return Active ecs_entity_t handle, or 0 if outside cel or no stage.
- */
-uint64_t CelsComposerGetCurrentEntity(void);
-
-/**
- * Returns the Flecs entity associated with the composer's currently active group.
- *
- * @param cmp Pointer to composer. If NULL, queries current ambient composer.
- * @return Active ecs_entity_t handle, or 0 if outside cel or no stage.
- */
-uint64_t CelsComposerGetEntity(const CelsComposer *cmp);
 
 /**
  * Returns the completed composition result from the last root scope.
@@ -555,14 +520,13 @@ int32_t CelsComposerGroupEnterStatefulExplicit(CelsComposer *cmp,
 bool CelsComposerWatchEnter(CelsComposer *cmp, const void *data, size_t size);
 
 /**
- * Diffs an ECS query against active group's slot memory; skips subtree in O(1) if unchanged.
+ * Diffs an opaque query descriptor against the active group's slot memory,
+ * skipping the subtree in O(1) when it is unchanged.
  *
- * Flecs Integration Notes:
- * - In Flecs, ecs_query_t tracks table match ticks and archetype versions.
- * - When bridging to Flecs, CelsComposerQueryEnter checks ecs_query_changed(q) or
- *   compares the query's match tick against the slot table cache.
- * - If unchanged: calls CelsComposerGroupSkip and returns false (bypassing the loop).
- * - If changed: updates slot cache and returns true (recomposes matching entities).
+ * CELS does not model queries; it compares whatever bytes you hand it. A
+ * caller integrating an external data source passes that source's own change
+ * token — a version counter, a tick, a hash — and gets the O(1) skip when it
+ * has not moved.
  *
  * An unchanged query still enters its block when the active group's
  * invalidation gate forces a run — see CelsComposerWatchEnter.
@@ -577,7 +541,7 @@ bool CelsComposerQueryEnter(CelsComposer *cmp,
                             size_t querySize);
 
 /**
- * Diffs an observable state or Flecs query against the slot table cache.
+ * Diffs an observable value against the slot table cache.
  * If unchanged: skips the active group in O(1) time and returns false.
  * If changed: copies the BEFORE-recomposition data from the slot table into
  * outPrevious (if non-NULL), updates the slot table cache in-place with the new
@@ -604,12 +568,9 @@ bool CelsComposerObservableEnter(CelsComposer *cmp,
  * On subsequent recompositions, returns a pointer to the existing slot without
  * overwriting changes.
  *
- * Flecs Architecture Notes:
- * - Ephemeral UI state (e.g. isHovered, scrollOffset) is retained in the slot table
- *   without polluting the Flecs world with throwaway entities.
- * - When bridging to Flecs-backed entities, CelsSlotGroup.entityId stores the
- *   Flecs ecs_entity_t handle. When the group vanishes from the slot table,
- *   CelsComposerGroupEnd can automatically trigger ecs_delete on that handle.
+ * Ephemeral state (isHovered, scrollOffset) lives in the slot table and dies
+ * with the composable that remembered it, so nothing outside composition ever
+ * has to know it existed.
  *
  * @param cmp         Optional composer (NULL uses ambient composer).
  * @param initialData Pointer to initial seed data, or NULL for zero-init.
@@ -785,11 +746,9 @@ void *CelsComposerRemember(CelsComposer *cmp,
  * removed, or component data mutated). If the query is clean, the entire subtree
  * is skipped in O(1) time.
  *
- * Flecs Architecture Notes:
- * - Tier 1 (Macro level): CEL_query checks ecs_query_changed() or archetype ticks.
- *   If no entities in the query changed, 10,000 entities skip in 1 nanosecond.
- * - Tier 2 (Entity level): When the query changes, iteration uses CEL_Compose(entityId, state)
- *   to only recompose modified entities, while unchanged entities skip individually in O(1).
+ * Two tiers of skipping stack here: the query block skips its whole subtree in
+ * O(1) when the change token has not moved, and within a changed query each
+ * CEL_Compose(id, state) child still skips individually on its own diff.
  *
  * Usage:
  * @code
@@ -807,7 +766,7 @@ void *CelsComposerRemember(CelsComposer *cmp,
 #define cel_query(...) CEL_query(__VA_ARGS__)
 #define CELS_QUERY(...) CEL_query(__VA_ARGS__)
 
-/* --- CEL_observable Implementation (Observable State & Flecs Query Diff) --- */
+/* --- CEL_observable Implementation (Observable State Diff) --- */
 
 #define _CEL_OBSERVABLE_IMPL(cmp, data_ptr, size, prev_ptr, uid)               \
     for (int32_t uid = (CelsComposerObservableEnter(                           \
@@ -828,7 +787,7 @@ void *CelsComposerRemember(CelsComposer *cmp,
 #define _CEL_OBSERVABLE_DISPATCH(_1, _2, NAME, ...) NAME
 
 /**
- * @brief Reactive observable diff guard for state and Flecs queries.
+ * @brief Reactive observable diff guard for externally-held state.
  *
  * Supports both 1-argument and 2-argument forms:
  * - CEL_observable(obs): Diffs obs against the slot table. If unchanged, skips
@@ -860,12 +819,9 @@ void *CelsComposerRemember(CelsComposer *cmp,
 /**
  * @brief Memoize ephemeral UI state in the active group's slot table.
  *
- * Retains state across recompositions without polluting the Flecs world.
- * Returns a pointer to the persistent slot memory holding the value.
- *
- * Flecs Integration Notes:
- * - For pure UI state (isHovered, scrollOffset), state lives in the slot table.
- * - When bridging to Flecs, CelsSlotGroup.entityId tracks the Flecs entity.
+ * Returns a pointer to the persistent slot memory holding the value. The state
+ * is purely local: only ever read and written from inside this same
+ * composable's own pass, and reclaimed with it when it is pruned.
  *
  * Example:
  * @code
@@ -968,79 +924,6 @@ void *CelsComposerRemember(CelsComposer *cmp,
  * @brief Convenience string-literal lookup macro.
  */
 #define CEL_FindByName(str) CEL_Find(CEL_Name(str))
-
-/* ========================================================================= */
-/* Component DSL & Entity Management Macros                                   */
-/* ========================================================================= */
-
-/**
- * @brief Declares a component struct and its Flecs component identifier.
- *
- * Example:
- * @code
- *     CEL_Component(Position) {
- *         float x;
- *         float y;
- *     };
- * @endcode
- */
-#define CEL_Component(Type)                                                    \
-    typedef struct Type Type;                                                  \
-    ECS_COMPONENT_DECLARE(Type);                                               \
-    struct Type
-
-/**
- * @brief Registers a component with the Flecs world.
- *
- * Example:
- * @code
- *     CEL_RegisterComponent(world, Position);
- * @endcode
- */
-#define CEL_RegisterComponent(world, Type)                                     \
-    do {                                                                        \
-        ECS_COMPONENT_DEFINE((world), Type);                                    \
-        const ecs_entity_t _cels_dummy = ecs_new(world);                        \
-        Type _cels_val;                                                         \
-        memset(&_cels_val, 0, sizeof(_cels_val));                               \
-        ecs_set_id((world), _cels_dummy, ecs_id(Type), sizeof(Type), &_cels_val); \
-        ecs_delete((world), _cels_dummy);                                       \
-    } while (0)
-
-/**
- * @brief Returns the active cel's Flecs entity handle.
- */
-#define CEL_Entity() CelsComposerGetCurrentEntity()
-#define cel_entity() CelsComposerGetCurrentEntity()
-
-/**
- * @brief Sets component data on the active cel's Flecs entity.
- *
- * Automatically resolves the active worker stage and current cel entity.
- *
- * Example:
- * @code
- *     CEL_Has(Position, { .x = 10.0f, .y = 20.0f });
- * @endcode
- */
-#define CEL_Has(Component, ...)                                                \
-    ecs_set(CelsComposerGetCurrentStage(),                                     \
-            (ecs_entity_t)CelsComposerGetCurrentEntity(),                      \
-            Component,                                                         \
-            __VA_ARGS__)
-
-/**
- * @brief Adds a tag / marker component to the active cel's Flecs entity.
- *
- * Example:
- * @code
- *     CEL_Tag(IsPlayer);
- * @endcode
- */
-#define CEL_Tag(Tag)                                                           \
-    ecs_add(CelsComposerGetCurrentStage(),                                     \
-            (ecs_entity_t)CelsComposerGetCurrentEntity(),                      \
-            Tag)
 
 /**
  * @brief Concludes root composition view and returns the completed composition scope.

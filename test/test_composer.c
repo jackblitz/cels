@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_MSC_VER)
@@ -487,9 +488,9 @@ static int g_queryBodyExecs = 0;
 static int g_queryEntityChildExecs = 0;
 
 static void
-TestEcsQueryObserver(void)
+TestQueryObserver(void)
 {
-    printf("Running TestEcsQueryObserver...\n");
+    printf("Running TestQueryObserver...\n");
 
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
@@ -552,27 +553,27 @@ TestEcsQueryObserver(void)
     TEST_ASSERT(g_queryEntityChildExecs == 3);
     TEST_ASSERT(CelsSlotTableGroupCount(&table) == 4);
 
-    printf("  PASSED: TestEcsQueryObserver\n");
+    printf("  PASSED: TestQueryObserver\n");
 }
 
 /* ========================================================================= */
-/* Test Suite: CEL_observable Flecs Query Diff (Before vs After)             */
+/* Test Suite: CEL_observable Query Diff (Before vs After)             */
 /* ========================================================================= */
 
-typedef struct FlecsEnemyQuery {
+typedef struct ObservableQuery {
     uint64_t matchTick;
     uint32_t entityCount;
     int totalPartyHp;
-} FlecsEnemyQuery;
+} ObservableQuery;
 
 static int g_observableExecCount = 0;
-static FlecsEnemyQuery g_capturedPrevQuery;
-static FlecsEnemyQuery g_capturedCurrQuery;
+static ObservableQuery g_capturedPrevQuery;
+static ObservableQuery g_capturedCurrQuery;
 
 static void
-TestFlecsQueryObservableDiff(void)
+TestObservableQueryDiff(void)
 {
-    printf("Running TestFlecsQueryObservableDiff...\n");
+    printf("Running TestObservableQueryDiff...\n");
 
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
@@ -580,7 +581,7 @@ TestFlecsQueryObservableDiff(void)
         CelsSlotTableInit(&table, slab, sizeof(slab), 16);
     TEST_ASSERT(initRes == CELS_OK);
 
-    FlecsEnemyQuery query = {
+    ObservableQuery query = {
         .matchTick = 100,
         .entityCount = 2,
         .totalPartyHp = 200
@@ -592,7 +593,7 @@ TestFlecsQueryObservableDiff(void)
     memset(&g_capturedCurrQuery, 0, sizeof(g_capturedCurrQuery));
 
     CEL_Composition(&table, CEL_Key(0x5000)) {
-        FlecsEnemyQuery prevQuery;
+        ObservableQuery prevQuery;
         CEL_observable(query, prevQuery) {
             g_observableExecCount++;
             g_capturedPrevQuery = prevQuery;
@@ -608,7 +609,7 @@ TestFlecsQueryObservableDiff(void)
     // Pass 2: Identical state (no ECS systems touched matching entities)
     g_observableExecCount = 0;
     CEL_Composition(&table, CEL_Key(0x5000)) {
-        FlecsEnemyQuery prevQuery;
+        ObservableQuery prevQuery;
         CEL_observable(query, prevQuery) {
             g_observableExecCount++;
             g_capturedPrevQuery = prevQuery;
@@ -625,7 +626,7 @@ TestFlecsQueryObservableDiff(void)
 
     g_observableExecCount = 0;
     CEL_Composition(&table, CEL_Key(0x5000)) {
-        FlecsEnemyQuery prevQuery;
+        ObservableQuery prevQuery;
         // Test CEL_Observeable alias as well
         CEL_Observeable(query, prevQuery) {
             g_observableExecCount++;
@@ -649,7 +650,7 @@ TestFlecsQueryObservableDiff(void)
 
     g_observableExecCount = 0;
     CEL_Composition(&table, CEL_Key(0x5000)) {
-        FlecsEnemyQuery prevQuery;
+        ObservableQuery prevQuery;
         cel_observable(query, prevQuery) {
             g_observableExecCount++;
             g_capturedPrevQuery = prevQuery;
@@ -661,7 +662,7 @@ TestFlecsQueryObservableDiff(void)
     TEST_ASSERT(g_capturedCurrQuery.entityCount == 1); // NOW during recomposition
     TEST_ASSERT(g_capturedPrevQuery.entityCount != g_capturedCurrQuery.entityCount);
 
-    printf("  PASSED: TestFlecsQueryObservableDiff\n");
+    printf("  PASSED: TestObservableQueryDiff\n");
 }
 
 /* ========================================================================= */
@@ -1515,8 +1516,8 @@ main(void)
     TestDslMacroAmbientContext();
     TestStyleBComposeAndRemember();
     TestHeaderVariantsAndCompositionScope();
-    TestEcsQueryObserver();
-    TestFlecsQueryObservableDiff();
+    TestQueryObserver();
+    TestObservableQueryDiff();
     TestClayStyleNamesAndCompositionLookup();
     TestGroupStartRespectsParentSubtreeBound();
     TestGateInvalidatedRunsWithUnchangedParams();

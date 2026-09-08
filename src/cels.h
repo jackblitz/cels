@@ -10,7 +10,7 @@
  */
 
 #include "composition/composer.h"
-#include "composition/recomposition_dispatcher.h"
+#include "composition/session.h"
 #include "composition/slottable/slot_table.h"
 #include "composition/state.h"
 
@@ -148,10 +148,10 @@
 
 /*
  * --- CEL_query / cel_query ---
- * Reactive ECS query diff guard with automatic O(1) subtree skipping.
+ * Reactive query diff guard with automatic O(1) subtree skipping.
  *
- * Flecs Architecture Notes:
- * - Diffs an ECS query match tick or result set against the active slot group.
+ * - Diffs a caller-supplied change token (a version, a tick, a hash) against
+ *   the active slot group. CELS never interprets it.
  * - If unchanged: skips the entire query subtree in O(1) time.
  * - If results changed: enters the block to iterate and compose matching entities.
  *
@@ -164,7 +164,7 @@
 
 /*
  * --- CEL_observable / CEL_Observeable / cel_observable ---
- * Reactive observable diff guard for state and Flecs queries.
+ * Reactive observable diff guard for externally-held state.
  *
  * Supports diffing new data against the slot table cache, optionally exposing
  * the BEFORE-recomposition value:
@@ -273,7 +273,7 @@
 
 /*
  * --- CEL_Query ---
- * Flecs query diff guard. Skips entire query subtree in O(1) time if
+ * Query diff guard. Skips the entire query subtree in O(1) time if
  * query match tick has not changed.
  *
  * Usage:
@@ -284,39 +284,13 @@
 
 /*
  * --- CEL_Remember ---
- * Memoizes ephemeral UI state into the slot table without Flecs entity overhead.
+ * Memoizes ephemeral local state directly into the slot table.
  *
  * Usage:
  *     int *count = CEL_Remember(initialCount);
  *     ScrollState *scroll = CEL_Remember(defaultScroll);
  */
 /* Inherited directly from composer.h: CEL_Remember, cel_remember */
-
-/*
- * --- CEL_Component & CEL_RegisterComponent ---
- * Declarative component definition and registration with Flecs.
- *
- * Usage:
- *     CEL_Component(Position) {
- *         float x;
- *         float y;
- *     };
- *
- *     CEL_RegisterComponent(world, Position);
- */
-/* Inherited directly from composer.h: CEL_Component, CEL_RegisterComponent */
-
-/*
- * --- CEL_Has & CEL_Tag & CEL_Entity ---
- * Declarative component mutation and tagging on the active cel entity.
- *
- * Usage:
- *     CEL_Compose(CEL_Name("PlayerHud")) {
- *         CEL_Has(Position, { .x = 10.0f, .y = 20.0f });
- *         CEL_Tag(IsPlayer);
- *     }
- */
-/* Inherited directly from composer.h: CEL_Has, CEL_Tag, CEL_Entity, cel_entity */
 
 /*
  * --- CEL_CompositionScopeDone & CelsSession ---
@@ -330,16 +304,19 @@
  *         return CEL_CompositionDone();
  *     }
  *
- *     CelsSession session;
- *     CelsSessionInit(&session, world, &(CelsSessionConfig){
- *         .workerCount = 4,
+ *     const CelsSessionConfig config = {
  *         .compositionScope = MyRootView,
- *         .slabSize = 4096, // 64-byte aligned dual-gap buffer memory (min: 4096)
- *         .maxGroups = 32
- *     });
- *     size_t size = CelsSessionGetSlabSize(&session); // 4096
- *     CEL_CompositionScope scope = CelsSessionGetCompositionScope(&session);
+ *         .maxComposables = 128,   // derives a 16KB slab; nothing sized by hand
+ *     };
+ *
+ *     CelsSession session;
+ *     CelsSessionInit(&session, &config);
+ *
+ *     while (running) {
+ *         CelsSessionRecompose(&session);  // the only phase that runs anything
+ *     }
+ *     CelsSessionDestroy(&session);
  */
-/* Inherited directly from composer.h / recomposition_dispatcher.h */
+/* Inherited directly from composer.h / session.h */
 
 #endif /* CELS_H */

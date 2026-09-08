@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_MSC_VER)
@@ -65,9 +66,8 @@ CellHeaderOf(const void *value)
  * Prepares a composition host backed by a caller-owned slab.
  *
  * Only the slot table and the dirty/queue bookkeeping matter here, so the host
- * is zeroed and its table initialised directly rather than going through the
- * session machinery, which would drag in a Flecs world this suite does not
- * need.
+ * is zeroed and its table initialised directly rather than going through
+ * CelsSessionInit, keeping this suite to the cell module it is testing.
  *
  * @param host     Host to initialise. Non-NULL.
  * @param slab     64-byte aligned slab memory. Non-NULL.

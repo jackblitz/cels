@@ -752,14 +752,14 @@ CelsSlotWriterGapMoveTo(CelsSlotWriter *writer,
  *
  * @param writer        Target writer. Non-NULL.
  * @param key           Stable callsite key.
- * @param entityId      Associated ECS entity ID (or 0).
+ * @param userData      Opaque caller word stored verbatim (or 0).
  * @param outGroupIndex Optional pointer receiving logical group index.
  * @return CELS_OK, CELS_ERROR_CAPACITY_EXCEEDED, or CELS_ERROR_INVALID_STATE.
  */
 CelsResult
 CelsSlotWriterGroupStart(CelsSlotWriter *writer,
                          uint32_t key,
-                         uint64_t entityId,
+                         uint64_t userData,
                          uint32_t *outGroupIndex)
 {
     CELS_ASSERT(writer != NULL);
@@ -780,7 +780,7 @@ CelsSlotWriterGroupStart(CelsSlotWriter *writer,
         : writer->parentStack[writer->depth - 1];
 
     const CelsSlotGroup newGroup = {
-        .entityId = entityId,
+        .userData = userData,
         .key = key,
         .parentIndex = parentIndex,
         .slotIndex = table->slotGapStart,

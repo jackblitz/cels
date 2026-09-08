@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include "composition/composer.h"
-#include "composition/recomposition_dispatcher.h"
+#include "composition/session.h"
 
 #define CELS_ASSERT(condition) assert(condition)
 
