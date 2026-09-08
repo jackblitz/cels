@@ -434,6 +434,31 @@ void CelsComposerGroupLeaveExplicit(CelsComposer *cmp);
 uint32_t CelsComposerGetCurrentKey(const CelsComposer *cmp);
 
 /**
+ * Returns the identity of the composable currently being composed.
+ *
+ * This is the same CelsComposableId that onCreate and onDestroy report, so an
+ * app can correlate its own backend state with the composable it belongs to.
+ * Valid immediately, even on the pass a composable mounts, because onCreate
+ * always fires before that composable's body runs.
+ *
+ * @param cmp Composer to query. NULL uses the ambient composer.
+ * @return The active composable's logical group index, or
+ *         CELS_COMPOSABLE_ID_INVALID outside a composition walk.
+ */
+CelsComposableId CelsComposerGetCurrentComposable(const CelsComposer *cmp);
+
+/**
+ * Identity of the composable whose body is running.
+ *
+ * @code
+ *     CEL_Compose(CEL_Name("DeathScreen")) {
+ *         void *backend = g_backendFor[CEL_Composable()];
+ *     }
+ * @endcode
+ */
+#define CEL_Composable() CelsComposerGetCurrentComposable(NULL)
+
+/**
  * Searches the active table (or registry) for a group matching key.
  *
  * @param cmp           Optional composer (NULL uses ambient or table registry).

@@ -994,6 +994,18 @@ CelsComposerRemember(CelsComposer *cmp, const void *initialData, size_t size)
     return &table->slots[slotIndex];
 }
 
+CelsComposableId
+CelsComposerGetCurrentComposable(const CelsComposer *cmp)
+{
+    if (cmp == NULL) {
+        cmp = s_currentComposer;
+    }
+    if (cmp == NULL || cmp->table == NULL || cmp->parentStackTop == 0) {
+        return CELS_COMPOSABLE_ID_INVALID;
+    }
+    return (CelsComposableId)cmp->parentStack[cmp->parentStackTop];
+}
+
 uint32_t
 CelsComposerGetCurrentKey(const CelsComposer *cmp)
 {
