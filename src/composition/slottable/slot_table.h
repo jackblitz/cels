@@ -95,6 +95,29 @@ typedef uint32_t CelsComposableId;
 typedef struct CelsCompositionHost CelsCompositionHost;
 
 /**
+ * Callbacks through which a Session reports composition changes.
+ *
+ * CELS models no component data, tags or payload, and does not decide when a
+ * composable dies (Lifecycle does). It reports exactly two things, at the
+ * moment they happen: a composable mounted, or a composable was pruned.
+ * Assign either, both or neither — an unset callback is skipped.
+ *
+ * Declared in this header, rather than beside the Session that owns one,
+ * because both the composer (which fires them) and the dispatcher (which holds
+ * them) need the type, and neither should include the other's header.
+ */
+typedef struct CelsTransactionContext {
+    /** Fires when a composable mounts, BEFORE that composable's body runs. */
+    void (*onCreate)(CelsComposableId composable,
+                     CelsComposableId parent,
+                     uint32_t key,
+                     void *userdata);
+    /** Fires when a composable is pruned because it was not visited. */
+    void (*onDestroy)(CelsComposableId composable, void *userdata);
+    void *userdata;
+} CelsTransactionContext;
+
+/**
  * Per-group invalidation flags stored in CelsSlotGroup.flags.
  *
  * Composition walks DOWN from a host's root while invalidation arrives at a

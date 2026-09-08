@@ -33,6 +33,48 @@ CelsInvalidationContextGet(void)
     return s_invalidationHost;
 }
 
+/** Mount/prune callbacks published for the active composition walk. */
+static CelsTransactionContext s_transactionContext;
+static bool s_transactionContextSet = false;
+
+void
+CelsTransactionContextSet(const CelsTransactionContext *context)
+{
+    if (context == NULL) {
+        memset(&s_transactionContext, 0, sizeof(s_transactionContext));
+        s_transactionContextSet = false;
+        return;
+    }
+    s_transactionContext = *context;
+    s_transactionContextSet = true;
+}
+
+const CelsTransactionContext *
+CelsTransactionContextGet(void)
+{
+    return s_transactionContextSet ? &s_transactionContext : NULL;
+}
+
+void
+CelsTransactionNotifyCreate(CelsComposableId composable,
+                            CelsComposableId parent,
+                            uint32_t key)
+{
+    if (s_transactionContextSet && s_transactionContext.onCreate != NULL) {
+        s_transactionContext.onCreate(composable, parent, key,
+                                      s_transactionContext.userdata);
+    }
+}
+
+void
+CelsTransactionNotifyDestroy(CelsComposableId composable)
+{
+    if (s_transactionContextSet && s_transactionContext.onDestroy != NULL) {
+        s_transactionContext.onDestroy(composable,
+                                       s_transactionContext.userdata);
+    }
+}
+
 CelsResult
 CelsMutableStateCreate(const void *initialValue,
                        size_t valueSize,

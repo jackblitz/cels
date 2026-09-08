@@ -83,24 +83,7 @@ struct CelsCompositionHost {
     uint8_t _padding[3];                      // 3 bytes: Explicit alignment padding
 };
 
-/**
- * Callbacks through which a Session reports composition changes.
- *
- * CELS models no component data, tags or payload, and does not decide when a
- * composable dies (Lifecycle does). It reports exactly two things, at the
- * moment they happen: a composable mounted, or a composable was pruned.
- * Assign either, both or neither — an unset callback is skipped.
- */
-typedef struct CelsTransactionContext {
-    /** Fires when a composable mounts, BEFORE that composable's body runs. */
-    void (*onCreate)(CelsComposableId composable,
-                     CelsComposableId parent,
-                     uint32_t key,
-                     void *userdata);
-    /** Fires when a composable is pruned because it was not visited. */
-    void (*onDestroy)(CelsComposableId composable, void *userdata);
-    void *userdata;
-} CelsTransactionContext;
+/* CelsTransactionContext is defined in slot_table.h. */
 
 /**
  * Work slice assigned to a single worker thread for parallel recomposition.

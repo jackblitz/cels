@@ -219,6 +219,44 @@ void CelsInvalidationContextSet(CelsCompositionHost *host);
  */
 CelsCompositionHost *CelsInvalidationContextGet(void);
 
+/**
+ * Publishes the mount/prune callbacks the composition walk should fire.
+ *
+ * The recompose walk sets this from the session's own context before composing
+ * and clears it (NULL) afterwards. The composer fires through it inline, at the
+ * exact moment a composable mounts or is pruned, so a body can always rely on
+ * its own onCreate having already run this same pass.
+ *
+ * Ambient rather than threaded through the composer because the composer and
+ * the session must not depend on each other's headers.
+ *
+ * @param context Callbacks to publish, or NULL to clear.
+ */
+void CelsTransactionContextSet(const CelsTransactionContext *context);
+
+/**
+ * Returns the active mount/prune callbacks, or NULL if none are published.
+ */
+const CelsTransactionContext *CelsTransactionContextGet(void);
+
+/**
+ * Fires onCreate, if one is published. Safe to call unconditionally.
+ *
+ * @param composable Composable that just mounted.
+ * @param parent     Its parent, or CELS_COMPOSABLE_ID_INVALID for a root.
+ * @param key        The callsite key it mounted under.
+ */
+void CelsTransactionNotifyCreate(CelsComposableId composable,
+                                 CelsComposableId parent,
+                                 uint32_t key);
+
+/**
+ * Fires onDestroy, if one is published. Safe to call unconditionally.
+ *
+ * @param composable Composable that was just pruned.
+ */
+void CelsTransactionNotifyDestroy(CelsComposableId composable);
+
 /* ========================================================================= */
 /* DSL                                                                       */
 /* ========================================================================= */
