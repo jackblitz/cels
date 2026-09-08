@@ -195,6 +195,138 @@ CelsSlotTableGroupToPhysicalIdx(const CelsSlotTable *table,
     return CELS_OK;
 }
 
+/* ========================================================================= */
+/* Invalidation flags                                                        */
+/* ========================================================================= */
+
+/**
+ * Resolves a logical group index to its mutable CelsSlotGroup.
+ *
+ * Shared by every flag accessor below so the gap-buffer translation and the
+ * bounds check live in exactly one place.
+ *
+ * @param table Pointer to the CelsSlotTable. Non-NULL.
+ * @param composable Logical group index.
+ * @return Pointer to the group, or NULL if the index is out of range.
+ */
+static CelsSlotGroup *
+GroupAt(const CelsSlotTable *table, CelsComposableId composable)
+{
+    CELS_ASSERT(table != NULL);
+
+    uint32_t physical = 0;
+    if (CelsSlotTableGroupToPhysicalIdx(table, composable, &physical)
+        != CELS_OK) {
+        return NULL;
+    }
+    return &table->groups[physical];
+}
+
+uint16_t
+CelsSlotTableGroupFlags(const CelsSlotTable *table, CelsComposableId composable)
+{
+    if (table == NULL) {
+        return (uint16_t)CELS_GROUP_FLAG_NONE;
+    }
+
+    const CelsSlotGroup *const group = GroupAt(table, composable);
+    return (group != NULL) ? group->flags : (uint16_t)CELS_GROUP_FLAG_NONE;
+}
+
+CelsResult
+CelsSlotTableGroupInvalidate(CelsSlotTable *table, CelsComposableId composable)
+{
+    if (table == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+
+    CelsSlotGroup *const target = GroupAt(table, composable);
+    if (target == NULL) {
+        return CELS_ERROR_INDEX_OUT_OF_BOUNDS;
+    }
+
+    target->flags |= (uint16_t)CELS_GROUP_FLAG_INVALIDATED;
+
+    // Carry the signal upward so no ancestor can O(1)-skip past this subtree.
+    // Bounded by groupCount: a corrupt parentIndex cycle must not hang the
+    // caller, and an ancestor already marked has marked its own ancestors.
+    const uint32_t limit = CelsSlotTableGroupCount(table);
+    uint32_t parent = target->parentIndex;
+
+    for (uint32_t step = 0; step < limit && parent != UINT32_MAX; ++step) {
+        CelsSlotGroup *const ancestor = GroupAt(table, parent);
+        if (ancestor == NULL) {
+            break;
+        }
+        if ((ancestor->flags & (uint16_t)CELS_GROUP_FLAG_CONTAINS_INVALIDATED)
+            != 0u) {
+            break;
+        }
+        ancestor->flags |= (uint16_t)CELS_GROUP_FLAG_CONTAINS_INVALIDATED;
+        parent = ancestor->parentIndex;
+    }
+
+    return CELS_OK;
+}
+
+void
+CelsSlotTableGroupClearFlags(CelsSlotTable *table, CelsComposableId composable)
+{
+    if (table == NULL) {
+        return;
+    }
+
+    CelsSlotGroup *const group = GroupAt(table, composable);
+    if (group != NULL) {
+        group->flags = (uint16_t)CELS_GROUP_FLAG_NONE;
+    }
+}
+
+void
+CelsSlotTableClearAllFlags(CelsSlotTable *table)
+{
+    if (table == NULL) {
+        return;
+    }
+
+    const uint32_t total = CelsSlotTableGroupCount(table);
+    for (uint32_t i = 0; i < total; ++i) {
+        CelsSlotGroup *const group = GroupAt(table, i);
+        if (group != NULL) {
+            group->flags = (uint16_t)CELS_GROUP_FLAG_NONE;
+        }
+    }
+}
+
+void
+CelsSlotTableGroupsShiftParents(CelsSlotTable *table,
+                                uint32_t threshold,
+                                int32_t delta)
+{
+    if (table == NULL || delta == 0) {
+        return;
+    }
+
+    // Walk physically rather than logically: the caller is mid-renumbering, so
+    // logical indices are exactly the thing that cannot be trusted right now.
+    // Groups inside the gap are skipped, which is what excludes the group being
+    // inserted and the groups being removed.
+    const uint32_t gapEnd = table->groupGapStart + table->groupGapLen;
+    for (uint32_t physical = 0; physical < table->groupCapacity; ++physical) {
+        if (physical >= table->groupGapStart && physical < gapEnd) {
+            continue;
+        }
+
+        CelsSlotGroup *const group = &table->groups[physical];
+        if (group->parentIndex == UINT32_MAX
+            || group->parentIndex < threshold) {
+            continue;
+        }
+        group->parentIndex =
+            (uint32_t)((int64_t)group->parentIndex + (int64_t)delta);
+    }
+}
+
 /**
  * Searches active groups in the table for a group matching the given key.
  *
@@ -620,14 +752,14 @@ CelsSlotWriterGapMoveTo(CelsSlotWriter *writer,
  *
  * @param writer        Target writer. Non-NULL.
  * @param key           Stable callsite key.
- * @param entityId      Associated ECS entity ID (or 0).
+ * @param userData      Opaque caller word stored verbatim (or 0).
  * @param outGroupIndex Optional pointer receiving logical group index.
  * @return CELS_OK, CELS_ERROR_CAPACITY_EXCEEDED, or CELS_ERROR_INVALID_STATE.
  */
 CelsResult
 CelsSlotWriterGroupStart(CelsSlotWriter *writer,
                          uint32_t key,
-                         uint64_t entityId,
+                         uint64_t userData,
                          uint32_t *outGroupIndex)
 {
     CELS_ASSERT(writer != NULL);
@@ -648,7 +780,7 @@ CelsSlotWriterGroupStart(CelsSlotWriter *writer,
         : writer->parentStack[writer->depth - 1];
 
     const CelsSlotGroup newGroup = {
-        .entityId = entityId,
+        .userData = userData,
         .key = key,
         .parentIndex = parentIndex,
         .slotIndex = table->slotGapStart,

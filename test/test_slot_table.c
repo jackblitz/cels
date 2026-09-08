@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #if defined(_MSC_VER)
 #define ALIGNED_SLAB(size, name) __declspec(align(64)) uint8_t name[size]
@@ -131,7 +132,7 @@ TestWriterAndReaderBasic(void)
     res = CelsSlotReaderGroupStart(&reader, &rootGroup);
     TEST_ASSERT(res == CELS_OK);
     TEST_ASSERT(rootGroup.key == 0x1000);
-    TEST_ASSERT(rootGroup.entityId == 101);
+    TEST_ASSERT(rootGroup.userData == 101);
     TEST_ASSERT(rootGroup.parentIndex == UINT32_MAX);
     TEST_ASSERT(rootGroup.groupSize == 1);
     TEST_ASSERT(rootGroup.nodeCount == 2);
@@ -157,7 +158,7 @@ TestWriterAndReaderBasic(void)
     res = CelsSlotReaderGroupStart(&reader, &childGroup);
     TEST_ASSERT(res == CELS_OK);
     TEST_ASSERT(childGroup.key == 0x2000);
-    TEST_ASSERT(childGroup.entityId == 202);
+    TEST_ASSERT(childGroup.userData == 202);
     TEST_ASSERT(childGroup.parentIndex == 0);
     TEST_ASSERT(childGroup.groupSize == 0);
     TEST_ASSERT(childGroup.nodeCount == 1);

@@ -6,3 +6,6 @@
 /cmake-build-debug/
 
 /.internaldocs/
+
+# Local scratch build dirs
+/.bl*/

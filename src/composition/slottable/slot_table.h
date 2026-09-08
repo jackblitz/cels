@@ -58,7 +58,9 @@ typedef enum CelsResult {
     CELS_ERROR_OUT_OF_MEMORY,
     CELS_ERROR_CAPACITY_EXCEEDED,
     CELS_ERROR_INDEX_OUT_OF_BOUNDS,
-    CELS_ERROR_INVALID_STATE
+    CELS_ERROR_INVALID_STATE,
+    /** Recompose hit its drain-iteration bound; queue left intact. */
+    CELS_ERROR_RECOMPOSE_DID_NOT_CONVERGE
 } CelsResult;
 
 /**
@@ -68,6 +70,69 @@ typedef enum CelsResult {
  * @return Static, never-NULL null-terminated string.
  */
 const char *CelsResultToString(CelsResult result);
+
+/**
+ * Stable identity of one composable, equal to its logical group index in the
+ * owning CelsSlotTable.
+ *
+ * Ids are dense and small so callers can use them directly as array indices.
+ * They are also REUSED: pruning reclaims a group's space immediately, so an id
+ * held across recomposition passes may refer to a different composable later.
+ * Anything retaining an id beyond the pass that produced it must tolerate that.
+ */
+typedef uint32_t CelsComposableId;
+
+/** Sentinel for "no composable" / invalid identity. */
+#define CELS_COMPOSABLE_ID_INVALID UINT32_MAX
+
+/**
+ * Owning composition host, defined in session.h.
+ *
+ * The typedef lives here, in the header every module already includes, because
+ * C99 forbids repeating a typedef — declaring it in each header that needs the
+ * incomplete type is a -Wpedantic error.
+ */
+typedef struct CelsCompositionHost CelsCompositionHost;
+
+/**
+ * Callbacks through which a Session reports composition changes.
+ *
+ * CELS models no component data, tags or payload, and does not decide when a
+ * composable dies (Lifecycle does). It reports exactly two things, at the
+ * moment they happen: a composable mounted, or a composable was pruned.
+ * Assign either, both or neither — an unset callback is skipped.
+ *
+ * Declared in this header, rather than beside the Session that owns one,
+ * because both the composer (which fires them) and the session (which holds
+ * them) need the type, and neither should include the other's header.
+ */
+typedef struct CelsTransactionContext {
+    /** Fires when a composable mounts, BEFORE that composable's body runs. */
+    void (*onCreate)(CelsComposableId composable,
+                     CelsComposableId parent,
+                     uint32_t key,
+                     void *userdata);
+    /** Fires when a composable is pruned because it was not visited. */
+    void (*onDestroy)(CelsComposableId composable, void *userdata);
+    void *userdata;
+} CelsTransactionContext;
+
+/**
+ * Per-group invalidation flags stored in CelsSlotGroup.flags.
+ *
+ * Composition walks DOWN from a host's root while invalidation arrives at a
+ * LEAF from outside, so an invalidated composable must be able to defeat an
+ * ancestor's O(1) subtree skip. CONTAINS_INVALIDATED is what carries that
+ * signal upward; it is set on every group between an invalidated node and the
+ * root when the invalidation queue is drained.
+ */
+typedef enum CelsGroupFlags {
+    CELS_GROUP_FLAG_NONE = 0u,
+    /** This composable's own body must re-run this pass. */
+    CELS_GROUP_FLAG_INVALIDATED = 1u << 0,
+    /** Some descendant is invalidated — this group must not be O(1)-skipped. */
+    CELS_GROUP_FLAG_CONTAINS_INVALIDATED = 1u << 1
+} CelsGroupFlags;
 
 /**
  * 64-bit word slot value. Can hold an integer, double, handle, or pointer.
@@ -80,15 +145,15 @@ typedef uint64_t CelsSlotValue;
  * Total size is exactly 32 bytes (2 groups per 64-byte cache line).
  */
 typedef struct CelsSlotGroup {
-    uint64_t entityId;     // Associated ECS / Flecs entity ID (0 if none)
+    uint64_t userData;     // Opaque caller word; CELS never interprets it
     uint32_t key;          // Stable callsite key / hash
     uint32_t parentIndex;  // Logical index of parent group (UINT32_MAX if root)
     uint32_t slotIndex;    // Physical/anchored index in slots array
     uint32_t aux;          // Auxiliary user tag / flags
     uint16_t slotCount;    // Number of word slots owned directly by this group
     uint16_t groupSize;    // Transitive child groups in subtree (for O(1) skip)
-    uint16_t nodeCount;    // Materialized ECS/UI nodes in subtree
-    uint16_t flags;        // Reserved lifecycle / dirty flags
+    uint16_t nodeCount;    // Caller-defined node tally for the subtree
+    uint16_t flags;        // CelsGroupFlags invalidation bits
 } CelsSlotGroup;
 
 /**
@@ -195,6 +260,90 @@ uint32_t CelsSlotTableSlotCapacity(const CelsSlotTable *table);
 CelsResult CelsSlotTableGroupToPhysicalIdx(const CelsSlotTable *table,
                                           uint32_t logicalIndex,
                                           uint32_t *outPhysicalIndex);
+
+/* ========================================================================= */
+/* Invalidation flags                                                        */
+/* ========================================================================= */
+
+/**
+ * Reads the invalidation flags of one group.
+ *
+ * @param table Pointer to the CelsSlotTable. Non-NULL.
+ * @param composable Logical group index [0, groupCount).
+ * @return The group's CelsGroupFlags bitmask, or CELS_GROUP_FLAG_NONE if the
+ *         table is NULL or the index is out of range.
+ */
+uint16_t CelsSlotTableGroupFlags(const CelsSlotTable *table,
+                                 CelsComposableId composable);
+
+/**
+ * Marks one composable's body as needing to re-run, and marks every group
+ * between it and the root as containing an invalidation.
+ *
+ * This is the whole of the upward-propagation step: CELS_GROUP_FLAG_INVALIDATED
+ * on the target, CELS_GROUP_FLAG_CONTAINS_INVALIDATED on each ancestor reached
+ * by following parentIndex. The cost is charged here, on the invalidating side,
+ * precisely so the composition walk can stay a pure O(1) skip everywhere the
+ * invalidation did not reach.
+ *
+ * Walking stops at a root (parentIndex == UINT32_MAX), at an ancestor that
+ * already carries CONTAINS_INVALIDATED (its own ancestors are already marked),
+ * or after groupCount steps as a cycle guard.
+ *
+ * @param table Pointer to the CelsSlotTable. Non-NULL.
+ * @param composable Logical group index [0, groupCount).
+ * @return CELS_OK, CELS_ERROR_INVALID_ARGUMENT, or
+ *         CELS_ERROR_INDEX_OUT_OF_BOUNDS.
+ */
+CelsResult CelsSlotTableGroupInvalidate(CelsSlotTable *table,
+                                        CelsComposableId composable);
+
+/**
+ * Clears both invalidation flags on one group.
+ *
+ * Called by the composition walk on entering a group whose body it is about to
+ * run — the flags have served their purpose once the walk has committed to
+ * descending.
+ *
+ * @param table Pointer to the CelsSlotTable. Non-NULL.
+ * @param composable Logical group index [0, groupCount).
+ */
+void CelsSlotTableGroupClearFlags(CelsSlotTable *table,
+                                  CelsComposableId composable);
+
+/**
+ * Clears the invalidation flags of every group in the table.
+ *
+ * @param table Pointer to the CelsSlotTable. NULL is accepted and ignored.
+ */
+void CelsSlotTableClearAllFlags(CelsSlotTable *table);
+
+/**
+ * Renumbers every parentIndex at or above a threshold by a signed delta.
+ *
+ * parentIndex names a LOGICAL group index, and inserting or removing groups
+ * renumbers every logical index after the change point. A parentIndex left
+ * naming its old number silently points at an unrelated group.
+ *
+ * That is not a cosmetic inconsistency: CelsSlotTableGroupInvalidate climbs
+ * this chain to place CONTAINS_INVALIDATED, so a stale link puts the flag on
+ * the wrong group, the walk O(1)-skips past the composable that actually
+ * changed, and the state updates while the tree does not. It is precisely the
+ * silent failure the flags exist to prevent. Every structural change must call
+ * this — an inserting caller with delta +1, a removing caller with -count.
+ *
+ * The threshold is expressed in the numbering being left behind. Insertions
+ * should call before advancing the gap; removals after widening it. In both
+ * cases groups sitting inside the gap are skipped, so the group being inserted
+ * and the groups being removed are naturally excluded.
+ *
+ * @param table     Pointer to the CelsSlotTable. NULL is accepted and ignored.
+ * @param threshold Lowest logical parent index affected by the renumbering.
+ * @param delta     Amount to add to each affected parentIndex. Zero is a no-op.
+ */
+void CelsSlotTableGroupsShiftParents(CelsSlotTable *table,
+                                     uint32_t threshold,
+                                     int32_t delta);
 
 /**
  * Searches active groups in the table for a group matching the given key.
@@ -321,13 +470,13 @@ CelsResult CelsSlotWriterGapMoveTo(CelsSlotWriter *writer,
  *
  * @param writer Pointer to the CelsSlotWriter. Non-NULL.
  * @param key Stable callsite key.
- * @param entityId Associated ECS entity ID (or 0).
+ * @param userData Opaque caller word stored verbatim on the group (or 0).
  * @param outGroupIndex Optional pointer receiving new logical group index.
  * @return CELS_OK or CELS_ERROR_CAPACITY_EXCEEDED.
  */
 CelsResult CelsSlotWriterGroupStart(CelsSlotWriter *writer,
                                     uint32_t key,
-                                    uint64_t entityId,
+                                    uint64_t userData,
                                     uint32_t *outGroupIndex);
 
 /**
