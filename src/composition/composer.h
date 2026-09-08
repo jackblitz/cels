@@ -671,18 +671,24 @@ void *CelsComposerRemember(CelsComposer *cmp,
 /**
  * @brief Parameter diffing reactive scope with automatic O(1) subtree skipping.
  *
- * Flecs Architecture Notes:
- * - When Flecs integration is connected, CEL_watch(entity, ComponentType) will
- *   subscribe the active composition to the entity's ComponentType in Flecs.
- *   Mutations in systems via ecs_set/ecs_modified will trigger recomposition.
- * - Currently operates on parameter diffing, watching any variable or struct
- *   against the slot table cache.
+ * This is a PULL primitive: it memcmps a value against the slot-table cache at
+ * the point of read and skips the block when nothing changed. It is unrelated
+ * to the PUSH primitive of the same-sounding name in state.h — CEL_Watch(cell)
+ * there reads a reactive cell and subscribes the active composable to it.
+ *
+ * The two were briefly spelled alike. They are not alternatives:
+ *   cel_watch(value) { ... }   diff a value you already hold, skip if equal
+ *   CEL_Watch(cell)            read a cell, and be re-run when it changes
  */
 #define cel_watch(...)                                                         \
     _CEL_WATCH_DISPATCH(__VA_ARGS__, _CEL_WATCH_2, _CEL_WATCH_1, 0)(__VA_ARGS__)
-#define CEL_Watch(...) cel_watch(__VA_ARGS__)
 #define CEL_watch(...) cel_watch(__VA_ARGS__)
 #define CELS_WATCH(...) cel_watch(__VA_ARGS__)
+
+/** Preferred PascalCase spelling of the diffing scope, since CEL_Watch is the
+ *  reactive-cell read in state.h. */
+#define CEL_Changed(...) cel_watch(__VA_ARGS__)
+#define cel_changed(...) cel_watch(__VA_ARGS__)
 
 /* --- CEL_query Implementation (Reactive ECS Query Observer) --- */
 

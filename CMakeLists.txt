@@ -53,6 +53,7 @@ add_library(cels_slottable STATIC
     src/composition/slottable/slot_table.c
     src/composition/composer.c
     src/composition/recomposition_dispatcher.c
+    src/composition/state.c
 )
 target_include_directories(cels_slottable PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src

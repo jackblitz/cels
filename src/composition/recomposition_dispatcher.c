@@ -673,3 +673,63 @@ CelsSessionGetCompositionScope(const CelsSession *session)
 
     return scope;
 }
+
+/* ========================================================================= */
+/* Recompose pass — IMPLEMENTATION STATUS: skeleton                          */
+/* ========================================================================= */
+
+/*
+ * Signature-complete placeholders for the synchronous recompose pass. These sit
+ * alongside the existing Flecs-pipeline dispatch path rather than replacing it:
+ * CelsSessionRecompose is the sequential, single-threaded entry point CELS.md
+ * is written around, while ecs_progress-driven dispatch above is untouched.
+ */
+
+CelsResult
+CelsCompositionHostInvalidate(CelsCompositionHost *host,
+                              CelsComposableId composable)
+{
+    (void)composable;
+    if (host == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+    host->isDirty = true;
+    return CELS_OK;
+}
+
+void
+CelsSessionSetTransactionContext(CelsSession *session,
+                                 const CelsTransactionContext *context)
+{
+    if (session == NULL) {
+        return;
+    }
+    if (context == NULL) {
+        memset(&session->transactionContext, 0,
+               sizeof(session->transactionContext));
+        return;
+    }
+    session->transactionContext = *context;
+}
+
+CelsResult
+CelsLifecycleMarkForDestroy(CelsSession *session, uint32_t key)
+{
+    if (session == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+    if (session->pendingDestroyCount >= CELS_LIFECYCLE_PENDING_CAPACITY) {
+        return CELS_ERROR_CAPACITY_EXCEEDED;
+    }
+    session->pendingDestroy[session->pendingDestroyCount++] = key;
+    return CELS_OK;
+}
+
+CelsResult
+CelsSessionRecompose(CelsSession *session)
+{
+    if (session == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+    return CELS_ERROR_INVALID_STATE;
+}

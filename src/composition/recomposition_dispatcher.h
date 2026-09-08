@@ -47,6 +47,15 @@
 #define CELS_HOST_PROPS_CAPACITY 64u
 #define CELS_WORKER_MAX_HOSTS 256u
 
+/** Composables that can be queued for invalidation on one host per drain. */
+#define CELS_HOST_INVALIDATION_CAPACITY 128u
+
+/** Default bound on drain iterations within one CelsSessionRecompose call. */
+#define CELS_DEFAULT_MAX_DRAIN_ITERATIONS 8u
+
+/** Root Compositions that can be marked for destruction before one pass. */
+#define CELS_LIFECYCLE_PENDING_CAPACITY 32u
+
 /**
  * Root composable function pointer.
  *
@@ -60,14 +69,38 @@ typedef void (*CelsComposableFn)(CelsComposer *cmp, void *props);
  * user props buffer, dirty flag, and 4KB slab pointer.
  * Fields ordered largest to smallest to eliminate internal padding.
  */
-typedef struct CelsCompositionHost {
+struct CelsCompositionHost {
     uint8_t *slabMemory;                      // 8 bytes: 64-byte aligned 4KB slab
     CelsComposableFn rootFn;                  // 8 bytes: Root composable function
     CelsSlotTable slotTable;                  // 48 bytes: Dual-gap buffer table
     uint8_t props[CELS_HOST_PROPS_CAPACITY];  // 64 bytes: Inline user props buffer
-    bool isDirty;                             // 1 byte: Dirty flag for recomposition
-    uint8_t _padding[7];                      // 7 bytes: Explicit cache alignment padding
-} CelsCompositionHost;
+    // Composables queued for invalidation, drained at the top of each
+    // recompose iteration. The queue is the source of truth; the per-group
+    // flags it sets are an accelerator for the walk.
+    CelsComposableId invalidationQueue[CELS_HOST_INVALIDATION_CAPACITY];
+    uint32_t invalidationCount;               // Entries used in invalidationQueue
+    bool isDirty;                             // 1 byte: Whole-host recomposition flag
+    uint8_t _padding[3];                      // 3 bytes: Explicit alignment padding
+};
+
+/**
+ * Callbacks through which a Session reports composition changes.
+ *
+ * CELS models no component data, tags or payload, and does not decide when a
+ * composable dies (Lifecycle does). It reports exactly two things, at the
+ * moment they happen: a composable mounted, or a composable was pruned.
+ * Assign either, both or neither — an unset callback is skipped.
+ */
+typedef struct CelsTransactionContext {
+    /** Fires when a composable mounts, BEFORE that composable's body runs. */
+    void (*onCreate)(CelsComposableId composable,
+                     CelsComposableId parent,
+                     uint32_t key,
+                     void *userdata);
+    /** Fires when a composable is pruned because it was not visited. */
+    void (*onDestroy)(CelsComposableId composable, void *userdata);
+    void *userdata;
+} CelsTransactionContext;
 
 /**
  * Work slice assigned to a single worker thread for parallel recomposition.
@@ -234,10 +267,21 @@ typedef CelsCompositionScopeFn CelsRootViewFn;
  * Configuration options for initializing a CelsSession.
  */
 typedef struct CelsSessionConfig {
-    uint32_t workerCount;                    // Number of worker threads (default: 4, max: 8)
     CelsCompositionScopeFn compositionScope; // Root composable view function returning CEL_CompositionScope
+    CelsTransactionContext transactionContext; // Optional mount/prune callbacks
     size_t slabSize;                         // Slab byte size for root host (min: 4096, default: 4096)
+    uint32_t workerCount;                    // Number of worker threads (default: 4, max: 8)
     uint32_t maxGroups;                      // Max group capacity in slab (default: 32)
+    // How many composables this session expects to hold at once. When non-zero
+    // it derives slabSize and maxGroups, so neither has to be sized by hand:
+    // each composable costs 128 bytes (32 structural + 96 slots), rounded up
+    // to a 4KB page. slabSize/maxGroups above are then ignored.
+    uint32_t maxComposables;
+    // Bound on drain iterations inside one CelsSessionRecompose call
+    // (default: CELS_DEFAULT_MAX_DRAIN_ITERATIONS). Exceeding it means
+    // invalidation is not settling — almost always a cycle between two
+    // composables that update cells the other watches.
+    uint32_t maxDrainIterations;
 } CelsSessionConfig;
 
 /**
@@ -261,6 +305,12 @@ typedef struct CelsSession {
     size_t slabSize;                         // Byte size of the allocated slab (default: 4096)
     ecs_entity_t rootEntity;                 // Flecs entity holding CelsCompositionHost
     CelsCompositionScopeFn compositionScope; // Root composition view function
+    CelsTransactionContext transactionContext; // Mount/prune reporting callbacks
+    // Root Composition keys marked for destruction, consumed as the very first
+    // thing the next CelsSessionRecompose does.
+    uint32_t pendingDestroy[CELS_LIFECYCLE_PENDING_CAPACITY];
+    uint32_t pendingDestroyCount;            // Entries used in pendingDestroy
+    uint32_t maxDrainIterations;             // Convergence bound for Recompose
 } CelsSession;
 
 /**
@@ -286,8 +336,80 @@ CelsResult CelsSessionInit(CelsSession *session,
 void CelsSessionDestroy(CelsSession *session);
 
 /**
- * Flags the session's root composition view as dirty, causing it to recompose
- * during the next ecs_progress() call.
+ * Runs the recompose pass: drains invalidations, walks dirty hosts, and fires
+ * onCreate/onDestroy inline as composables mount and prune.
+ *
+ * This is the only phase that runs anything. Everything outside it — a
+ * cel_update, a CelsSessionMarkDirty — only records that work is owed. The call
+ * is synchronous, sequential and single-threaded: callbacks fire on this thread,
+ * at the moment each composable mounts or is pruned.
+ *
+ * Order within one iteration: drain the queue (setting per-group flags and
+ * propagating them to the root), destroy any Composition marked via
+ * CelsLifecycleMarkForDestroy, then walk the remaining dirty hosts. The
+ * iteration repeats while invalidation is still outstanding, so a cel_update
+ * issued from inside a body or an onCreate is picked up by the same call
+ * rather than costing a frame.
+ *
+ * Returns immediately when nothing is dirty — the quiet path is one queue
+ * check, not a tree walk.
+ *
+ * @param session Target session. Non-NULL.
+ * @return CELS_OK, CELS_ERROR_INVALID_ARGUMENT, or
+ *         CELS_ERROR_RECOMPOSE_DID_NOT_CONVERGE when the drain bound is hit.
+ *         On non-convergence the queue is left intact and the next call
+ *         resumes from it; nothing is lost and nothing is half-applied.
+ */
+CelsResult CelsSessionRecompose(CelsSession *session);
+
+/**
+ * Attaches or replaces the session's transaction context after init.
+ *
+ * @param session Target session. Non-NULL.
+ * @param context Callbacks to attach. NULL clears any existing context.
+ */
+void CelsSessionSetTransactionContext(CelsSession *session,
+                                      const CelsTransactionContext *context);
+
+/**
+ * Queues an invalidation for one composable on one host.
+ *
+ * Appends to the host's queue and marks the host dirty. Sets no flags and runs
+ * nothing: propagation happens when the queue is drained, inside Recompose.
+ * A full queue degrades to marking the whole host dirty rather than dropping
+ * the invalidation — coarser, still correct.
+ *
+ * @param host       Host owning the composable. Non-NULL.
+ * @param composable Logical group index to invalidate.
+ * @return CELS_OK or CELS_ERROR_INVALID_ARGUMENT.
+ */
+CelsResult CelsCompositionHostInvalidate(CelsCompositionHost *host,
+                                         CelsComposableId composable);
+
+/**
+ * Marks a root Composition for destruction by key.
+ *
+ * This is the only way to tear a Composition down. The mark is consumed at the
+ * very start of the next CelsSessionRecompose, before anything is composed:
+ * onDestroy fires once for the Composition's own root composable, and its body
+ * never runs that pass.
+ *
+ * Callbacks do not cascade — a child gets its own onDestroy only when it
+ * vanishes from an ordinary recomposition. Cleanup does cascade: the subtree's
+ * groups are walked internally to unsubscribe their watch records, firing
+ * nothing.
+ *
+ * @param session Target session. Non-NULL.
+ * @param key     Key of the root Composition to destroy.
+ * @return CELS_OK, CELS_ERROR_INVALID_ARGUMENT, or CELS_ERROR_CAPACITY_EXCEEDED
+ *         if more than CELS_LIFECYCLE_PENDING_CAPACITY marks are pending.
+ */
+CelsResult CelsLifecycleMarkForDestroy(CelsSession *session, uint32_t key);
+
+/**
+ * Invalidates the session's root composable — the coarse escape hatch, for
+ * when threading a cell through would be more trouble than recomposing the
+ * whole tree. Same queue, same machinery, whole-tree granularity.
  *
  * @param session Target session struct.
  */

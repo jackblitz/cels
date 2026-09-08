@@ -12,6 +12,7 @@
 #include "composition/composer.h"
 #include "composition/recomposition_dispatcher.h"
 #include "composition/slottable/slot_table.h"
+#include "composition/state.h"
 
 /* ========================================================================= */
 /* 1. Header Declaration Macros (for .h files)                               */
@@ -241,15 +242,34 @@
 /* Inherited directly from composer.h: CEL_Compose, CELS_COMPOSE */
 
 /*
- * --- CEL_Watch ---
+ * --- CEL_Changed ---
  * Parameter diffing block. Diffs variable/state against the slot cache.
  * Skips the enclosed block in O(1) time if state is unchanged.
  *
  * Usage:
- *     CEL_Watch(state) { ... }
- *     CEL_Watch(cmp, state) { ... }
+ *     CEL_Changed(state) { ... }
+ *     CEL_Changed(cmp, state) { ... }
+ *
+ * Not to be confused with CEL_Watch below, which reads a reactive cell and
+ * subscribes to it. This one diffs a value you already hold.
  */
-/* Inherited directly from composer.h: CEL_Watch, CEL_watch, cel_watch */
+/* Inherited directly from composer.h: CEL_Changed, CEL_watch, cel_watch */
+
+/*
+ * --- CEL_Mutable / CEL_MutableState / CEL_Watch / cel_update ---
+ * Reactive state written from outside composition. CEL_Watch(cell) reads a
+ * cell and subscribes the active composable; cel_update(cell, value) writes it
+ * and queues an invalidation for every subscriber.
+ *
+ * Usage:
+ *     CEL_Mutable(Score) { int score; };
+ *     const Score initial = { .score = 0 };
+ *     g_score = CEL_MutableState(Score, initial);
+ *
+ *     const Score current = CEL_Watch(g_score);
+ *     cel_update(g_score, next);
+ */
+/* Inherited directly from state.h */
 
 /*
  * --- CEL_Query ---

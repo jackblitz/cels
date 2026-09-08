@@ -58,7 +58,9 @@ typedef enum CelsResult {
     CELS_ERROR_OUT_OF_MEMORY,
     CELS_ERROR_CAPACITY_EXCEEDED,
     CELS_ERROR_INDEX_OUT_OF_BOUNDS,
-    CELS_ERROR_INVALID_STATE
+    CELS_ERROR_INVALID_STATE,
+    /** Recompose hit its drain-iteration bound; queue left intact. */
+    CELS_ERROR_RECOMPOSE_DID_NOT_CONVERGE
 } CelsResult;
 
 /**
@@ -68,6 +70,46 @@ typedef enum CelsResult {
  * @return Static, never-NULL null-terminated string.
  */
 const char *CelsResultToString(CelsResult result);
+
+/**
+ * Stable identity of one composable, equal to its logical group index in the
+ * owning CelsSlotTable.
+ *
+ * Ids are dense and small so callers can use them directly as array indices.
+ * They are also REUSED: pruning reclaims a group's space immediately, so an id
+ * held across recomposition passes may refer to a different composable later.
+ * Anything retaining an id beyond the pass that produced it must tolerate that.
+ */
+typedef uint32_t CelsComposableId;
+
+/** Sentinel for "no composable" / invalid identity. */
+#define CELS_COMPOSABLE_ID_INVALID UINT32_MAX
+
+/**
+ * Owning composition host, defined in recomposition_dispatcher.h.
+ *
+ * The typedef lives here, in the header every module already includes, because
+ * C99 forbids repeating a typedef — declaring it in each header that needs the
+ * incomplete type is a -Wpedantic error.
+ */
+typedef struct CelsCompositionHost CelsCompositionHost;
+
+/**
+ * Per-group invalidation flags stored in CelsSlotGroup.flags.
+ *
+ * Composition walks DOWN from a host's root while invalidation arrives at a
+ * LEAF from outside, so an invalidated composable must be able to defeat an
+ * ancestor's O(1) subtree skip. CONTAINS_INVALIDATED is what carries that
+ * signal upward; it is set on every group between an invalidated node and the
+ * root when the invalidation queue is drained.
+ */
+typedef enum CelsGroupFlags {
+    CELS_GROUP_FLAG_NONE = 0u,
+    /** This composable's own body must re-run this pass. */
+    CELS_GROUP_FLAG_INVALIDATED = 1u << 0,
+    /** Some descendant is invalidated — this group must not be O(1)-skipped. */
+    CELS_GROUP_FLAG_CONTAINS_INVALIDATED = 1u << 1
+} CelsGroupFlags;
 
 /**
  * 64-bit word slot value. Can hold an integer, double, handle, or pointer.
@@ -195,6 +237,63 @@ uint32_t CelsSlotTableSlotCapacity(const CelsSlotTable *table);
 CelsResult CelsSlotTableGroupToPhysicalIdx(const CelsSlotTable *table,
                                           uint32_t logicalIndex,
                                           uint32_t *outPhysicalIndex);
+
+/* ========================================================================= */
+/* Invalidation flags                                                        */
+/* ========================================================================= */
+
+/**
+ * Reads the invalidation flags of one group.
+ *
+ * @param table Pointer to the CelsSlotTable. Non-NULL.
+ * @param composable Logical group index [0, groupCount).
+ * @return The group's CelsGroupFlags bitmask, or CELS_GROUP_FLAG_NONE if the
+ *         table is NULL or the index is out of range.
+ */
+uint16_t CelsSlotTableGroupFlags(const CelsSlotTable *table,
+                                 CelsComposableId composable);
+
+/**
+ * Marks one composable's body as needing to re-run, and marks every group
+ * between it and the root as containing an invalidation.
+ *
+ * This is the whole of the upward-propagation step: CELS_GROUP_FLAG_INVALIDATED
+ * on the target, CELS_GROUP_FLAG_CONTAINS_INVALIDATED on each ancestor reached
+ * by following parentIndex. The cost is charged here, on the invalidating side,
+ * precisely so the composition walk can stay a pure O(1) skip everywhere the
+ * invalidation did not reach.
+ *
+ * Walking stops at a root (parentIndex == UINT32_MAX), at an ancestor that
+ * already carries CONTAINS_INVALIDATED (its own ancestors are already marked),
+ * or after groupCount steps as a cycle guard.
+ *
+ * @param table Pointer to the CelsSlotTable. Non-NULL.
+ * @param composable Logical group index [0, groupCount).
+ * @return CELS_OK, CELS_ERROR_INVALID_ARGUMENT, or
+ *         CELS_ERROR_INDEX_OUT_OF_BOUNDS.
+ */
+CelsResult CelsSlotTableGroupInvalidate(CelsSlotTable *table,
+                                        CelsComposableId composable);
+
+/**
+ * Clears both invalidation flags on one group.
+ *
+ * Called by the composition walk on entering a group whose body it is about to
+ * run — the flags have served their purpose once the walk has committed to
+ * descending.
+ *
+ * @param table Pointer to the CelsSlotTable. Non-NULL.
+ * @param composable Logical group index [0, groupCount).
+ */
+void CelsSlotTableGroupClearFlags(CelsSlotTable *table,
+                                  CelsComposableId composable);
+
+/**
+ * Clears the invalidation flags of every group in the table.
+ *
+ * @param table Pointer to the CelsSlotTable. NULL is accepted and ignored.
+ */
+void CelsSlotTableClearAllFlags(CelsSlotTable *table);
 
 /**
  * Searches active groups in the table for a group matching the given key.
