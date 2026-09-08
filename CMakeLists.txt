@@ -109,6 +109,18 @@ set_target_properties(test_cels_session PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CELS_OUTPUT_DIR}/test"
 )
 
+# Test suite: Reactive State Cells & Invalidation
+add_executable(test_state
+    test/test_state.c
+)
+target_link_libraries(test_state PRIVATE
+    cels_slottable
+    flecs
+)
+set_target_properties(test_state PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CELS_OUTPUT_DIR}/test"
+)
+
 # Copy the MinGW pthread runtime DLL next to the test binaries if the
 # toolchain links it dynamically.
 if(CELS_PLATFORM_DIR STREQUAL "window")
@@ -127,6 +139,12 @@ if(CELS_PLATFORM_DIR STREQUAL "window")
             COMMENT "Copying libwinpthread-1.dll to ${CELS_OUTPUT_DIR}/test"
         )
         add_custom_command(TARGET test_cels_session POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${MINGW_BIN_DIR}/libwinpthread-1.dll"
+                "${CELS_OUTPUT_DIR}/test/"
+            COMMENT "Copying libwinpthread-1.dll to ${CELS_OUTPUT_DIR}/test"
+        )
+        add_custom_command(TARGET test_state POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${MINGW_BIN_DIR}/libwinpthread-1.dll"
                 "${CELS_OUTPUT_DIR}/test/"
