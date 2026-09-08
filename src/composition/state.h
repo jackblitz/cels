@@ -315,13 +315,22 @@ void CelsTransactionNotifyDestroy(CelsComposableId composable);
  *
  * Yields a value of the cell's type, so it reads like an ordinary assignment:
  * `const PlayerData player = CEL_Watch(state);`
+ *
+ * Asserts in debug builds if cell_ptr is not a live cell. Without that a
+ * foreign pointer would read back as an ordinary dereference and subscribe
+ * nothing, which looks exactly like a cell that never changes.
  */
 #define CEL_Watch(cell_ptr)                                                    \
-    (*(CelsMutableStateReadOrZero((cell_ptr), sizeof(*(cell_ptr))),            \
+    (*(CelsMutableStateAssertOk(                                               \
+           CelsMutableStateReadOrZero((cell_ptr), sizeof(*(cell_ptr)))),       \
        (cell_ptr)))
 
 /**
  * Writes a cell and queues invalidations for its subscribers.
+ *
+ * Asserts in debug builds if cell_ptr is not a live cell. The write itself is
+ * evaluated before the check, never inside it, so it still happens when
+ * assertions are compiled out.
  *
  * @code
  *     PlayerData next = CEL_Watch(g_player);
@@ -330,8 +339,8 @@ void CelsTransactionNotifyDestroy(CelsComposableId composable);
  * @endcode
  */
 #define cel_update(cell_ptr, new_value_var)                                    \
-    ((void)CelsMutableStateUpdate((cell_ptr), &(new_value_var),                \
-                                  sizeof(*(cell_ptr))))
+    CelsMutableStateAssertOk(CelsMutableStateUpdate(                           \
+        (cell_ptr), &(new_value_var), sizeof(*(cell_ptr))))
 
 /** PascalCase alias, for callers preferring the API casing. */
 #define CEL_Update(cell_ptr, new_value_var) cel_update(cell_ptr, new_value_var)
@@ -363,3 +372,20 @@ void *CelsMutableStateCreateOrNull(const void *initialValue, size_t valueSize);
  * @return CELS_OK, or an error if value carries no valid cell header.
  */
 CelsResult CelsMutableStateReadOrZero(const void *value, size_t valueSize);
+
+/**
+ * Asserts, in debug builds only, that a cell operation succeeded.
+ *
+ * This is where the DSL macros get their loudness. C cannot distinguish a
+ * pointer that came from CelsMutableStateCreate from any other Type *, so a
+ * caller passing the wrong one is a programmer error the type system will
+ * never catch — and without this it would produce no signal at all, since the
+ * macros have no result for anyone to check.
+ *
+ * Deliberately at the macro layer rather than inside the cell functions
+ * themselves: the functions stay callable with a bad pointer and report it as
+ * an error code, which is what lets that path be tested in a debug build.
+ *
+ * @param result Any CelsResult. Anything but CELS_OK trips the assertion.
+ */
+void CelsMutableStateAssertOk(CelsResult result);

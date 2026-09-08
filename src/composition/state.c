@@ -503,3 +503,10 @@ CelsMutableStateReadOrZero(const void *value, size_t valueSize)
     MutableCellWatcherAdd(cell);
     return CELS_OK;
 }
+
+void
+CelsMutableStateAssertOk(CelsResult result)
+{
+    CELS_ASSERT(result == CELS_OK);
+    (void)result;
+}
