@@ -129,22 +129,28 @@ int main(void) {
     CelsSessionRecompose(&session);
     printf("Quiet recompose completed instantly (0 work done).\n");
 
-    printf("\n=== Event: User clicks button (dispatched via component callback) ===\n");
-
-    // Event loop dispatches to the button's registered callback with its private userData:
+    printf("\n=== Event 1: User clicks button (0 -> 1) ===\n");
     if (g_incrementButton.onClick) {
         g_incrementButton.onClick(g_incrementButton.userData, &session);
     }
 
-    printf("=== Pass 2: Recompose triggered by local state mutation ===\n");
+    printf("=== Pass 2: Recompose triggers dynamic spawning of BadgeNotification ===\n");
     CelsSessionRecompose(&session);
 
-    printf("\n=== Event: User closes window (cel_mutate on WindowState) ===\n");
+    printf("\n=== Event 2: User clicks button again (1 -> 2) ===\n");
+    if (g_incrementButton.onClick) {
+        g_incrementButton.onClick(g_incrementButton.userData, &session);
+    }
+
+    printf("=== Pass 3: Recompose existing badge (cel_spawn does NOT re-run) ===\n");
+    CelsSessionRecompose(&session);
+
+    printf("\n=== Event 3: User closes window (cel_mutate on WindowState) ===\n");
     cel_mutate(&session, &g_mainWindow) {
         this->isOpen = false;
     }
 
-    printf("=== Pass 3: Recompose triggers pruning & onForgotten ===\n");
+    printf("=== Pass 4: Recompose triggers pruning & OnDestroyed ===\n");
     CelsSessionRecompose(&session);
 
     CelsSessionDestroy(&session);
