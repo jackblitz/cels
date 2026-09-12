@@ -133,8 +133,6 @@ void SidebarResource_OnForgotten(SidebarResource *self, CelsSession *s) {
     self->resourceHandle = 0;
 }
 
-CEL_BIND_OBSERVER(SidebarResource);
-
 /* ========================================================================= */
 /* Declarative Root Function                                                 */
 /* ========================================================================= */
@@ -158,7 +156,7 @@ void RootApp(CelsSession *s) {
 
             if (state.showOptionalSidebar) {
                 CEL_Composable(s, CEL_KEY("Sidebar")) {
-                    cel_remember_observer(s, SidebarResource);
+                    cel_remember_observer(s, SidebarResource, SidebarResource_OnRemembered, SidebarResource_OnForgotten);
 
                     CEL_Composable(s, CEL_KEY("ProfileWidget")) {
                     } CEL_Close(s);

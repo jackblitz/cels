@@ -188,43 +188,137 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
 #define CEL_KeyIndex(baseKey, index) CelsKeyIndex((baseKey), (index))
 
 /* ========================================================================= */
+/* Macro Helpers for Overloading & Arity Dispatch                            */
+/* ========================================================================= */
+
+#define _CEL_ARG_2(_0, _1, _2, ...) _2
+#define _CEL_GET_MACRO_2(_1, _2, NAME, ...) NAME
+
+/* ========================================================================= */
 /* Syntactically Locked Declarative DSL Macros                               */
 /* ========================================================================= */
 
-#define CEL_Composition(session, rootKey) \
+#define _CEL_COMPOSITION_1(rootKey) \
+    do { \
+        if (CelsEnterComposition(CelsGetCurrentSession(), (rootKey)))
+
+#define _CEL_COMPOSITION_2(session, rootKey) \
     do { \
         if (CelsEnterComposition((session), (rootKey)))
 
-#define CEL_Composable(session, key) \
+#define CEL_Composition(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_COMPOSITION_2, _CEL_COMPOSITION_1)(__VA_ARGS__)
+
+#define _CEL_IS_s_s ~, 1
+#define _CEL_IS_s_session ~, 1
+#define _CEL_CAT(a, b) a##b
+#define _CEL_CHECK_S(token) _CEL_CAT(_CEL_IS_s_, token)
+#define _CEL_SECOND(a, b, ...) b
+#define _CEL_TEST(x) _CEL_SECOND(x, 0)
+#define _CEL_IS_SESSION_ARG(token) _CEL_TEST(_CEL_CHECK_S(token))
+
+/* Legacy 2-arg block with explicit session & CEL_Close pairing */
+#define _CEL_COMPOSABLE_LEGACY_BLOCK(session, key) \
     do { \
         if (CelsEnterComposable((session), (key)))
 
-#define CEL_Close(session) \
-        CelsExitGroup((session)); \
+/* Modern Compose container invocation: runs component setup, then allows children in the middle */
+#define _CEL_COMPOSABLE_COMPONENT_BLOCK(Component, key) \
+    for (int _cels_run = (CelsEnterComposable(CelsGetCurrentSession(), (key)) \
+                          ? (_cels_body_##Component(CelsGetCurrentSession(), (key)), 1) \
+                          : 0), _cels_done = 0; \
+         !_cels_done; \
+         _cels_done = 1, CelsExitGroup(CelsGetCurrentSession())) \
+        for ( ; _cels_run; _cels_run = 0)
+
+#define _CEL_DISPATCH_COMPOSABLE_2(is_sess, a, b) _CEL_DISPATCH_COMPOSABLE_IMPL_##is_sess(a, b)
+#define _CEL_DISPATCH_COMPOSABLE(is_sess, a, b) _CEL_DISPATCH_COMPOSABLE_2(is_sess, a, b)
+#define _CEL_DISPATCH_COMPOSABLE_IMPL_1(a, b) _CEL_COMPOSABLE_LEGACY_BLOCK(a, b)
+#define _CEL_DISPATCH_COMPOSABLE_IMPL_0(a, b) _CEL_COMPOSABLE_COMPONENT_BLOCK(a, b)
+
+#define _CEL_COMPOSABLE_2(a, b) _CEL_DISPATCH_COMPOSABLE(_CEL_IS_SESSION_ARG(a), a, b)
+
+/* 1-arg container block without component logic, e.g. CEL_Composable(key) { ... } */
+#define _CEL_COMPOSABLE_1(key) \
+    for (int _cels_run = (CelsEnterComposable(CelsGetCurrentSession(), (key)) ? 1 : 0), _cels_done = 0; \
+         !_cels_done; \
+         _cels_done = 1, CelsExitGroup(CelsGetCurrentSession())) \
+        for ( ; _cels_run; _cels_run = 0)
+
+#define CEL_Composable(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_COMPOSABLE_2, _CEL_COMPOSABLE_1)(__VA_ARGS__)
+
+/* Generic box container for children */
+#define CEL_BOX(key) _CEL_COMPOSABLE_1(key)
+
+/* Compose leaf invocation (no body) */
+#define CEL_Compose(Component, key) Component(key)
+
+#define _CEL_CLOSE_0() CelsExitGroup(CelsGetCurrentSession())
+#define _CEL_CLOSE_1(session) CelsExitGroup((session))
+#define _CEL_CLOSE_CHOOSER(...) _CEL_ARG_2(__VA_ARGS__, _CEL_CLOSE_1, _CEL_CLOSE_0)
+
+#define CEL_Close(...) \
+        _CEL_CLOSE_CHOOSER(dummy, ##__VA_ARGS__, _CEL_CLOSE_1, _CEL_CLOSE_0)(__VA_ARGS__); \
     } while (0)
 
 #define CEL_Observer(Type) \
     typedef struct Type Type; \
-    void Type##_OnRemembered(Type *self, CelsSession *s); \
-    void Type##_OnForgotten(Type *self, CelsSession *s); \
     struct Type
 
-#define CEL_BIND_OBSERVER(Type) \
-    static const CelsObserverDesc Type##_Desc = { \
-        .size = sizeof(Type), \
-        .onRemembered = (void(*)(void*, CelsSession*))Type##_OnRemembered, \
-        .onForgotten  = (void(*)(void*, CelsSession*))Type##_OnForgotten \
-    }
+#define cel_remember_observer(session, Type, on_remembered, on_forgotten) \
+    ((Type*)CelsResolveSlot((session), sizeof(Type), NULL, &(CelsObserverDesc){ \
+        .size         = sizeof(Type), \
+        .onRemembered = (void(*)(void*, CelsSession*))(on_remembered), \
+        .onForgotten  = (void(*)(void*, CelsSession*))(on_forgotten) \
+    }))
 
-#define cel_remember_observer(session, Type) \
-    ((Type*)CelsResolveSlot((session), sizeof(Type), NULL, &Type##_Desc))
-
-/* Compound literal provides a stack lvalue for any scalar, struct, or 0 */
-#define cel_remember(session, Type, ...) \
+/* ========================================================================= */
+/* Persistent Component-Local Memory (cel_remember)                          */
+/* ========================================================================= */
+/*
+ * cel_remember(Type, initialValue...)
+ * or with explicit session: cel_remember(session, Type, initialValue...)
+ *
+ * HOW IT WORKS:
+ * 1. Persistent Local State:
+ *    cel_remember provides persistent, self-contained local memory for a
+ *    composable component across recompositions.
+ *
+ * 2. Sequential Slot Allocation:
+ *    Each call to cel_remember allocates the next slot within the current
+ *    component's group in the session data arena. A single component can
+ *    declare multiple cel_remember variables in sequential order.
+ *
+ * 3. Lifecycle Behavior:
+ *    - Fresh Mount: Allocates slot memory in the arena and initializes it
+ *      with (Type){ initialValue... }.
+ *    - Recomposition: Returns the existing persistent memory pointer in the
+ *      exact same call order, preserving previous mutations.
+ *    - Pruning / Teardown: When the component leaves the composition tree,
+ *      all its remembered slots are automatically reclaimed together.
+ *
+ * 4. Reactive Subscription & Mutation:
+ *    - Read & Subscribe: Type val = cel_watch(ptr);
+ *    - Mutate: cel_mutate(session, ptr) { (*this)++; }
+ *    - Wire into Callbacks: Pass the returned pointer to component callbacks
+ *      or event listeners (e.g. button onClick userData).
+ */
+#define _cel_remember_sess(session, Type, ...) \
     ((Type*)CelsResolveSlot((session), sizeof(Type), &(Type){ __VA_ARGS__ }, NULL))
 
-#define cel_watch(session, state_ptr) \
-    (CelsStateRead((session), (state_ptr)), *(state_ptr))
+#define _cel_remember_curr(Type, ...) \
+    ((Type*)CelsResolveSlot(CelsGetCurrentSession(), sizeof(Type), &(Type){ __VA_ARGS__ }, NULL))
+
+#define _CEL_REMEMBER_DISPATCH_1(a, Type, ...) _cel_remember_sess(a, Type, __VA_ARGS__)
+#define _CEL_REMEMBER_DISPATCH_0(Type, ...)    _cel_remember_curr(Type, __VA_ARGS__)
+#define _CEL_REMEMBER_DISPATCH_2(is_s, ...)    _CEL_REMEMBER_DISPATCH_##is_s(__VA_ARGS__)
+#define _CEL_REMEMBER_DISPATCH(is_s, ...)      _CEL_REMEMBER_DISPATCH_2(is_s, __VA_ARGS__)
+
+#define _CEL_FIRST(a, ...) a
+#define cel_remember(...) _CEL_REMEMBER_DISPATCH(_CEL_IS_SESSION_ARG(_CEL_FIRST(__VA_ARGS__)), __VA_ARGS__)
+
+#define _CEL_WATCH_1(state_ptr) (CelsStateRead(CelsGetCurrentSession(), (state_ptr)), *(state_ptr))
+#define _CEL_WATCH_2(session, state_ptr) (CelsStateRead((session), (state_ptr)), *(state_ptr))
+#define cel_watch(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_WATCH_2, _CEL_WATCH_1)(__VA_ARGS__)
 
 /* Scoped mutation: infers struct type and exposes this-> */
 #define cel_mutate(session, state_ptr) \
@@ -232,12 +326,80 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
          this != NULL; \
          CelsStateCommitMutation((session), this, &_cel_old_, sizeof(*this)), this = NULL)
 
+/* Query an active observer resource (native handles/observers only) by key */
 #define CEL_FindObserver(session, key, Type) \
-    ((Type*)CelsFindObserverSlot((session), (key), sizeof(Type)))
+    ((Type*)CelsFindObserver((session), (key)))
+
+/* ========================================================================= */
+/* Compose-Style Component Functions                                         */
+/* ========================================================================= */
+
+#define _CEL_COMPOSABLE_DEF(FnName, keyName) \
+    static void _cels_body_##FnName(CelsSession *s, uint32_t keyName); \
+    static inline void FnName(uint32_t keyName) { \
+        CelsSession *s = CelsGetCurrentSession(); \
+        assert(s != NULL && #FnName " called outside of an active CelsSession"); \
+        if (CelsEnterComposable(s, keyName)) { \
+            _cels_body_##FnName(s, keyName); \
+        } \
+        CelsExitGroup(s); \
+    } \
+    static inline void FnName##_s(CelsSession *s, uint32_t keyName) { \
+        assert(s != NULL && #FnName "_s called with NULL session"); \
+        if (CelsEnterComposable(s, keyName)) { \
+            _cels_body_##FnName(s, keyName); \
+        } \
+        CelsExitGroup(s); \
+    } \
+    static void _cels_body_##FnName(CelsSession *s, uint32_t keyName)
+
+#define CEL_Composeable(FnName, keyName)        _CEL_COMPOSABLE_DEF(FnName, keyName)
+#define CEL_DefineComposable(FnName, keyName)   _CEL_COMPOSABLE_DEF(FnName, keyName)
+#define CEL_ComposableFn(FnName, keyName)       _CEL_COMPOSABLE_DEF(FnName, keyName)
+#define CEL_Composable_Def(FnName, keyName)     _CEL_COMPOSABLE_DEF(FnName, keyName)
+
+#define CEL_Composable_Props(FnName, keyName, PropsType, propsName) \
+    static void _cels_body_##FnName(CelsSession *s, uint32_t keyName, PropsType propsName); \
+    static inline void FnName(uint32_t keyName, PropsType propsName) { \
+        CelsSession *s = CelsGetCurrentSession(); \
+        assert(s != NULL && #FnName " called outside of an active CelsSession"); \
+        if (CelsEnterComposable(s, keyName)) { \
+            _cels_body_##FnName(s, keyName, propsName); \
+        } \
+        CelsExitGroup(s); \
+    } \
+    static inline void FnName##_s(CelsSession *s, uint32_t keyName, PropsType propsName) { \
+        assert(s != NULL && #FnName "_s called with NULL session"); \
+        if (CelsEnterComposable(s, keyName)) { \
+            _cels_body_##FnName(s, keyName, propsName); \
+        } \
+        CelsExitGroup(s); \
+    } \
+    static void _cels_body_##FnName(CelsSession *s, uint32_t keyName, PropsType propsName)
+
+#define CEL_Composeable_Props(FnName, keyName, PropsType, propsName) \
+    CEL_Composable_Props(FnName, keyName, PropsType, propsName)
+#define CEL_DefineComposable_Props(FnName, keyName, PropsType, propsName) \
+    CEL_Composable_Props(FnName, keyName, PropsType, propsName)
 
 /* ========================================================================= */
 /* Engine Function Declarations                                              */
 /* ========================================================================= */
+
+#ifndef CELS_THREAD_LOCAL
+    #if defined(_MSC_VER)
+        #define CELS_THREAD_LOCAL __declspec(thread)
+    #elif defined(__GNUC__) && !defined(_WIN32)
+        #define CELS_THREAD_LOCAL __thread
+    #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__) && !defined(_WIN32)
+        #define CELS_THREAD_LOCAL _Thread_local
+    #else
+        #define CELS_THREAD_LOCAL
+    #endif
+#endif
+
+CelsSession* CelsGetCurrentSession(void);
+void         CelsSetCurrentSession(CelsSession *s);
 
 void        CelsSessionInit(CelsSession *s, const CelsSessionConfig *cfg);
 void        CelsSessionSetRoot(CelsSession *s, CelsRootFn rootFn);
@@ -252,7 +414,7 @@ void        CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex);
 void*       CelsResolveSlot(CelsSession *s, size_t size, const void *initVal, const CelsObserverDesc *desc);
 void        CelsStateRead(CelsSession *s, const void *statePtr);
 void        CelsStateCommitMutation(CelsSession *s, const void *statePtr, const void *oldVal, size_t size);
-void*       CelsFindObserverSlot(CelsSession *s, uint32_t key, size_t expectedSize);
+void*       CelsFindObserver(CelsSession *s, uint32_t key);
 
 #ifdef __cplusplus
 }
@@ -265,6 +427,16 @@ void*       CelsFindObserverSlot(CelsSession *s, uint32_t key, size_t expectedSi
 /* ========================================================================= */
 
 #ifdef CELS_IMPLEMENTATION
+
+static CELS_THREAD_LOCAL CelsSession *cels_current_session = NULL;
+
+CelsSession* CelsGetCurrentSession(void) {
+    return cels_current_session;
+}
+
+void CelsSetCurrentSession(CelsSession *s) {
+    cels_current_session = s;
+}
 
 static inline uint32_t CelsGetLogicalGroupCount(const CelsSession *s) {
     return CELS_MAX_GROUPS - (s->groupsGapEnd - s->groupsGapStart);
@@ -463,12 +635,16 @@ CelsResult CelsSessionRecompose(CelsSession *s) {
         return CELS_OK;
     }
 
+    CelsSession *prevSession = cels_current_session;
+    cels_current_session = s;
+
     uint32_t iterations = 0;
     s->isRecomposing = true;
 
     do {
         if (++iterations > s->maxDrainIterations) {
             s->isRecomposing = false;
+            cels_current_session = prevSession;
             return CELS_ERROR_RECOMPOSE_DID_NOT_CONVERGE;
         }
 
@@ -482,6 +658,7 @@ CelsResult CelsSessionRecompose(CelsSession *s) {
 
         if (s->currentDepth != 0) {
             s->isRecomposing = false;
+            cels_current_session = prevSession;
             return CELS_ERROR_UNBALANCED_SCOPE;
         }
 
@@ -489,11 +666,13 @@ CelsResult CelsSessionRecompose(CelsSession *s) {
 
     s->hasComposedOnce = true;
     s->isRecomposing = false;
+    cels_current_session = prevSession;
     return CELS_OK;
 }
 
 bool CelsEnterComposition(CelsSession *s, uint32_t rootKey) {
     assert(s->currentDepth == 0 && "CEL_Composition cannot be nested");
+    cels_current_session = s;
     uint32_t depth = s->currentDepth++;
     s->activeStack[depth] = 1;
 
@@ -646,14 +825,12 @@ void* CelsResolveSlot(CelsSession *s, size_t size, const void *initVal, const Ce
         }
 
         if (desc) {
-            if (desc->onForgotten) {
-                assert(s->cleanupCount < CELS_MAX_CLEANUPS && "CELS_ERROR_CLEANUP_OVERFLOW");
-                s->cleanups[s->cleanupCount++] = (CelsCleanupHook){
-                    .groupKey = group->key,
-                    .instance = slotPtr,
-                    .onForgotten = desc->onForgotten
-                };
-            }
+            assert(s->cleanupCount < CELS_MAX_CLEANUPS && "CELS_ERROR_CLEANUP_OVERFLOW");
+            s->cleanups[s->cleanupCount++] = (CelsCleanupHook){
+                .groupKey = group->key,
+                .instance = slotPtr,
+                .onForgotten = desc->onForgotten
+            };
             if (desc->onRemembered) {
                 desc->onRemembered(slotPtr, s);
             }
@@ -699,6 +876,19 @@ void CelsStateRead(CelsSession *s, const void *statePtr) {
         if (header->watcherCount < CELS_MAX_WATCHERS) {
             header->watcherKeys[header->watcherCount++] = currentKey;
         }
+    } else if (s->currentDepth == 0 && CelsGetLogicalGroupCount(s) > 0) {
+        uint32_t currentKey = CelsGetGroup(s, 0)->key;
+        CelsStateHeader *header = CelsGetOrCreateStateHeader(s, statePtr);
+
+        for (uint16_t i = 0; i < header->watcherCount; ++i) {
+            if (header->watcherKeys[i] == currentKey) {
+                return;
+            }
+        }
+
+        if (header->watcherCount < CELS_MAX_WATCHERS) {
+            header->watcherKeys[header->watcherCount++] = currentKey;
+        }
     }
 }
 
@@ -718,12 +908,11 @@ void CelsStateCommitMutation(CelsSession *s, const void *statePtr, const void *o
     }
 }
 
-void* CelsFindObserverSlot(CelsSession *s, uint32_t key, size_t expectedSize) {
-    uint32_t totalGroups = CelsGetLogicalGroupCount(s);
-    for (uint32_t i = 0; i < totalGroups; ++i) {
-        CelsSlotGroup *g = CelsGetGroup(s, i);
-        if (g->key == key && g->dataSize >= expectedSize) {
-            return (void*)CelsGetData(s, g->dataOffset);
+void* CelsFindObserver(CelsSession *s, uint32_t key) {
+    if (!s) return NULL;
+    for (uint32_t i = 0; i < s->cleanupCount; ++i) {
+        if (s->cleanups[i].groupKey == key) {
+            return s->cleanups[i].instance;
         }
     }
     return NULL;
