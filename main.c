@@ -94,19 +94,32 @@ CEL_Composeable(CEL_CounterText, key) {
     };
 }
 
+/* --- Top-Level Composition Lifecycle --- */
+
+CEL_LifeCycle(WindowLifeCycle, WindowState) {
+    // cel_watch subscribes this Composition root to changes in WindowState
+    WindowState win = cel_watch(it);
+    printf("  [WindowLifeCycle] Evaluating Window -> isOpen: %s [%dx%d]\n",
+           win.isOpen ? "true" : "false", win.width, win.height);
+
+    if (!win.isOpen) {
+        printf("  [WindowLifeCycle] Close condition met -> triggering cel_destroy() to despawn Composition\n");
+        cel_destroy();
+    }
+}
+
 /* --- Declarative Root Function --- */
 
 void RootApp(CelsSession *s) {
-    CEL_Composition(s, CEL_KEY("RootHost")) {
-        WindowState win = cel_watch(&g_mainWindow);
-        if (win.isOpen)
-        {
-            // Container composable with children nested inside
-            CEL_Composable(CEL_SDLWindow, CEL_KEY("MainWindow")) {
-                CEL_CounterText(CEL_KEY("CounterText"));
-            }
+    (void)s;
+    // Spawns a reactive Composition bound to WindowState & WindowLifeCycle.
+    // When WindowLifeCycle calls cel_destroy(), CELS automatically despawns the Composition.
+    CEL_Composition(WindowState, &g_mainWindow, WindowLifeCycle) {
+        // Container composable with children nested inside
+        CEL_Composable(CEL_SDLWindow, CEL_KEY("MainWindow")) {
+            CEL_CounterText(CEL_KEY("CounterText"));
         }
-    } CEL_Close(s);
+    }
 }
 
 /* --- Main --- */
@@ -150,7 +163,7 @@ int main(void) {
         this->isOpen = false;
     }
 
-    printf("=== Pass 4: Recompose triggers pruning & OnDestroyed ===\n");
+    printf("=== Pass 4: Recompose triggers CEL_LifeCycle -> cel_destroy() -> Despawn ===\n");
     CelsSessionRecompose(&session);
 
     CelsSessionDestroy(&session);
