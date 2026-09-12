@@ -1,5 +1,10 @@
-#define CELS_IMPLEMENTATION
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include "cels.h"
+#include "cli/test_cli.h"
+
+#include <assert.h>
 #include <stdio.h>
 
 /* ========================================================================= */
@@ -74,7 +79,7 @@ static void PrintNode(const CelsSession *s, uint32_t logicalIdx, const char *pre
     }
 }
 
-void CelsDumpTree(const CelsSession *s) {
+static void CelsDumpTree(const CelsSession *s) {
     uint32_t totalGroups = GetActiveCount(s);
     if (totalGroups == 0) {
         printf("\n=== TREE DUMP (Empty Tree) ===\n\n");
@@ -121,15 +126,13 @@ CEL_Observer(SidebarResource) {
     int resourceHandle;
 };
 
-void SidebarResource_OnRemembered(SidebarResource *self, CelsSession *s) {
+static void SidebarResource_OnRemembered(SidebarResource *self, CelsSession *s) {
     (void)s;
     self->resourceHandle = 0xABCD;
-    printf("  [RememberObserver] Sidebar allocated handle: 0x%X\n", self->resourceHandle);
 }
 
-void SidebarResource_OnForgotten(SidebarResource *self, CelsSession *s) {
+static void SidebarResource_OnForgotten(SidebarResource *self, CelsSession *s) {
     (void)s;
-    printf("  [RememberObserver] Sidebar released handle: 0x%X\n", self->resourceHandle);
     self->resourceHandle = 0;
 }
 
@@ -137,10 +140,10 @@ void SidebarResource_OnForgotten(SidebarResource *self, CelsSession *s) {
 /* Declarative Root Function                                                 */
 /* ========================================================================= */
 
-void RootApp(CelsSession *s) {
-    AppState state = cel_watch(s, &g_appState);
-
+static void RootApp(CelsSession *s) {
     CEL_Composition(s, CEL_KEY("RootWindow")) {
+        AppState state = cel_watch(s, &g_appState);
+
         CEL_Composable(s, CEL_KEY("HeaderBar")) {
             CEL_Composable(s, CEL_KEY("TitleLabel")) {
                 cel_remember(s, int, 42);
@@ -173,11 +176,8 @@ void RootApp(CelsSession *s) {
     } CEL_Close(s);
 }
 
-/* ========================================================================= */
-/* Main                                                                      */
-/* ========================================================================= */
-
-int main(void) {
+static void InitKeyRegistry(void) {
+    g_registryCount = 0;
     REGISTER_KEY("RootWindow");
     REGISTER_KEY("HeaderBar");
     REGISTER_KEY("TitleLabel");
@@ -188,38 +188,144 @@ int main(void) {
     REGISTER_KEY("ProfileWidget");
     REGISTER_KEY("SubMenu");
     REGISTER_KEY("SettingsItem");
+}
 
+static void ResetTreeState(void) {
+    g_appState.showOptionalSidebar = true;
+    g_appState.showSubMenu = true;
+    InitKeyRegistry();
+}
+
+/* ========================================================================= */
+/* Test Cases                                                                */
+/* ========================================================================= */
+
+static void TestTreeInitialMount(void) {
+    ResetTreeState();
     CelsSession session;
     CelsSessionInit(&session, &(CelsSessionConfig){
         .root = RootApp
     });
 
-    printf("PASS 1: Initial Mount (All branches active)\n");
-    CelsSessionRecompose(&session);
-    CelsDumpTree(&session);
+    CelsResult res = CelsSessionRecompose(&session);
+    assert(res == CELS_OK);
+    uint32_t active = GetActiveCount(&session);
+    assert(active == 10);
 
-    printf("PASS 2: Toggling showSubMenu = false via cel_mutate (3-arg direct mutation)\n");
+    CelsSessionDestroy(&session);
+}
+
+static void TestTreeToggleSubMenu(void) {
+    ResetTreeState();
+    CelsSession session;
+    CelsSessionInit(&session, &(CelsSessionConfig){
+        .root = RootApp
+    });
+
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(GetActiveCount(&session) == 10);
+
     cel_mutate(&session, &g_appState) {
         this->showSubMenu = false;
     }
-    CelsSessionRecompose(&session);
-    CelsDumpTree(&session);
+    assert(CelsSessionRecompose(&session) == CELS_OK);
 
-    printf("PASS 3: Toggling showOptionalSidebar = false via cel_mutate (4-arg alias)\n");
+    CelsSessionDestroy(&session);
+}
+
+static void TestTreeToggleOptionalSidebar(void) {
+    ResetTreeState();
+    CelsSession session;
+    CelsSessionInit(&session, &(CelsSessionConfig){
+        .root = RootApp
+    });
+
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(GetActiveCount(&session) == 10);
+
     cel_mutate(&session, &g_appState) {
         this->showOptionalSidebar = false;
     }
-    CelsSessionRecompose(&session);
-    CelsDumpTree(&session);
+    assert(CelsSessionRecompose(&session) == CELS_OK);
 
-    printf("PASS 4: Re-enabling showOptionalSidebar = true\n");
+    CelsSessionDestroy(&session);
+}
+
+static void TestTreeReenableOptionalSidebar(void) {
+    ResetTreeState();
+    CelsSession session;
+    CelsSessionInit(&session, &(CelsSessionConfig){
+        .root = RootApp
+    });
+
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+
+    cel_mutate(&session, &g_appState) {
+        this->showOptionalSidebar = false;
+    }
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+
     cel_mutate(&session, &g_appState) {
         this->showOptionalSidebar = true;
         this->showSubMenu = false;
     }
-    CelsSessionRecompose(&session);
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+
+    CelsSessionDestroy(&session);
+}
+
+static void TestTreeFullPassSequence(void) {
+    ResetTreeState();
+    CelsSession session;
+    CelsSessionInit(&session, &(CelsSessionConfig){
+        .root = RootApp
+    });
+
+    /* PASS 1: Initial Mount */
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(GetActiveCount(&session) == 10);
+    CelsDumpTree(&session);
+
+    /* PASS 2: Toggling showSubMenu = false */
+    cel_mutate(&session, &g_appState) {
+        this->showSubMenu = false;
+    }
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    CelsDumpTree(&session);
+
+    /* PASS 3: Toggling showOptionalSidebar = false */
+    cel_mutate(&session, &g_appState) {
+        this->showOptionalSidebar = false;
+    }
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    CelsDumpTree(&session);
+
+    /* PASS 4: Re-enabling showOptionalSidebar = true */
+    cel_mutate(&session, &g_appState) {
+        this->showOptionalSidebar = true;
+        this->showSubMenu = false;
+    }
+    assert(CelsSessionRecompose(&session) == CELS_OK);
     CelsDumpTree(&session);
 
     CelsSessionDestroy(&session);
-    return 0;
+}
+
+static const TestCase s_treeTests[] = {
+    { "TestTreeInitialMount", "Initial mount with complete hierarchy", TestTreeInitialMount },
+    { "TestTreeToggleSubMenu", "Conditional child branch toggle (showSubMenu)", TestTreeToggleSubMenu },
+    { "TestTreeToggleOptionalSidebar", "Conditional branch despawn and observer release", TestTreeToggleOptionalSidebar },
+    { "TestTreeReenableOptionalSidebar", "Re-attaching previously pruned conditional branch", TestTreeReenableOptionalSidebar },
+    { "TestTreeFullPassSequence", "Complete multi-pass hierarchy manipulation sequence", TestTreeFullPassSequence }
+};
+
+static const TestSuite s_treeSuite = {
+    .name = "tree",
+    .description = "Composable tree hierarchy, conditional branching and pruning",
+    .tests = s_treeTests,
+    .testCount = sizeof(s_treeTests) / sizeof(s_treeTests[0])
+};
+
+const TestSuite *GetTreeTestSuite(void) {
+    return &s_treeSuite;
 }

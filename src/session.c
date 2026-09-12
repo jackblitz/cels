@@ -1,7 +1,12 @@
 #include "cels/session.h"
 
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32) || defined(_MSC_VER)
+#include <malloc.h>
+#endif
 
 #include "cels/slot_table.h"
 #include "cels/state.h"
@@ -17,6 +22,35 @@
         #define CELS_THREAD_LOCAL
     #endif
 #endif
+
+static void *
+CelsAllocAlignedSlab(size_t size)
+{
+#if defined(_WIN32) || defined(_MSC_VER)
+    return _aligned_malloc(size, CELS_CACHE_LINE_SIZE);
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+    return aligned_alloc(CELS_CACHE_LINE_SIZE, (size + CELS_CACHE_LINE_SIZE - 1u) & ~(CELS_CACHE_LINE_SIZE - 1u));
+#else
+    void *ptr = NULL;
+    if (posix_memalign(&ptr, CELS_CACHE_LINE_SIZE, size) != 0) {
+        return NULL;
+    }
+    return ptr;
+#endif
+}
+
+static void
+CelsFreeAlignedSlab(void *ptr)
+{
+    if (ptr == NULL) {
+        return;
+    }
+#if defined(_WIN32) || defined(_MSC_VER)
+    _aligned_free(ptr);
+#else
+    free(ptr);
+#endif
+}
 
 static CELS_THREAD_LOCAL CelsSession *s_currentSession = NULL;
 
@@ -136,15 +170,59 @@ CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
     assert(s != NULL);
     memset(s, 0, sizeof(*s));
 
-    s->root = config ? config->root : NULL;
-    s->hasComposedOnce = false;
+    size_t slabSize = (config && config->slabSize > 0)
+        ? config->slabSize
+        : (size_t)CELS_DEFAULT_SLAB_SIZE;
+
+    /* Align slabSize up to cache line boundary */
+    slabSize = (slabSize + CELS_CACHE_LINE_SIZE - 1u) & ~(CELS_CACHE_LINE_SIZE - 1u);
+
+    if (config && config->slab != NULL) {
+        assert(((uintptr_t)config->slab % CELS_CACHE_LINE_SIZE) == 0 && "User slab must be 64-byte cache line aligned");
+        s->slab = config->slab;
+        s->ownsSlab = false;
+    } else {
+        s->slab = CelsAllocAlignedSlab(slabSize);
+        assert(s->slab != NULL && "Failed to allocate cache-aligned slab memory");
+        s->ownsSlab = true;
+    }
+
+    s->slabSize = slabSize;
+    memset(s->slab, 0, slabSize);
+
+    /* Determine group and slot capacities */
+    if (config && config->maxGroups > 0) {
+        s->maxGroups = config->maxGroups;
+    } else {
+        s->maxGroups = (uint32_t)(slabSize / 128u);
+    }
+    s->maxGroups = s->maxGroups & ~3u;
+    if (s->maxGroups < 16u) {
+        s->maxGroups = 16u;
+    }
+
+    s->maxSlots = s->maxGroups;
+
+    const size_t groupBytes = s->maxGroups * sizeof(CelsSlotGroup);
+    const size_t slotBytes = s->maxSlots * sizeof(CelsSlotAllocation);
+    assert(slabSize > groupBytes + slotBytes && "Slab size too small for requested group and slot capacities");
+
+    s->dataArenaSize = slabSize - groupBytes - slotBytes;
+
+    /* Carve partitions from contiguous 64-byte aligned slab */
+    s->groups = (CelsSlotGroup *)s->slab;
+    s->slots = (CelsSlotAllocation *)((uint8_t *)s->slab + groupBytes);
+    s->dataArena = (uint8_t *)s->slab + groupBytes + slotBytes;
 
     s->groupsGapStart = 0;
-    s->groupsGapEnd = CELS_MAX_GROUPS;
+    s->groupsGapEnd = s->maxGroups;
 
     s->dataGapStart = 0;
-    s->dataGapEnd = CELS_DATA_ARENA_SIZE;
+    s->dataGapEnd = (uint32_t)s->dataArenaSize;
     s->nextGroupId = 1;
+
+    s->root = config ? config->root : NULL;
+    s->hasComposedOnce = false;
 
     s->maxDrainIterations = (config && config->maxDrainIterations > 0)
         ? config->maxDrainIterations
@@ -170,11 +248,16 @@ CelsSessionDestroy(CelsSession *s)
     CelsSession *const prev = s_currentSession;
     s_currentSession = s;
 
-    if (CelsGetLogicalGroupCount(s) > 0) {
+    if (s->maxGroups > 0 && CelsGetLogicalGroupCount(s) > 0) {
         CelsPruneSubtree(s, 0);
     }
 
     s_currentSession = (prev == s) ? NULL : prev;
+
+    if (s->ownsSlab && s->slab != NULL) {
+        CelsFreeAlignedSlab(s->slab);
+    }
+
     memset(s, 0, sizeof(*s));
 }
 
@@ -198,7 +281,13 @@ CelsSessionAttachComposition(CelsSession *s,
         }
     }
 
-    assert(s->attachedCount < CELS_MAX_ATTACHED_COMPOSITIONS && "Exceeded CELS_MAX_ATTACHED_COMPOSITIONS");
+    if (s->attachedCount >= CELS_MAX_ATTACHED_COMPOSITIONS) {
+        fprintf(stderr,
+                "[CELS ERROR] Out of session memory: Exceeded CELS_MAX_ATTACHED_COMPOSITIONS (%u).\n",
+                CELS_MAX_ATTACHED_COMPOSITIONS);
+        assert(s->attachedCount < CELS_MAX_ATTACHED_COMPOSITIONS && "Exceeded CELS_MAX_ATTACHED_COMPOSITIONS");
+        return;
+    }
     s->attachedCompositions[s->attachedCount++] = (CelsAttachedComposition){
         .key = key,
         .body = body,
@@ -357,10 +446,23 @@ CelsEnterComposition(CelsSession *s, uint64_t rootKey)
 {
     assert(s->currentDepth == 0 && "CEL_Composition cannot be nested");
     s_currentSession = s;
-    const uint32_t depth = s->currentDepth++;
-    s->activeStack[depth] = 1;
+
+    if (s->slab == NULL || s->maxGroups == 0) {
+        fprintf(stderr, "[CELS ERROR] Out of session memory: Session slab is not initialized.\n");
+        return false;
+    }
 
     const uint32_t totalGroups = CelsGetLogicalGroupCount(s);
+    if (totalGroups >= s->maxGroups) {
+        fprintf(stderr,
+                "[CELS ERROR] Out of session memory: Group capacity (%u) reached in %zu-byte slab when mounting root composition (key: 0x%016llX).\n"
+                "             Consider increasing slabSize (e.g. CELS_SLAB_48K or CELS_SLAB_64K).\n",
+                s->maxGroups, s->slabSize, (unsigned long long)rootKey);
+        return false;
+    }
+
+    const uint32_t depth = s->currentDepth++;
+    s->activeStack[depth] = 1;
 
     if (totalGroups == 0) {
         MoveGroupGap(s, 0);
@@ -397,7 +499,13 @@ bool
 CelsEnterComposable(CelsSession *s, uint64_t key)
 {
     assert(s->currentDepth > 0 && "CEL_Composable must be nested within CEL_Composition");
-    assert(s->currentDepth < CELS_MAX_DEPTH && "Exceeded CELS_MAX_DEPTH");
+    if (s->currentDepth >= CELS_MAX_DEPTH) {
+        fprintf(stderr,
+                "[CELS ERROR] Out of session memory: Exceeded maximum composition nesting depth (%u / %u).\n",
+                s->currentDepth, CELS_MAX_DEPTH);
+        assert(s->currentDepth < CELS_MAX_DEPTH && "Exceeded CELS_MAX_DEPTH");
+        return false;
+    }
 
     const uint32_t depth = s->currentDepth++;
     s->slotOffsetStack[depth - 1] = s->currentSlotOffset;
@@ -426,13 +534,20 @@ CelsEnterComposable(CelsSession *s, uint64_t key)
 
     if (matchIdx != UINT32_MAX && matchIdx != cursor) {
         const uint32_t movedCount = 1u + (uint32_t)CelsGetGroup(s, matchIdx)->groupSize;
-        CelsSlotGroup moved[CELS_MAX_GROUPS];
+        CelsSlotGroup stackMoved[64];
+        CelsSlotGroup *moved = (movedCount <= 64)
+            ? stackMoved
+            : (CelsSlotGroup *)malloc(movedCount * sizeof(CelsSlotGroup));
+        assert(moved != NULL);
         MoveGroupGap(s, totalGroups);
         memcpy(moved, &s->groups[matchIdx], movedCount * sizeof(moved[0]));
         memmove(&s->groups[cursor + movedCount],
                 &s->groups[cursor],
                 (matchIdx - cursor) * sizeof(moved[0]));
         memcpy(&s->groups[cursor], moved, movedCount * sizeof(moved[0]));
+        if (moved != stackMoved) {
+            free(moved);
+        }
 
         for (uint32_t i = 1; i < totalGroups; ++i) {
             const uint32_t parent = s->groups[i].parentIndex;
@@ -464,7 +579,15 @@ CelsEnterComposable(CelsSession *s, uint64_t key)
         return true;
     }
 
-    assert(totalGroups < CELS_MAX_GROUPS && "CELS_ERROR_GROUP_OVERFLOW");
+    if (totalGroups >= s->maxGroups) {
+        fprintf(stderr,
+                "[CELS ERROR] Out of session memory: Cannot allocate composable group (key: 0x%016llX).\n"
+                "             Active groups: %u / %u (slab budget: %zu B).\n"
+                "             Consider increasing slabSize (e.g. CELS_SLAB_48K or CELS_SLAB_64K).\n",
+                (unsigned long long)key, totalGroups, s->maxGroups, s->slabSize);
+        assert(totalGroups < s->maxGroups && "CELS_ERROR_GROUP_OVERFLOW");
+        return false;
+    }
     assert(s->nextGroupId != 0 && "CELS group identity overflow");
     MoveGroupGap(s, cursor);
 
@@ -549,7 +672,14 @@ CelsResolveSlot(CelsSession *s,
     assert(alignedSize > 0 && alignedSize <= UINT16_MAX);
 
     if (group->flags & CELS_FLAG_FRESH_MOUNT) {
-        assert(s->slotCount < CELS_MAX_SLOTS && "CELS_ERROR_SLOT_ARENA_OVERFLOW");
+        if (s->slotCount >= s->maxSlots) {
+            fprintf(stderr,
+                    "[CELS ERROR] Out of session memory: Slot allocation limit reached (%u / %u slots in %zu-byte slab).\n"
+                    "             Consider increasing slabSize (e.g. CELS_SLAB_48K or CELS_SLAB_64K).\n",
+                    s->slotCount, s->maxSlots, s->slabSize);
+            assert(s->slotCount < s->maxSlots && "CELS_ERROR_SLOT_ARENA_OVERFLOW");
+            return NULL;
+        }
         uint32_t offset = 0;
         uint32_t insertion = 0;
 
@@ -562,8 +692,15 @@ CelsResolveSlot(CelsSession *s,
             ++insertion;
         }
 
-        assert(offset + alignedSize <= CELS_DATA_ARENA_SIZE
-               && "CELS_ERROR_SLOT_ARENA_OVERFLOW");
+        if (offset + alignedSize > s->dataArenaSize) {
+            fprintf(stderr,
+                    "[CELS ERROR] Out of session memory: Slot data arena overflow (requested: %zu B, used: %u B, arena capacity: %zu B in %zu-byte slab).\n"
+                    "             Consider increasing slabSize (e.g. CELS_SLAB_48K or CELS_SLAB_64K).\n",
+                    alignedSize, s->dataGapStart, s->dataArenaSize, s->slabSize);
+            assert(offset + alignedSize <= s->dataArenaSize
+                   && "CELS_ERROR_SLOT_ARENA_OVERFLOW");
+            return NULL;
+        }
 
         memmove(&s->slots[insertion + 1],
                 &s->slots[insertion],
@@ -591,8 +728,14 @@ CelsResolveSlot(CelsSession *s,
         }
 
         if (desc != NULL) {
-            assert(s->cleanupCount < CELS_MAX_CLEANUPS
-                   && "CELS_ERROR_CLEANUP_OVERFLOW");
+            if (s->cleanupCount >= CELS_MAX_CLEANUPS) {
+                fprintf(stderr,
+                        "[CELS ERROR] Out of session memory: Cleanup hook capacity exceeded (%u / %u).\n",
+                        s->cleanupCount, CELS_MAX_CLEANUPS);
+                assert(s->cleanupCount < CELS_MAX_CLEANUPS
+                       && "CELS_ERROR_CLEANUP_OVERFLOW");
+                return NULL;
+            }
             s->cleanups[s->cleanupCount++] = (CelsCleanupHook){
                 .groupKey = group->key,
                 .groupId = (uint32_t)group->userData,

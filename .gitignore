@@ -6,3 +6,7 @@
 /cmake-build-debug/
 
 /.internaldocs/
+
+# Private Docs
+/docs/
+docs/

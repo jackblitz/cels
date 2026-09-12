@@ -1,9 +1,12 @@
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
-#define CELS_IMPLEMENTATION
 #include "cels.h"
+#include "cli/test_cli.h"
+
+#include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 static int childState;
 static int childRuns;
@@ -22,6 +25,10 @@ static void KeyRoot(CelsSession *s) {
 }
 
 static void TestHighKeys(void) {
+    childState = 0;
+    childRuns = 0;
+    siblingRuns = 0;
+
     CelsSession s;
     CelsSessionInit(&s, &(CelsSessionConfig){ .root = KeyRoot });
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -91,6 +98,16 @@ static void EditRoot(CelsSession *s) {
 }
 
 static void TestEditsPreserveResources(void) {
+    layout = 0;
+    creates = 0;
+    destroys = 0;
+    memset(destroyedIds, 0, sizeof(destroyedIds));
+    memset(resources, 0, sizeof(resources));
+    memset(values, 0, sizeof(values));
+    beforeChildren = NULL;
+    afterChildren = NULL;
+    memset(nodeRuns, 0, sizeof(nodeRuns));
+
     CelsSession s;
     CelsSessionInit(&s, &(CelsSessionConfig){ .root = EditRoot });
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -132,6 +149,11 @@ static void TeardownRoot(CelsSession *s) {
 }
 
 static void TestChildBeforeParent(void) {
+    showParent = true;
+    creates = 0;
+    destroys = 0;
+    memset(destroyedIds, 0, sizeof(destroyedIds));
+
     CelsSession s;
     CelsSessionInit(&s, &(CelsSessionConfig){ .root = TeardownRoot });
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -179,6 +201,15 @@ static void NestedRoot(CelsSession *s) {
 }
 
 static void TestNestedEditsKeepSubscriptions(void) {
+    nestedLayout = 0;
+    creates = 0;
+    destroys = 0;
+    memset(parentRuns, 0, sizeof(parentRuns));
+    memset(parentResources, 0, sizeof(parentResources));
+    memset(nodeRuns, 0, sizeof(nodeRuns));
+    memset(resources, 0, sizeof(resources));
+    memset(values, 0, sizeof(values));
+
     CelsSession s;
     CelsSessionInit(&s, &(CelsSessionConfig){ .root = NestedRoot });
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -200,11 +231,20 @@ static void TestNestedEditsKeepSubscriptions(void) {
     assert(destroys == creates);
 }
 
-int main(void) {
-    TestHighKeys();
-    TestEditsPreserveResources();
-    TestChildBeforeParent();
-    TestNestedEditsKeepSubscriptions();
-    puts("State and lifetime regression tests passed.");
-    return 0;
+static const TestCase s_stateLifetimeTests[] = {
+    { "TestHighKeys", "64-bit key dispatch and mutation tracking", TestHighKeys },
+    { "TestEditsPreserveResources", "Tree edits and reordering preserve resource identity", TestEditsPreserveResources },
+    { "TestChildBeforeParent", "Teardown order: child resources destroyed before parent", TestChildBeforeParent },
+    { "TestNestedEditsKeepSubscriptions", "Nested tree edits maintain reactive subscriptions", TestNestedEditsKeepSubscriptions }
+};
+
+static const TestSuite s_stateLifetimeSuite = {
+    .name = "state_lifetime",
+    .description = "Reactive state lifetime, resource observer hooks, and edit stability",
+    .tests = s_stateLifetimeTests,
+    .testCount = sizeof(s_stateLifetimeTests) / sizeof(s_stateLifetimeTests[0])
+};
+
+const TestSuite *GetStateLifetimeTestSuite(void) {
+    return &s_stateLifetimeSuite;
 }

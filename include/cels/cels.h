@@ -4,8 +4,8 @@
  * @file cels.h
  * @brief Public API and Declarative DSL Macros for the CELS Composition Engine.
  *
- * CELS (Composition Entity Lifecycle State) is a high-performance, cache-aligned
- * declarative composition engine for C99, implementing the Jetpack Compose
+ * CELS (Composition, Evaluation, Lifecycle, State) is a high-performance, cache-aligned
+ * declarative composition engine for C99, implementing a hierarchical
  * slot table and lifecycle observer model.
  *
  * Typical usage:
@@ -13,20 +13,20 @@
  *     CEL_State(WindowState) {
  *         bool isOpen;
  *         int width;
+ *         int height;
  *     };
  *
- *     static WindowState g_window = { .isOpen = true, .width = 800 };
- *
- *     CEL_Composeable(MyComponent, key) {
- *         int *clickCount = cel_remember(int, 0);
- *         int count = cel_watch(clickCount);
+ *     CEL_Composable(MyComponent, WindowState*, win) {
+ *         int *renderCount = cel_remember(int, 0);
+ *         (*renderCount)++;
+ *         WindowState state = cel_watch(win);
  *         // render widget...
  *     }
  *
- *     void RootApp(CelsSession *s) {
- *         CEL_Composition(s, CEL_KEY("RootWindow")) {
- *             MyComponent(CEL_KEY("MyComp"));
- *         } CEL_Close(s);
+ *     CEL_Composition(RootWindow, key) {
+ *         WindowState init = { .isOpen = true, .width = 800, .height = 600 };
+ *         WindowState *win = cel_lifecycle_state(init, OnCreated, OnDestroyed);
+ *         MyComponent(win);
  *     }
  * @endcode
  */
@@ -78,12 +78,14 @@ extern "C" {
 /* State Definitions                                                         */
 /* ========================================================================= */
 
+#ifndef CEL_State
 #define CEL_State(TypeName) \
     typedef struct TypeName TypeName; \
     struct TypeName
 
 #define CEL_LifecycleState(TypeName) CEL_State(TypeName)
 #define CEL_Observer(TypeName)       CEL_State(TypeName)
+#endif
 
 /* ========================================================================= */
 /* Top-Level Lifecycle Definitions                                           */
@@ -315,7 +317,18 @@ extern "C" {
         .onCreate  = (void(*)(void*, CelsSession*))(on_c), \
         .onDestroy = (void(*)(void*, CelsSession*))(on_d) \
     }))
-#define cel_observer(...) cel_lifecycle_state(__VA_ARGS__)
+#define _CEL_OBSERVER_4(session, Type, on_c, on_d) \
+    ((Type*)CelsResolveSlot((session), sizeof(Type), NULL, &(CelsLifecycleDesc){ \
+        .size      = sizeof(Type), \
+        .onCreate  = (void(*)(void*, CelsSession*))(on_c), \
+        .onDestroy = (void(*)(void*, CelsSession*))(on_d) \
+    }))
+
+#define _CEL_OBSERVER_3(Type, on_c, on_d) \
+    _CEL_OBSERVER_4(CelsGetCurrentSession(), Type, on_c, on_d)
+
+#define cel_observer(...) \
+    _CEL_GET_MACRO_4(__VA_ARGS__, _CEL_OBSERVER_4, _CEL_OBSERVER_3)(__VA_ARGS__)
 
 #define _CEL_GET_STATE_3(session, key, Type) \
     ((Type*)CelsGetState((session), (key)))

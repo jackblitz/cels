@@ -29,9 +29,22 @@
 
 #include "cels/slot_table.h"
 
-#define CELS_MAX_STATES 64u
+#define CELS_MAX_STATES 256u
 #define CELS_MAX_WATCHERS 8u
-#define CELS_MAX_QUEUE 64u
+#define CELS_MAX_QUEUE 256u
+
+/* ========================================================================= */
+/* State Definitions                                                         */
+/* ========================================================================= */
+
+#ifndef CEL_State
+#define CEL_State(TypeName) \
+    typedef struct TypeName TypeName; \
+    struct TypeName
+
+#define CEL_LifecycleState(TypeName) CEL_State(TypeName)
+#define CEL_Observer(TypeName)       CEL_State(TypeName)
+#endif
 
 /**
  * Forward declaration of owning session.

@@ -73,7 +73,7 @@ CEL_Composition(CEL_Window, key) {
         .height = 600
     };
 
-    // 2. Type is deduced directly from 'init' (no "WindowState" type parameter!):
+    // 2. Type is deduced directly from 'init'
     WindowState *win = cel_lifecycle_state(init, Window_OnCreated, Window_OnDestroyed);
 
     // 3. Pass the state through the composition tree to child composables:
@@ -97,6 +97,8 @@ CEL_LifeCycle(WindowLifeCycle, WindowState) {
 /* ========================================================================= */
 
 int main(void) {
+    // Initialize session: defaults to 32 KiB L1 data cache slab (CELS_SLAB_32K)
+    // Developers can also configure .slabSize = CELS_SLAB_48K or custom sizes
     CelsSession session;
     CelsSessionInit(&session, NULL);
 

@@ -39,13 +39,35 @@
     (((size) + (CELS_SLOT_ALIGNMENT - 1u)) & ~(CELS_SLOT_ALIGNMENT - 1u))
 
 #ifndef CELS_MAX_SLOTS
-#define CELS_MAX_SLOTS (CELS_DATA_ARENA_SIZE / CELS_SLOT_ALIGNMENT)
+#define CELS_MAX_SLOTS 256u
 #endif
 
 #define CELS_FLAG_NONE 0u
 #define CELS_FLAG_INVALIDATED (1u << 0)
 #define CELS_FLAG_CONTAINS_INVALIDATED (1u << 1)
 #define CELS_FLAG_FRESH_MOUNT (1u << 2)
+
+/**
+ * L1 Cache-aligned memory slab profiles for CelsSession.
+ * Fitting the session slab entirely in L1d cache eliminates CPU cache-miss stalls.
+ */
+typedef enum CelsSlabProfile {
+    CELS_SLAB_16K = 16u * 1024u, /**< 16 KiB: Embedded & low-power cores */
+    CELS_SLAB_32K = 32u * 1024u, /**< 32 KiB: Standard L1d (Zen 1-3, Intel E-cores, ARM) [DEFAULT] */
+    CELS_SLAB_48K = 48u * 1024u, /**< 48 KiB: Modern high-perf L1d (Intel P-cores, Zen 4/5) */
+    CELS_SLAB_64K = 64u * 1024u, /**< 64 KiB: Extended L1d (Apple Silicon, complex trees) */
+} CelsSlabProfile;
+
+#define CELS_DEFAULT_SLAB_SIZE CELS_SLAB_32K
+
+/**
+ * Macro helper to declare a 64-byte aligned slab buffer for zero-alloc mode.
+ */
+#if defined(_MSC_VER)
+#define CEL_SLAB(name, size) __declspec(align(64)) uint8_t name[size]
+#else
+#define CEL_SLAB(name, size) __attribute__((aligned(64))) uint8_t name[size]
+#endif
 
 typedef void (*CelsRootFn)(CelsSession *session);
 
@@ -54,7 +76,10 @@ typedef void (*CelsRootFn)(CelsSession *session);
  */
 typedef struct CelsSessionConfig {
     CelsRootFn root;
-    uint32_t maxDrainIterations;
+    uint32_t   maxDrainIterations;
+    size_t     slabSize;    /**< Total slab size in bytes (e.g. CELS_SLAB_32K). Defaults to 32 KiB if 0. */
+    void      *slab;        /**< Optional user-provided 64-byte aligned buffer (zero-alloc mode). */
+    uint32_t   maxGroups;   /**< Optional max groups. If 0, auto-calculated from slabSize. */
 } CelsSessionConfig;
 
 /**
@@ -122,24 +147,31 @@ struct CelsSession {
     uint32_t oldGroupSizeStack[CELS_MAX_DEPTH];
     uint32_t slotOffsetStack[CELS_MAX_DEPTH];
 
-    /* Structural groups gap buffer */
-    CelsSlotGroup groups[CELS_MAX_GROUPS];
+    /* Slab storage */
+    void *slab;
+    size_t slabSize;
+    bool ownsSlab;
+
+    /* Structural groups gap buffer (carved from slab) */
+    CelsSlotGroup *groups;
+    uint32_t maxGroups;
     uint32_t groupsGapStart;
     uint32_t groupsGapEnd;
 
-    /* Nonmoving slot arena: remembered pointers stay pinned */
-    uint8_t dataArena[CELS_DATA_ARENA_SIZE];
-    uint32_t dataGapStart;
-    uint32_t dataGapEnd;
-    CelsSlotAllocation slots[CELS_MAX_SLOTS];
+    /* Slot allocation table (carved from slab) */
+    CelsSlotAllocation *slots;
+    uint32_t maxSlots;
     uint32_t slotCount;
     uint32_t nextGroupId;
 
+    /* Nonmoving slot arena (carved from slab): remembered pointers stay pinned */
+    uint8_t *dataArena;
+    size_t dataArenaSize;
+    uint32_t dataGapStart;
+    uint32_t dataGapEnd;
+
     /* Reactive state registry */
     CelsStateRegistry stateRegistry;
-
-#define states stateRegistry.cells
-#define stateCount stateRegistry.cellCount
 
     /* Lifecycle state cleanups */
     CelsCleanupHook cleanups[CELS_MAX_CLEANUPS];
@@ -253,7 +285,7 @@ void *CelsFindObserver(CelsSession *session, uint64_t key);
 static inline uint32_t
 CelsGetLogicalGroupCount(const CelsSession *s)
 {
-    return CELS_MAX_GROUPS - (s->groupsGapEnd - s->groupsGapStart);
+    return s->maxGroups - (s->groupsGapEnd - s->groupsGapStart);
 }
 
 static inline uint32_t

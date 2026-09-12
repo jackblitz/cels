@@ -1,6 +1,7 @@
 #include "cels/state.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "cels/session.h"
@@ -20,17 +21,23 @@ GetOrCreateStateHeader(CelsSession *session, const void *statePtr)
     CELS_ASSERT(session != NULL);
     CELS_ASSERT(statePtr != NULL);
 
-    for (uint32_t i = 0; i < session->stateCount; ++i) {
-        if (session->states[i].ptr == statePtr) {
-            return &session->states[i].header;
+    for (uint32_t i = 0; i < session->stateRegistry.cellCount; ++i) {
+        if (session->stateRegistry.cells[i].ptr == statePtr) {
+            return &session->stateRegistry.cells[i].header;
         }
     }
 
-    CELS_ASSERT(session->stateCount < CELS_MAX_STATES);
-    const uint32_t idx = session->stateCount++;
-    session->states[idx].ptr = statePtr;
-    session->states[idx].header.watcherCount = 0;
-    return &session->states[idx].header;
+    if (session->stateRegistry.cellCount >= CELS_MAX_STATES) {
+        fprintf(stderr,
+                "[CELS ERROR] Out of session memory: Reactive state registry capacity exceeded (%u / %u states).\n",
+                session->stateRegistry.cellCount, CELS_MAX_STATES);
+        CELS_ASSERT(session->stateRegistry.cellCount < CELS_MAX_STATES);
+        return NULL;
+    }
+    const uint32_t idx = session->stateRegistry.cellCount++;
+    session->stateRegistry.cells[idx].ptr = statePtr;
+    session->stateRegistry.cells[idx].header.watcherCount = 0;
+    return &session->stateRegistry.cells[idx].header;
 }
 
 void
@@ -94,9 +101,9 @@ CelsStateCommitMutation(CelsSession *session,
     }
 
     CelsStateHeader *header = NULL;
-    for (uint32_t i = 0; i < session->stateCount; ++i) {
-        if (session->states[i].ptr == statePtr) {
-            header = &session->states[i].header;
+    for (uint32_t i = 0; i < session->stateRegistry.cellCount; ++i) {
+        if (session->stateRegistry.cells[i].ptr == statePtr) {
+            header = &session->stateRegistry.cells[i].header;
             break;
         }
     }
@@ -109,6 +116,11 @@ CelsStateCommitMutation(CelsSession *session,
         if (session->queueCount < CELS_MAX_QUEUE) {
             session->invalidationQueue[session->queueCount++] =
                 header->watcherKeys[i];
+        } else {
+            fprintf(stderr,
+                    "[CELS ERROR] Out of session memory: Invalidation queue overflow (%u / %u keys).\n",
+                    session->queueCount, CELS_MAX_QUEUE);
+            break;
         }
     }
 }

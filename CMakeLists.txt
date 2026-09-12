@@ -30,36 +30,34 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # Core CELS library (C99 modular implementation)
-add_library(cels STATIC
+add_library(cels_core STATIC
     src/slot_table.c
     src/session.c
     src/state.c
 )
-target_include_directories(cels PUBLIC
+target_include_directories(cels_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 # Main Executable
-add_executable(cels_app main.c)
-target_link_libraries(cels_app PRIVATE cels)
-set_target_properties(cels_app PROPERTIES OUTPUT_NAME cels)
+add_executable(CELS main.c)
+target_link_libraries(CELS PRIVATE cels_core)
 
-# Test Suite
+# Test Suite: Single unified executable test_suite.exe
 enable_testing()
 
-add_executable(test_slot_table test/test_slot_table.c)
-target_link_libraries(test_slot_table PRIVATE cels)
-add_test(NAME test_slot_table COMMAND test_slot_table)
+set(TEST_COMMON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/test)
 
-add_executable(TreeTest test/TreeTest.c)
-target_link_libraries(TreeTest PRIVATE cels)
-add_test(NAME TreeTest COMMAND TreeTest)
-
-add_executable(LifecycleTest test/LifecycleTest.c)
-target_link_libraries(LifecycleTest PRIVATE cels)
-add_test(NAME LifecycleTest COMMAND LifecycleTest)
-
-add_executable(StateLifetimeTest test/StateLifetimeTest.c)
-target_link_libraries(StateLifetimeTest PRIVATE cels)
-add_test(NAME StateLifetimeTest COMMAND StateLifetimeTest)
+add_executable(test_suite
+    test/cli/test_suite.c
+    test/slot_table/test_slot_table.c
+    test/slab/test_slab.c
+    test/lifecycle/test_lifecycle.c
+    test/state_lifetime/test_state_lifetime.c
+    test/tree/test_tree.c
+)
+target_include_directories(test_suite PRIVATE ${TEST_COMMON_DIR})
+target_link_libraries(test_suite PRIVATE cels_core)
+set_target_properties(test_suite PROPERTIES OUTPUT_NAME test_suite)
+add_test(NAME test_suite COMMAND test_suite)

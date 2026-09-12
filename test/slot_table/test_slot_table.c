@@ -1,4 +1,5 @@
 #include "cels/slot_table.h"
+#include "cli/test_cli.h"
 
 #include <assert.h>
 #include <inttypes.h>
@@ -25,8 +26,6 @@
 static void
 TestInitAndReset(void)
 {
-    printf("Running TestInitAndReset...\n");
-
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
 
@@ -53,15 +52,11 @@ TestInitAndReset(void)
     TEST_ASSERT(resetRes == CELS_OK);
     TEST_ASSERT(CelsSlotTableGroupCount(&table) == 0);
     TEST_ASSERT(CelsSlotTableSlotCount(&table) == 0);
-
-    printf("  PASSED: TestInitAndReset\n");
 }
 
 static void
 TestWriterAndReaderBasic(void)
 {
-    printf("Running TestWriterAndReaderBasic...\n");
-
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
     CelsResult res = CelsSlotTableInit(&table, slab, sizeof(slab), 16);
@@ -178,15 +173,11 @@ TestWriterAndReaderBasic(void)
 
     res = CelsSlotReaderClose(&reader);
     TEST_ASSERT(res == CELS_OK);
-
-    printf("  PASSED: TestWriterAndReaderBasic\n");
 }
 
 static void
 TestSubtreeSkipInO1(void)
 {
-    printf("Running TestSubtreeSkipInO1...\n");
-
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
     CelsResult res = CelsSlotTableInit(&table, slab, sizeof(slab), 16);
@@ -243,15 +234,11 @@ TestSubtreeSkipInO1(void)
     TEST_ASSERT(res == CELS_OK);
     res = CelsSlotReaderClose(&reader);
     TEST_ASSERT(res == CELS_OK);
-
-    printf("  PASSED: TestSubtreeSkipInO1\n");
 }
 
 static void
 TestGapMovementAndRecompositionWithoutCorruption(void)
 {
-    printf("Running TestGapMovementAndRecompositionWithoutCorruption...\n");
-
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
     CelsResult res = CelsSlotTableInit(&table, slab, sizeof(slab), 16);
@@ -320,15 +307,11 @@ TestGapMovementAndRecompositionWithoutCorruption(void)
 
     res = CelsSlotReaderClose(&reader);
     TEST_ASSERT(res == CELS_OK);
-
-    printf("  PASSED: TestGapMovementAndRecompositionWithoutCorruption\n");
 }
 
 static void
 TestWriterGroupSkipRecomposition(void)
 {
-    printf("Running TestWriterGroupSkipRecomposition...\n");
-
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
     CelsResult res = CelsSlotTableInit(&table, slab, sizeof(slab), 16);
@@ -363,15 +346,11 @@ TestWriterGroupSkipRecomposition(void)
     TEST_ASSERT(res == CELS_OK);
     res = CelsSlotWriterClose(&writer);
     TEST_ASSERT(res == CELS_OK);
-
-    printf("  PASSED: TestWriterGroupSkipRecomposition\n");
 }
 
 static void
 TestConcurrencyContract(void)
 {
-    printf("Running TestConcurrencyContract...\n");
-
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
     CelsResult res = CelsSlotTableInit(&table, slab, sizeof(slab), 16);
@@ -406,26 +385,24 @@ TestConcurrencyContract(void)
 
     res = CelsSlotWriterClose(&writer);
     TEST_ASSERT(res == CELS_OK);
-
-    printf("  PASSED: TestConcurrencyContract\n");
 }
 
-int
-main(void)
-{
-    printf("====================================================\n");
-    printf(" Starting Cels SlotTable Test Suite\n");
-    printf("====================================================\n");
+static const TestCase s_slotTableTests[] = {
+    { "TestInitAndReset", "Slot table initialization, validation and reset", TestInitAndReset },
+    { "TestWriterAndReaderBasic", "Slot writer and reader basic operations", TestWriterAndReaderBasic },
+    { "TestSubtreeSkipInO1", "Subtree skipping in O(1) time complexity", TestSubtreeSkipInO1 },
+    { "TestGapMovementAndRecompositionWithoutCorruption", "Gap movement and recomposition without corruption", TestGapMovementAndRecompositionWithoutCorruption },
+    { "TestWriterGroupSkipRecomposition", "Writer group skipping during recomposition", TestWriterGroupSkipRecomposition },
+    { "TestConcurrencyContract", "Concurrency contract between readers and writer", TestConcurrencyContract }
+};
 
-    TestInitAndReset();
-    TestWriterAndReaderBasic();
-    TestSubtreeSkipInO1();
-    TestGapMovementAndRecompositionWithoutCorruption();
-    TestWriterGroupSkipRecomposition();
-    TestConcurrencyContract();
+static const TestSuite s_slotTableSuite = {
+    .name = "slot_table",
+    .description = "Low-level slot table, gap buffer and writer/reader operations",
+    .tests = s_slotTableTests,
+    .testCount = sizeof(s_slotTableTests) / sizeof(s_slotTableTests[0])
+};
 
-    printf("====================================================\n");
-    printf(" All 6 test suites PASSED successfully!\n");
-    printf("====================================================\n");
-    return 0;
+const TestSuite *GetSlotTableTestSuite(void) {
+    return &s_slotTableSuite;
 }
