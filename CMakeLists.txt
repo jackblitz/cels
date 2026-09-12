@@ -45,3 +45,13 @@ target_include_directories(TreeTest PRIVATE
 )
 
 add_test(NAME TreeTest COMMAND TreeTest)
+
+add_executable(LifecycleTest
+    test/LifecycleTest.c
+    cels.h
+)
+target_include_directories(LifecycleTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(NAME LifecycleTest COMMAND LifecycleTest)

@@ -193,6 +193,29 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
 
 #define _CEL_ARG_2(_0, _1, _2, ...) _2
 #define _CEL_GET_MACRO_2(_1, _2, NAME, ...) NAME
+#define _CEL_GET_MACRO_COMP(_1, _2, _3, _4, NAME, ...) NAME
+
+/* ========================================================================= */
+/* Top-Level Lifecycle Definitions                                            */
+/* ========================================================================= */
+
+#define CEL_LifeCycle(Name, Type) \
+    static void _cels_impl_lifecycle_##Name(Type *it, bool *_cels_alive, int _cels_error_cel_destroy_only_valid_in_CEL_LifeCycle); \
+    static inline bool _cels_lifecycle_##Name(void *userData) { \
+        bool _cels_alive = true; \
+        _cels_impl_lifecycle_##Name((Type*)userData, &_cels_alive, 0); \
+        return _cels_alive; \
+    } \
+    static void _cels_impl_lifecycle_##Name(Type *it, bool *_cels_alive, int _cels_error_cel_destroy_only_valid_in_CEL_LifeCycle)
+
+#define CEL_Lifecycle(Name, Type) CEL_LifeCycle(Name, Type)
+
+#define cel_destroy() \
+    do { \
+        (void)_cels_error_cel_destroy_only_valid_in_CEL_LifeCycle; \
+        *_cels_alive = false; \
+        return; \
+    } while (0)
 
 /* ========================================================================= */
 /* Syntactically Locked Declarative DSL Macros                               */
@@ -206,7 +229,22 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
     do { \
         if (CelsEnterComposition((session), (rootKey)))
 
-#define CEL_Composition(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_COMPOSITION_2, _CEL_COMPOSITION_1)(__VA_ARGS__)
+#define _CEL_COMPOSITION_4(Type, key, var, Lifecycle) \
+    for (Type *it = (var), *_cels_outer = (Type*)0; \
+         !_cels_outer; \
+         _cels_outer = (Type*)1) \
+        for (uint32_t _cels_k = (key); _cels_k != 0; _cels_k = 0) \
+            for (int _cels_ent = CelsEnterComposition(CelsGetCurrentSession(), _cels_k), \
+                     _cels_alive = (_cels_ent ? _cels_lifecycle_##Lifecycle(it) : 0), \
+                     _cels_run = _cels_alive, \
+                     _cels_done = 0; \
+                 !_cels_done; \
+                 _cels_done = 1, (CelsExitGroup(CelsGetCurrentSession()), \
+                                  (!_cels_alive ? CelsPruneSubtreeByKey(CelsGetCurrentSession(), _cels_k) : (void)0))) \
+                for ( ; _cels_run; _cels_run = 0)
+
+#define CEL_Composition(...) \
+    _CEL_GET_MACRO_COMP(__VA_ARGS__, _CEL_COMPOSITION_4, _CEL_COMPOSITION_3_ERROR, _CEL_COMPOSITION_2, _CEL_COMPOSITION_1)(__VA_ARGS__)
 
 #define _CEL_IS_s_s ~, 1
 #define _CEL_IS_s_session ~, 1
@@ -410,6 +448,7 @@ bool        CelsEnterComposition(CelsSession *s, uint32_t rootKey);
 bool        CelsEnterComposable(CelsSession *s, uint32_t key);
 void        CelsExitGroup(CelsSession *s);
 void        CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex);
+void        CelsPruneSubtreeByKey(CelsSession *s, uint32_t key);
 
 void*       CelsResolveSlot(CelsSession *s, size_t size, const void *initVal, const CelsObserverDesc *desc);
 void        CelsStateRead(CelsSession *s, const void *statePtr);
@@ -561,6 +600,17 @@ void CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex) {
 
             if (curr == 0) break;
             curr = p->parentIndex;
+        }
+    }
+}
+
+void CelsPruneSubtreeByKey(CelsSession *s, uint32_t key) {
+    if (!s) return;
+    uint32_t totalGroups = CelsGetLogicalGroupCount(s);
+    for (uint32_t i = 0; i < totalGroups; ++i) {
+        if (CelsGetGroup(s, i)->key == key) {
+            CelsPruneSubtree(s, i);
+            return;
         }
     }
 }
