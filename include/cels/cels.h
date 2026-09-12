@@ -280,44 +280,42 @@ extern "C" {
 /* Lifecycle State (cel_lifecycle_state) & Observers                         */
 /* ========================================================================= */
 
-#define _cel_lifecycle_state_sess(session, Type, on_create, on_destroy) \
-    ((Type*)CelsResolveSlot((session), sizeof(Type), NULL, &(CelsLifecycleDesc){ \
-        .size      = sizeof(Type), \
-        .onCreate  = (void(*)(void*, CelsSession*))(on_create), \
-        .onDestroy = (void(*)(void*, CelsSession*))(on_destroy) \
+#define _cel_lifecycle_state_sess(session, init, on_create, on_destroy) \
+    (__extension__ ({ \
+        void (*const _cels_chk_c_)(__typeof__(init)*, CelsSession*) = (on_create); \
+        void (*const _cels_chk_d_)(__typeof__(init)*, CelsSession*) = (on_destroy); \
+        (void)_cels_chk_c_; (void)_cels_chk_d_; \
+        (__typeof__(init)*)CelsResolveSlot( \
+            (session), \
+            sizeof(__typeof__(init)), \
+            &(init), \
+            &(CelsLifecycleDesc){ \
+                .size      = sizeof(__typeof__(init)), \
+                .onCreate  = (void(*)(void*, CelsSession*))(on_create), \
+                .onDestroy = (void(*)(void*, CelsSession*))(on_destroy) \
+            }); \
     }))
 
-#define _cel_lifecycle_state_curr(Type, on_create, on_destroy) \
-    _cel_lifecycle_state_sess(CelsGetCurrentSession(), Type, on_create, on_destroy)
+#define _cel_lifecycle_state_curr(init, on_create, on_destroy) \
+    _cel_lifecycle_state_sess(CelsGetCurrentSession(), init, on_create, on_destroy)
 
-#define _cel_lifecycle_state_init_sess(session, Type, init_val, on_create, on_destroy) \
-    ((Type*)CelsResolveSlot((session), sizeof(Type), (const void*)(init_val), &(CelsLifecycleDesc){ \
-        .size      = sizeof(Type), \
-        .onCreate  = (void(*)(void*, CelsSession*))(on_create), \
-        .onDestroy = (void(*)(void*, CelsSession*))(on_destroy) \
-    }))
+#define _CEL_LIFECYCLE_STATE_4(session, init, on_c, on_d) \
+    _cel_lifecycle_state_sess(session, init, on_c, on_d)
 
-#define _cel_lifecycle_state_init_curr(Type, init_val, on_create, on_destroy) \
-    _cel_lifecycle_state_init_sess(CelsGetCurrentSession(), Type, init_val, on_create, on_destroy)
-
-#define _CEL_LIFECYCLE_STATE_4_DISPATCH_1(sess, Type, on_c, on_d) \
-    _cel_lifecycle_state_sess(sess, Type, on_c, on_d)
-
-#define _CEL_LIFECYCLE_STATE_4_DISPATCH_0(Type, init_val, on_c, on_d) \
-    _cel_lifecycle_state_init_curr(Type, init_val, on_c, on_d)
-
-#define _CEL_LIFECYCLE_STATE_4(a, b, c, d) \
-    _CEL_CAT(_CEL_LIFECYCLE_STATE_4_DISPATCH_, _CEL_IS_SESSION_ARG(a))(a, b, c, d)
-
-#define _CEL_LIFECYCLE_STATE_3(Type, on_c, on_d) \
-    _cel_lifecycle_state_curr(Type, on_c, on_d)
+#define _CEL_LIFECYCLE_STATE_3(init, on_c, on_d) \
+    _cel_lifecycle_state_curr(init, on_c, on_d)
 
 #define cel_lifecycle_state(...) \
     _CEL_GET_MACRO_4(__VA_ARGS__, _CEL_LIFECYCLE_STATE_4, _CEL_LIFECYCLE_STATE_3)(__VA_ARGS__)
 
 /* Backwards compatibility aliases */
-#define cel_remember_observer(...) cel_lifecycle_state(__VA_ARGS__)
-#define cel_observer(...)          cel_lifecycle_state(__VA_ARGS__)
+#define cel_remember_observer(session, Type, on_c, on_d) \
+    ((Type*)CelsResolveSlot((session), sizeof(Type), NULL, &(CelsLifecycleDesc){ \
+        .size      = sizeof(Type), \
+        .onCreate  = (void(*)(void*, CelsSession*))(on_c), \
+        .onDestroy = (void(*)(void*, CelsSession*))(on_d) \
+    }))
+#define cel_observer(...) cel_lifecycle_state(__VA_ARGS__)
 
 #define _CEL_GET_STATE_3(session, key, Type) \
     ((Type*)CelsGetState((session), (key)))

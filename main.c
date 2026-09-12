@@ -21,9 +21,6 @@ CEL_State(WindowState) {
 // Called on mount when the state slot is allocated in the slot table
 static void Window_OnCreated(WindowState *self, CelsSession *s) {
     (void)s;
-    self->isOpen = true;
-    self->width  = 800;
-    self->height = 600;
     self->nativeHandle = (void*)0x12345678;
     printf("  [Lifecycle] Window opened (%p) [%dx%d]\n",
            self->nativeHandle, self->width, self->height);
@@ -69,14 +66,17 @@ CEL_Composable(CEL_WindowContent, WindowState*, win) {
 
 // Root Composition: initializes lifecycle state on mount and passes it to children
 CEL_Composition(CEL_Window, key) {
-    // Allocated and initialized in the slot table on mount:
-    WindowState *win = cel_lifecycle_state(
-        WindowState,
-        Window_OnCreated,
-        Window_OnDestroyed
-    );
+    // 1. Initialize only the fields you want; omitted fields default to 0/NULL/false:
+    WindowState init = {
+        .isOpen = true,
+        .width  = 800,
+        .height = 600
+    };
 
-    // Pass the state through the composition tree to child composables:
+    // 2. Type is deduced directly from 'init' (no "WindowState" type parameter!):
+    WindowState *win = cel_lifecycle_state(init, Window_OnCreated, Window_OnDestroyed);
+
+    // 3. Pass the state through the composition tree to child composables:
     CEL_WindowContent(win);
 }
 
