@@ -60,6 +60,11 @@ extern "C" {
 #define CELS_SLOT_ALIGNMENT 8
 #define CELS_ALIGN_UP(size) (((size) + (CELS_SLOT_ALIGNMENT - 1)) & ~(CELS_SLOT_ALIGNMENT - 1))
 
+/* Every remembered slot occupies at least one aligned arena unit. */
+#ifndef CELS_MAX_SLOTS
+#define CELS_MAX_SLOTS (CELS_DATA_ARENA_SIZE / CELS_SLOT_ALIGNMENT)
+#endif
+
 /* ========================================================================= */
 /* Enums & Status Flags                                                      */
 /* ========================================================================= */
@@ -118,6 +123,7 @@ typedef struct CelsObserverDesc {
 
 typedef struct CelsCleanupHook {
     uint64_t groupKey;
+    uint32_t groupId;
     void    *instance;
     void   (*onForgotten)(void *instance, CelsSession *s);
 } CelsCleanupHook;
@@ -131,6 +137,14 @@ typedef struct CelsSlotGroup {
     uint16_t flags;
     uint32_t reserved;
 } CelsSlotGroup;
+
+/* Stable arena allocations, sorted by arenaOffset. Group IDs survive tree moves. */
+typedef struct CelsSlotAllocation {
+    uint32_t groupId;
+    uint32_t slotOffset;
+    uint32_t arenaOffset;
+    uint32_t size;
+} CelsSlotAllocation;
 
 typedef struct CelsSessionConfig {
     CelsRootFn root;
@@ -157,10 +171,14 @@ struct CelsSession {
     uint32_t      groupsGapStart;
     uint32_t      groupsGapEnd;
 
-    /* Dual Gap Buffer: Slot Data Arena */
+    /* Nonmoving slot arena: remembered pointers stay valid until their group leaves. */
     uint8_t       dataArena[CELS_DATA_ARENA_SIZE];
+    /* Used byte count and arena capacity, retained for inspection. */
     uint32_t      dataGapStart;
     uint32_t      dataGapEnd;
+    CelsSlotAllocation slots[CELS_MAX_SLOTS];
+    uint32_t slotCount;
+    uint32_t nextGroupId;
 
     /* State Registry */
     CelsStateCell states[CELS_MAX_STATES];
@@ -361,8 +379,12 @@ static inline uint64_t CelsKeyIndex(uint64_t baseKey, uint64_t index) {
  *      with (Type){ initialValue... }.
  *    - Recomposition: Returns the existing persistent memory pointer in the
  *      exact same call order, preserving previous mutations.
+ *    - Structural Edits: Slots use a nonmoving arena; inserting, removing, or
+ *      reordering other groups never changes a surviving slot's address.
  *    - Pruning / Teardown: When the component leaves the composition tree,
  *      all its remembered slots are automatically reclaimed together.
+ *      Pointers must not be used after that group's cleanup completes.
+ *      Freed arena ranges are reused without compacting live allocations.
  *
  * 4. Reactive Subscription & Mutation:
  *    - Read & Subscribe: Type val = cel_watch(ptr);
@@ -499,7 +521,8 @@ static inline uint32_t CelsGroupLogicalToPhysical(const CelsSession *s, uint32_t
 }
 
 static inline uint32_t CelsDataLogicalToPhysical(const CelsSession *s, uint32_t logical) {
-    return (logical < s->dataGapStart) ? logical : logical + (s->dataGapEnd - s->dataGapStart);
+    (void)s;
+    return logical;
 }
 
 static inline CelsSlotGroup* CelsGetGroup(CelsSession *s, uint32_t logical) {
@@ -628,28 +651,8 @@ static void CelsMoveGroupGap(CelsSession *s, uint32_t targetLogical) {
     }
 }
 
-static void CelsMoveDataGap(CelsSession *s, uint32_t targetLogical) {
-    if (targetLogical == s->dataGapStart) return;
-
-    if (targetLogical < s->dataGapStart) {
-        uint32_t delta = s->dataGapStart - targetLogical;
-        memmove(&s->dataArena[s->dataGapEnd - delta],
-                &s->dataArena[targetLogical],
-                delta);
-        s->dataGapStart -= delta;
-        s->dataGapEnd   -= delta;
-    } else {
-        uint32_t delta = targetLogical - s->dataGapStart;
-        memmove(&s->dataArena[s->dataGapStart],
-                &s->dataArena[s->dataGapEnd],
-                delta);
-        s->dataGapStart += delta;
-        s->dataGapEnd   += delta;
-    }
-}
-
 static void CelsUnsubscribeGroupWatchers(CelsSession *s, uint64_t groupKey) {
-    for (uint32_t i = 0; i < s->stateCount; ++i) {
+    for (uint32_t i = 0; i < s->stateCount;) {
         CelsStateHeader *header = &s->states[i].header;
         for (uint16_t w = 0; w < header->watcherCount; ++w) {
             if (header->watcherKeys[w] == groupKey) {
@@ -657,52 +660,62 @@ static void CelsUnsubscribeGroupWatchers(CelsSession *s, uint64_t groupKey) {
                 break;
             }
         }
+        if (header->watcherCount == 0) {
+            s->states[i] = s->states[--s->stateCount];
+        } else {
+            ++i;
+        }
     }
 }
 
-static void CelsFireCleanupsForGroup(CelsSession *s, uint64_t groupKey) {
+static void CelsFireCleanupsForGroup(CelsSession *s, uint32_t groupId) {
     for (uint32_t i = s->cleanupCount; i > 0; --i) {
         uint32_t idx = i - 1;
-        if (s->cleanups[idx].groupKey == groupKey) {
+        if (s->cleanups[idx].groupId == groupId) {
             if (s->cleanups[idx].onForgotten) {
                 s->cleanups[idx].onForgotten(s->cleanups[idx].instance, s);
             }
-            s->cleanups[idx] = s->cleanups[--s->cleanupCount];
+            --s->cleanupCount;
+            memmove(&s->cleanups[idx], &s->cleanups[idx + 1],
+                    (s->cleanupCount - idx) * sizeof(s->cleanups[0]));
         }
+    }
+}
+
+static void CelsReleaseSlotsForGroup(CelsSession *s, uint32_t groupId) {
+    for (uint32_t i = 0; i < s->slotCount;) {
+        CelsSlotAllocation *slot = &s->slots[i];
+        if (slot->groupId != groupId) { ++i; continue; }
+        uintptr_t first = (uintptr_t)&s->dataArena[slot->arenaOffset];
+        uintptr_t end = first + slot->size;
+        for (uint32_t state = 0; state < s->stateCount;) {
+            uintptr_t ptr = (uintptr_t)s->states[state].ptr;
+            if (ptr >= first && ptr < end) {
+                s->states[state] = s->states[--s->stateCount];
+            } else {
+                ++state;
+            }
+        }
+        s->dataGapStart -= slot->size;
+        --s->slotCount;
+        memmove(slot, slot + 1, (s->slotCount - i) * sizeof(*slot));
     }
 }
 
 void CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex) {
     CelsSlotGroup *root = CelsGetGroup(s, rootLogicalIndex);
     uint32_t groupsToRemove = 1 + root->groupSize;
-    uint32_t dataBytesToRemove = 0;
+    uint32_t parentIdx = root->parentIndex;
 
     for (uint32_t i = groupsToRemove; i > 0; --i) {
         uint32_t targetLogical = rootLogicalIndex + (i - 1);
         CelsSlotGroup *g = CelsGetGroup(s, targetLogical);
 
-        dataBytesToRemove += g->dataSize;
-        CelsFireCleanupsForGroup(s, g->key);
+        CelsFireCleanupsForGroup(s, g->reserved);
         CelsUnsubscribeGroupWatchers(s, g->key);
+        CelsReleaseSlotsForGroup(s, g->reserved);
     }
-
-    uint32_t dataStartLogical = root->dataOffset;
-    uint32_t parentIdx = root->parentIndex;
-    bool hasParent = (rootLogicalIndex > 0);
-
-    CelsMoveDataGap(s, dataStartLogical);
-    s->dataGapEnd += dataBytesToRemove;
-
-    uint32_t totalGroups = CelsGetLogicalGroupCount(s);
-    for (uint32_t i = rootLogicalIndex + groupsToRemove; i < totalGroups; ++i) {
-        CelsSlotGroup *g = CelsGetGroup(s, i);
-        g->dataOffset -= dataBytesToRemove;
-    }
-
-    CelsMoveGroupGap(s, rootLogicalIndex);
-    s->groupsGapEnd += groupsToRemove;
-
-    if (hasParent) {
+    if (rootLogicalIndex > 0) {
         uint32_t curr = parentIdx;
         while (true) {
             CelsSlotGroup *p = CelsGetGroup(s, curr);
@@ -711,6 +724,16 @@ void CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex) {
 
             if (curr == 0) break;
             curr = p->parentIndex;
+        }
+    }
+    uint32_t totalGroups = CelsGetLogicalGroupCount(s);
+    CelsMoveGroupGap(s, totalGroups);
+    memmove(&s->groups[rootLogicalIndex], &s->groups[rootLogicalIndex + groupsToRemove],
+            (totalGroups - rootLogicalIndex - groupsToRemove) * sizeof(s->groups[0]));
+    s->groupsGapStart -= groupsToRemove;
+    for (uint32_t i = rootLogicalIndex; i < s->groupsGapStart; ++i) {
+        if (s->groups[i].parentIndex >= rootLogicalIndex + groupsToRemove) {
+            s->groups[i].parentIndex -= groupsToRemove;
         }
     }
 }
@@ -768,6 +791,7 @@ void CelsSessionInit(CelsSession *s, const CelsSessionConfig *cfg) {
 
     s->dataGapStart   = 0;
     s->dataGapEnd     = CELS_DATA_ARENA_SIZE;
+    s->nextGroupId = 1;
 
     s->maxDrainIterations = (cfg && cfg->maxDrainIterations > 0)
         ? cfg->maxDrainIterations
@@ -781,12 +805,10 @@ void CelsSessionSetRoot(CelsSession *s, CelsRootFn rootFn) {
 
 void CelsSessionDestroy(CelsSession *s) {
     if (!s) return;
-    for (uint32_t i = s->cleanupCount; i > 0; --i) {
-        uint32_t idx = i - 1;
-        if (s->cleanups[idx].onForgotten) {
-            s->cleanups[idx].onForgotten(s->cleanups[idx].instance, s);
-        }
-    }
+    CelsSession *previous = cels_current_session;
+    cels_current_session = s;
+    if (CelsGetLogicalGroupCount(s) > 0) CelsPruneSubtree(s, 0);
+    cels_current_session = previous == s ? NULL : previous;
     memset(s, 0, sizeof(CelsSession));
 }
 
@@ -823,7 +845,7 @@ CelsResult CelsSessionRecompose(CelsSession *s) {
 
         if (s->currentDepth != 0) {
             s->isRecomposing = false;
-            cels_current_session = prevSession;
+            if (prevSession) cels_current_session = prevSession;
             return CELS_ERROR_UNBALANCED_SCOPE;
         }
 
@@ -831,7 +853,7 @@ CelsResult CelsSessionRecompose(CelsSession *s) {
 
     s->hasComposedOnce = true;
     s->isRecomposing = false;
-    cels_current_session = prevSession;
+    if (prevSession) cels_current_session = prevSession;
     return CELS_OK;
 }
 
@@ -852,13 +874,14 @@ bool CelsEnterComposition(CelsSession *s, uint64_t rootKey) {
             .dataOffset = 0,
             .dataSize = 0,
             .flags = CELS_FLAG_FRESH_MOUNT,
-            .reserved = 0
+            .reserved = s->nextGroupId++
         };
         s->groupsGapStart = 1;
     } else {
         CelsSlotGroup *root = CelsGetGroup(s, 0);
         if (root->key != rootKey) {
             CelsPruneSubtree(s, 0);
+            --s->currentDepth;
             return CelsEnterComposition(s, rootKey);
         }
     }
@@ -879,10 +902,36 @@ bool CelsEnterComposable(CelsSession *s, uint64_t key) {
     uint32_t depth = s->currentDepth++;
     s->slotOffsetStack[depth - 1] = s->currentSlotOffset;
     uint32_t totalGroups = CelsGetLogicalGroupCount(s);
-
     uint32_t cursor = s->logicalCursor;
+    uint32_t parentIdx = s->groupIndexStack[depth - 1];
+    uint32_t parentEnd = parentIdx + 1 + CelsGetGroup(s, parentIdx)->groupSize;
+    uint32_t matchIdx = UINT32_MAX;
 
-    if (cursor < totalGroups && CelsGetGroup(s, cursor)->key == key) {
+    /* Match direct siblings only. A keyed subtree can move without being remounted. */
+    for (uint32_t i = cursor; i < parentEnd;) {
+        CelsSlotGroup *candidate = CelsGetGroup(s, i);
+        if (candidate->key == key) { matchIdx = i; break; }
+        i += 1 + candidate->groupSize;
+    }
+    if (matchIdx != UINT32_MAX && matchIdx != cursor) {
+        uint32_t movedCount = 1 + CelsGetGroup(s, matchIdx)->groupSize;
+        CelsSlotGroup moved[CELS_MAX_GROUPS];
+        CelsMoveGroupGap(s, totalGroups);
+        memcpy(moved, &s->groups[matchIdx], movedCount * sizeof(moved[0]));
+        memmove(&s->groups[cursor + movedCount], &s->groups[cursor],
+                (matchIdx - cursor) * sizeof(moved[0]));
+        memcpy(&s->groups[cursor], moved, movedCount * sizeof(moved[0]));
+        for (uint32_t i = 1; i < totalGroups; ++i) {
+            uint32_t parent = s->groups[i].parentIndex;
+            if (parent >= matchIdx && parent < matchIdx + movedCount) {
+                s->groups[i].parentIndex = cursor + (parent - matchIdx);
+            } else if (parent >= cursor && parent < matchIdx) {
+                s->groups[i].parentIndex = parent + movedCount;
+            }
+        }
+    }
+
+    if (matchIdx != UINT32_MAX) {
         CelsSlotGroup *cached = CelsGetGroup(s, cursor);
 
         if (!(cached->flags & (CELS_FLAG_INVALIDATED | CELS_FLAG_CONTAINS_INVALIDATED))) {
@@ -902,41 +951,31 @@ bool CelsEnterComposable(CelsSession *s, uint64_t key) {
         return true;
     }
 
-    uint32_t parentIdx = s->groupIndexStack[depth - 1];
-    uint32_t parentExpectedEnd = parentIdx + 1 + s->oldGroupSizeStack[depth - 1];
-    uint32_t matchIdx = UINT32_MAX;
-
-    for (uint32_t i = cursor; i < totalGroups && i < parentExpectedEnd; ++i) {
-        if (CelsGetGroup(s, i)->key == key) {
-            matchIdx = i;
-            break;
-        }
-    }
-
-    if (matchIdx != UINT32_MAX) {
-        while (s->logicalCursor < matchIdx) {
-            CelsSlotGroup *skipped = CelsGetGroup(s, s->logicalCursor);
-            uint32_t removed = 1 + skipped->groupSize;
-            CelsPruneSubtree(s, s->logicalCursor);
-            matchIdx -= removed;
-            parentExpectedEnd -= removed;
-        }
-        return CelsEnterComposable(s, key);
-    }
-
     assert(totalGroups < CELS_MAX_GROUPS && "CELS_ERROR_GROUP_OVERFLOW");
+    assert(s->nextGroupId != 0 && "CELS group identity overflow");
     CelsMoveGroupGap(s, cursor);
 
     s->groups[s->groupsGapStart] = (CelsSlotGroup){
         .key = key,
         .parentIndex = parentIdx,
         .groupSize = 0,
-        .dataOffset = s->dataGapStart,
+        .dataOffset = 0,
         .dataSize = 0,
         .flags = CELS_FLAG_FRESH_MOUNT,
-        .reserved = 0
+        .reserved = s->nextGroupId++
     };
     s->groupsGapStart++;
+
+    for (uint32_t i = cursor + 1; i <= totalGroups; ++i) {
+        CelsSlotGroup *group = CelsGetGroup(s, i);
+        if (group->parentIndex >= cursor) ++group->parentIndex;
+    }
+    for (uint32_t ancestor = parentIdx;;) {
+        CelsSlotGroup *group = CelsGetGroup(s, ancestor);
+        ++group->groupSize;
+        if (ancestor == 0) break;
+        ancestor = group->parentIndex;
+    }
 
     s->activeStack[depth] = 1;
     s->groupIndexStack[depth] = cursor;
@@ -954,7 +993,7 @@ void CelsExitGroup(CelsSession *s) {
     uint32_t groupIdx = s->groupIndexStack[depth];
 
     if (s->activeStack[depth]) {
-        uint32_t expectedEnd = groupIdx + 1 + s->oldGroupSizeStack[depth];
+        uint32_t expectedEnd = groupIdx + 1 + CelsGetGroup(s, groupIdx)->groupSize;
         while (s->logicalCursor < expectedEnd && s->logicalCursor < CelsGetLogicalGroupCount(s)) {
             CelsSlotGroup *dead = CelsGetGroup(s, s->logicalCursor);
             uint32_t removed = 1 + dead->groupSize;
@@ -967,8 +1006,7 @@ void CelsExitGroup(CelsSession *s) {
             g->dataSize = (uint16_t)s->currentSlotOffset;
             g->flags &= ~CELS_FLAG_FRESH_MOUNT;
         }
-
-        g->groupSize = (uint16_t)((s->logicalCursor - 1) - groupIdx);
+        assert(g->groupSize == (s->logicalCursor - 1) - groupIdx);
     }
 
     if (depth > 0) {
@@ -982,11 +1020,30 @@ void* CelsResolveSlot(CelsSession *s, size_t size, const void *initVal, const Ce
     assert(s->currentDepth > 0);
     CelsSlotGroup *group = CelsGetGroup(s, s->currentGroupIndex);
     size_t alignedSize = CELS_ALIGN_UP(size);
+    assert(alignedSize > 0 && alignedSize <= UINT16_MAX);
 
     if (group->flags & CELS_FLAG_FRESH_MOUNT) {
-        assert(s->dataGapStart + alignedSize <= s->dataGapEnd && "CELS_ERROR_SLOT_ARENA_OVERFLOW");
-
-        uint8_t *slotPtr = &s->dataArena[s->dataGapStart];
+        assert(s->slotCount < CELS_MAX_SLOTS && "CELS_ERROR_SLOT_ARENA_OVERFLOW");
+        uint32_t offset = 0;
+        uint32_t insertion = 0;
+        while (insertion < s->slotCount) {
+            CelsSlotAllocation *next = &s->slots[insertion];
+            if (offset + alignedSize <= next->arenaOffset) break;
+            offset = next->arenaOffset + next->size;
+            ++insertion;
+        }
+        assert(offset + alignedSize <= CELS_DATA_ARENA_SIZE && "CELS_ERROR_SLOT_ARENA_OVERFLOW");
+        memmove(&s->slots[insertion + 1], &s->slots[insertion],
+                (s->slotCount - insertion) * sizeof(s->slots[0]));
+        s->slots[insertion] = (CelsSlotAllocation){
+            .groupId = group->reserved,
+            .slotOffset = s->currentSlotOffset,
+            .arenaOffset = offset,
+            .size = (uint32_t)alignedSize
+        };
+        ++s->slotCount;
+        if (s->currentSlotOffset == 0) group->dataOffset = offset;
+        uint8_t *slotPtr = &s->dataArena[offset];
         s->dataGapStart += (uint32_t)alignedSize;
 
         if (initVal) {
@@ -999,6 +1056,7 @@ void* CelsResolveSlot(CelsSession *s, size_t size, const void *initVal, const Ce
             assert(s->cleanupCount < CELS_MAX_CLEANUPS && "CELS_ERROR_CLEANUP_OVERFLOW");
             s->cleanups[s->cleanupCount++] = (CelsCleanupHook){
                 .groupKey = group->key,
+                .groupId = group->reserved,
                 .instance = slotPtr,
                 .onForgotten = desc->onForgotten
             };
@@ -1011,9 +1069,16 @@ void* CelsResolveSlot(CelsSession *s, size_t size, const void *initVal, const Ce
         return (void*)slotPtr;
     }
 
-    uint8_t *cachedPtr = CelsGetData(s, group->dataOffset + s->currentSlotOffset);
-    s->currentSlotOffset += (uint32_t)alignedSize;
-    return (void*)cachedPtr;
+    for (uint32_t i = 0; i < s->slotCount; ++i) {
+        CelsSlotAllocation *slot = &s->slots[i];
+        if (slot->groupId == group->reserved && slot->slotOffset == s->currentSlotOffset) {
+            assert(slot->size == alignedSize && "Remembered slot type/order changed");
+            s->currentSlotOffset += (uint32_t)alignedSize;
+            return &s->dataArena[slot->arenaOffset];
+        }
+    }
+    assert(false && "Remembered slot count/order changed");
+    return NULL;
 }
 
 static CelsStateHeader* CelsGetOrCreateStateHeader(CelsSession *s, const void *statePtr) {
@@ -1030,11 +1095,13 @@ static CelsStateHeader* CelsGetOrCreateStateHeader(CelsSession *s, const void *s
 }
 
 void CelsStateRead(CelsSession *s, const void *statePtr) {
+    if (!s) s = CelsGetCurrentSession();
+    if (!s) return;
     assert(statePtr != NULL);
 
     if (s->currentDepth > 0 && s->activeStack[s->currentDepth - 1]) {
         uint32_t activeGroupIdx = s->groupIndexStack[s->currentDepth - 1];
-        uint32_t currentKey = CelsGetGroup(s, activeGroupIdx)->key;
+        uint64_t currentKey = CelsGetGroup(s, activeGroupIdx)->key;
 
         CelsStateHeader *header = CelsGetOrCreateStateHeader(s, statePtr);
 
@@ -1048,7 +1115,7 @@ void CelsStateRead(CelsSession *s, const void *statePtr) {
             header->watcherKeys[header->watcherCount++] = currentKey;
         }
     } else if (s->currentDepth == 0 && CelsGetLogicalGroupCount(s) > 0) {
-        uint32_t currentKey = CelsGetGroup(s, 0)->key;
+        uint64_t currentKey = CelsGetGroup(s, 0)->key;
         CelsStateHeader *header = CelsGetOrCreateStateHeader(s, statePtr);
 
         for (uint16_t i = 0; i < header->watcherCount; ++i) {
@@ -1064,6 +1131,8 @@ void CelsStateRead(CelsSession *s, const void *statePtr) {
 }
 
 void CelsStateCommitMutation(CelsSession *s, const void *statePtr, const void *oldVal, size_t size) {
+    if (!s) s = CelsGetCurrentSession();
+    if (!s) return;
     assert(statePtr != NULL);
     assert(oldVal != NULL);
 
@@ -1071,7 +1140,11 @@ void CelsStateCommitMutation(CelsSession *s, const void *statePtr, const void *o
         return;
     }
 
-    CelsStateHeader *header = CelsGetOrCreateStateHeader(s, statePtr);
+    CelsStateHeader *header = NULL;
+    for (uint32_t i = 0; i < s->stateCount; ++i) {
+        if (s->states[i].ptr == statePtr) { header = &s->states[i].header; break; }
+    }
+    if (!header) return;
     for (uint16_t i = 0; i < header->watcherCount; ++i) {
         if (s->queueCount < CELS_MAX_QUEUE) {
             s->invalidationQueue[s->queueCount++] = header->watcherKeys[i];

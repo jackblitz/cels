@@ -55,3 +55,7 @@ target_include_directories(LifecycleTest PRIVATE
 )
 
 add_test(NAME LifecycleTest COMMAND LifecycleTest)
+
+add_executable(StateLifetimeTest test/StateLifetimeTest.c cels.h)
+target_include_directories(StateLifetimeTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME StateLifetimeTest COMMAND StateLifetimeTest)
