@@ -24,4 +24,24 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CELS_OUTPUT_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CELS_OUTPUT_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CELS_OUTPUT_DIR}/libs")
 
-add_executable(cels main.c)
+# Main Application
+add_executable(cels
+    main.c
+    cels.h
+)
+target_include_directories(cels PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# Test Suite
+enable_testing()
+
+add_executable(TreeTest
+    test/TreeTest.c
+    cels.h
+)
+target_include_directories(TreeTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_test(NAME TreeTest COMMAND TreeTest)
