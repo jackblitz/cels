@@ -63,15 +63,29 @@ CEL_Composeable(CEL_SDLWindow, key) {
 CEL_Composeable(CEL_CounterText, key) {
     // Persistent Local Memory:
     // cel_remember allocates private, self-contained slots for this component.
-    // Multiple variables are remembered sequentially and persist across recompositions:
     int  *clickCount = cel_remember(int, 0);
     bool *isHovered  = cel_remember(bool, false);
+
+    // cel_spawn runs ONLY when this composable is first spawned/mounted:
+    cel_spawn {
+        printf("    [Spawn] CEL_CounterText spawned into slot table!\n");
+    }
 
     int  count   = cel_watch(clickCount);
     bool hovered = cel_watch(isHovered);
 
     printf("    -> Window is open! Click count: %d (hovered: %s)\n", 
            count, hovered ? "true" : "false");
+
+    // Declarative Spawning: BadgeNotification only exists when count > 0.
+    // When count transitions 0 -> 1, this child composable spawns into the tree!
+    if (count > 0) {
+        CEL_Composable(CEL_KEY("BadgeNotification")) {
+            cel_spawn {
+                printf("    [Spawn] BadgeNotification dynamically spawned! (count = %d)\n", count);
+            }
+        }
+    }
 
     // The component wires its own private remembered pointer into its click callback:
     g_incrementButton = (ButtonComponent){
