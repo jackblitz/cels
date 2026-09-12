@@ -81,8 +81,8 @@ CEL_Composeable(CEL_CounterText, key) {
     };
 }
 
-// 2. Root Window Composable Component: hosts SDL window lifecycle & children
-CEL_Composeable(CEL_Window, key) {
+// 2. Root Window Composition (defined OUTSIDE RootApp): hosts SDL window lifecycle & children
+CEL_Composition(CEL_Window, key) {
     cel_lifecycle_state(s, SdlWindow, SdlWindow_OnCreated, SdlWindow_OnDestroyed);
     CEL_CounterText(CEL_KEY("CounterText"));
 }
@@ -91,7 +91,8 @@ CEL_Composeable(CEL_Window, key) {
 
 CEL_LifeCycle(WindowLifeCycle, WindowState) {
     // cel_watch subscribes this Composition root to changes in WindowState
-    WindowState win = cel_watch(it);
+    WindowState *target = it ? it : &g_mainWindow;
+    WindowState win = cel_watch(target);
     printf("  [WindowLifeCycle] Evaluating Window -> isOpen: %s [%dx%d]\n",
            win.isOpen ? "true" : "false", win.width, win.height);
 
@@ -105,9 +106,8 @@ CEL_LifeCycle(WindowLifeCycle, WindowState) {
 
 void RootApp(CelsSession *s) {
     (void)s;
-    // Spawns CEL_Window composition bound to WindowState & WindowLifeCycle
-    CEL_Attach(&g_mainWindow, WindowLifeCycle);
-    CEL_Composition(CEL_Window, CEL_KEY("MainWindow"));
+    // CEL_Attach just adds/spawns the composition with its lifecycle!
+    CEL_Attach(CEL_Window, WindowLifeCycle);
 }
 
 /* --- Main --- */
@@ -122,7 +122,7 @@ int main(void) {
     CelsSessionRecompose(&session);
 
     // Lifecycle state (native handles/resources) can be queried externally by key:
-    SdlWindow *winObs = CEL_FindLifecycleState(&session, CEL_KEY("MainWindow"), SdlWindow);
+    SdlWindow *winObs = CEL_FindLifecycleState(&session, CEL_KEY("CEL_Window"), SdlWindow);
     printf("  [Observer Query] Found native window handle: %p\n", winObs ? winObs->nativeHandle : NULL);
 
     printf("\n=== Quiet Check (Nothing Changed) ===\n");

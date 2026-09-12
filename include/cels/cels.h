@@ -77,6 +77,7 @@ CelsKeyIndex(uint64_t baseKey, uint64_t index)
 #define _CEL_ARG_2(_0, _1, _2, ...) _2
 #define _CEL_GET_MACRO_2(_1, _2, NAME, ...) NAME
 #define _CEL_GET_MACRO_3(_1, _2, _3, NAME, ...) NAME
+#define _CEL_GET_MACRO_4(_1, _2, _3, _4, NAME, ...) NAME
 #define _CEL_GET_MACRO_COMP(_1, _2, _3, _4, NAME, ...) NAME
 #define _CEL_FIRST(a, ...) a
 
@@ -125,53 +126,89 @@ CelsKeyIndex(uint64_t baseKey, uint64_t index)
 /* Composition Lifecycle Attachment (CEL_Attach)                             */
 /* ========================================================================= */
 
-#define _CEL_ATTACH_2(state_ptr, Lifecycle) \
-    CelsAttachLifecycle(CelsGetCurrentSession(), (void*)(state_ptr), _cels_lifecycle_##Lifecycle)
+#define _CEL_ATTACH_2(Comp, Lifecycle) \
+    do { \
+        CelsSession *_cels_att_s = CelsGetCurrentSession(); \
+        uint64_t _cels_att_k = CelsHashKey(#Comp); \
+        bool _cels_att_alive = _cels_lifecycle_##Lifecycle(NULL); \
+        if (_cels_att_alive) { \
+            if (CelsEnterComposition(_cels_att_s, _cels_att_k)) { \
+                _cels_body_##Comp(_cels_att_s, _cels_att_k); \
+            } \
+            CelsExitGroup(_cels_att_s); \
+        } else { \
+            CelsPruneSubtreeByKey(_cels_att_s, _cels_att_k); \
+        } \
+    } while (0)
 
-#define _CEL_ATTACH_3(a, b, c) \
-    (_CEL_IS_SESSION_ARG(a) \
-        ? CelsAttachLifecycle((a), (void*)(b), _cels_lifecycle_##c) \
-        : CelsAttachLifecycle(CelsGetCurrentSession(), (void*)(b), _cels_lifecycle_##c))
+#define _CEL_ATTACH_3(Comp, state_ptr, Lifecycle) \
+    do { \
+        CelsSession *_cels_att_s = CelsGetCurrentSession(); \
+        uint64_t _cels_att_k = CelsHashKey(#Comp); \
+        bool _cels_att_alive = _cels_lifecycle_##Lifecycle((void*)(state_ptr)); \
+        if (_cels_att_alive) { \
+            if (CelsEnterComposition(_cels_att_s, _cels_att_k)) { \
+                _cels_body_##Comp(_cels_att_s, _cels_att_k); \
+            } \
+            CelsExitGroup(_cels_att_s); \
+        } else { \
+            CelsPruneSubtreeByKey(_cels_att_s, _cels_att_k); \
+        } \
+    } while (0)
+
+#define _CEL_ATTACH_4(Comp, key, state_ptr, Lifecycle) \
+    do { \
+        CelsSession *_cels_att_s = CelsGetCurrentSession(); \
+        uint64_t _cels_att_k = (uint64_t)(key); \
+        bool _cels_att_alive = _cels_lifecycle_##Lifecycle((void*)(state_ptr)); \
+        if (_cels_att_alive) { \
+            if (CelsEnterComposition(_cels_att_s, _cels_att_k)) { \
+                _cels_body_##Comp(_cels_att_s, _cels_att_k); \
+            } \
+            CelsExitGroup(_cels_att_s); \
+        } else { \
+            CelsPruneSubtreeByKey(_cels_att_s, _cels_att_k); \
+        } \
+    } while (0)
 
 #define CEL_Attach(...) \
-    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_ATTACH_3, _CEL_ATTACH_2)(__VA_ARGS__)
+    _CEL_GET_MACRO_4(__VA_ARGS__, _CEL_ATTACH_4, _CEL_ATTACH_3, _CEL_ATTACH_2)(__VA_ARGS__)
 
 /* ========================================================================= */
 /* Declarative Composition Root & Scopes                                     */
 /* ========================================================================= */
 
 #define _CEL_COMPOSITION_1(rootKey) \
-    for (bool _cels_alive = CelsEvalAttachedLifecycle(CelsGetCurrentSession()), \
-              _cels_run = (_cels_alive \
-                           ? (CelsEnterComposition(CelsGetCurrentSession(), (rootKey)) ? 1 : 0) \
-                           : (CelsPruneSubtreeByKey(CelsGetCurrentSession(), (rootKey)), 0)), \
-              _cels_done = 0; \
-         !_cels_done; \
-         _cels_done = 1, (_cels_alive ? CelsExitGroup(CelsGetCurrentSession()) : (void)0), \
-                         CelsClearAttachedLifecycle(CelsGetCurrentSession())) \
-        for ( ; _cels_run; _cels_run = 0)
+    do { \
+        if (CelsEnterComposition(CelsGetCurrentSession(), (rootKey)))
 
 #define _CEL_COMPOSITION_LEGACY_BLOCK(session, rootKey) \
     do { \
         if (CelsEnterComposition((session), (rootKey)))
 
-#define _CEL_COMPOSITION_COMPONENT_BLOCK(Component, key) \
-    for (bool _cels_alive = CelsEvalAttachedLifecycle(CelsGetCurrentSession()), \
-              _cels_run = (_cels_alive \
-                           ? (CelsEnterComposition(CelsGetCurrentSession(), (key)) \
-                              ? (_cels_body_##Component(CelsGetCurrentSession(), (key)), 1) \
-                              : 0) \
-                           : (CelsPruneSubtreeByKey(CelsGetCurrentSession(), (key)), 0)), \
-              _cels_done = 0; \
-         !_cels_done; \
-         _cels_done = 1, (_cels_alive ? CelsExitGroup(CelsGetCurrentSession()) : (void)0), \
-                         CelsClearAttachedLifecycle(CelsGetCurrentSession())) \
-        for ( ; _cels_run; _cels_run = 0)
+#define _CEL_COMPOSITION_DEF(CompName, keyName) \
+    static void _cels_body_##CompName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t keyName); \
+    static inline void CompName(uint64_t keyName) { \
+        CelsSession *s = CelsGetCurrentSession(); \
+        assert(s != NULL && #CompName " called outside of an active CelsSession"); \
+        if (CelsEnterComposition(s, keyName)) { \
+            _cels_body_##CompName(s, keyName); \
+        } \
+        CelsExitGroup(s); \
+    } \
+    static inline void CompName##_s(CelsSession *s, uint64_t keyName) { \
+        assert(s != NULL && #CompName "_s called with NULL session"); \
+        if (CelsEnterComposition(s, keyName)) { \
+            _cels_body_##CompName(s, keyName); \
+        } \
+        CelsExitGroup(s); \
+    } \
+    static void _cels_body_##CompName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t keyName)
 
 #define _CEL_DISPATCH_COMPOSITION_2(is_sess, a, b) _CEL_DISPATCH_COMPOSITION_IMPL_##is_sess(a, b)
 #define _CEL_DISPATCH_COMPOSITION(is_sess, a, b) _CEL_DISPATCH_COMPOSITION_2(is_sess, a, b)
 #define _CEL_DISPATCH_COMPOSITION_IMPL_1(a, b) _CEL_COMPOSITION_LEGACY_BLOCK(a, b)
-#define _CEL_DISPATCH_COMPOSITION_IMPL_0(a, b) _CEL_COMPOSITION_COMPONENT_BLOCK(a, b)
+#define _CEL_DISPATCH_COMPOSITION_IMPL_0(a, b) _CEL_COMPOSITION_DEF(a, b)
 
 #define _CEL_COMPOSITION_2(a, b) _CEL_DISPATCH_COMPOSITION(_CEL_IS_SESSION_ARG(a), a, b)
 
