@@ -122,6 +122,8 @@ CelsKeyIndex(uint64_t baseKey, uint64_t index)
         return; \
     } while (0)
 
+#define cel_destory() cel_destroy()
+
 /* ========================================================================= */
 /* Composition Lifecycle Attachment (CEL_Attach)                             */
 /* ========================================================================= */

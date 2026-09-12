@@ -54,7 +54,13 @@ static void OnIncrementClick(void *userData, CelsSession *s) {
 
 /* --- Reusable Composable Component Definitions --- */
 
-// 1. Leaf Composable: manages its own local remembered state across recompositions
+// 1. Leaf Composable: called from inside another Composable (nested composable)
+CEL_Composeable(CEL_Badge, key) {
+    (void)key;
+    printf("    [Badge Composable] Notification badge rendered (called from CEL_CounterText)!\n");
+}
+
+// 2. Mid-level Composable: called from inside a Composition, and calls CEL_Badge inside itself
 CEL_Composeable(CEL_CounterText, key) {
     // Persistent Local Memory:
     // cel_remember allocates private, self-contained slots for this component.
@@ -67,11 +73,9 @@ CEL_Composeable(CEL_CounterText, key) {
     printf("    -> Window is open! Click count: %d (hovered: %s)\n", 
            count, hovered ? "true" : "false");
 
-    // Dynamic child composable: BadgeNotification only rendered when count > 0
+    // Calling a Composable from inside another Composable:
     if (count > 0) {
-        CEL_Composable(CEL_KEY("BadgeNotification")) {
-            printf("    [BadgeNotification] Notification badge active (count = %d)\n", count);
-        }
+        CEL_Badge(CEL_KEY("BadgeNotification"));
     }
 
     // The component wires its own private remembered pointer into its click callback:
