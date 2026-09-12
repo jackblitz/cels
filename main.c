@@ -56,14 +56,11 @@ static void SdlWindow_OnDestroyed(SdlWindow *self, CelsSession *s) {
 
 // Leaf composable: rendered conditionally inside other composables
 CEL_Composable(CEL_StatusBadge, key) {
-    (void)key;
     printf("    [Badge] Notification badge active!\n");
 }
 
 // Container composable: demonstrates persistent local memory and reactive state
 CEL_Composable(CEL_WindowContent, key) {
-    (void)key;
-
     // Component-local persistent memory: preserved across recompositions
     int *localRenderCount = cel_remember(int, 0);
     (*localRenderCount)++;
@@ -74,9 +71,9 @@ CEL_Composable(CEL_WindowContent, key) {
     printf("  [Content] Local render count: %d | App counter: %d\n",
            *localRenderCount, state.counter);
 
-    // Conditional composition: render child composable based on reactive state
+    // Conditional composition: auto-keyed by the composition engine
     if (state.counter > 0) {
-        CEL_StatusBadge(CEL_KEY("StatusBadge"));
+        CEL_StatusBadge();
     }
 }
 
@@ -86,13 +83,11 @@ CEL_Composable(CEL_WindowContent, key) {
 
 // Composition: owns the subtree and manages native resource lifecycles
 CEL_Composition(CEL_Window, key) {
-    (void)key;
-
     // Bind native resource lifecycle to this composition node
     cel_lifecycle_state(s, SdlWindow, SdlWindow_OnCreated, SdlWindow_OnDestroyed);
 
-    // Compose child hierarchy
-    CEL_WindowContent(CEL_KEY("WindowContent"));
+    // Compose child hierarchy without explicit keys: auto-assigned by engine
+    CEL_WindowContent();
 }
 
 // Lifecycle evaluator: controls when the composition remains active or despawns

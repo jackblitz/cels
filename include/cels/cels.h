@@ -49,22 +49,7 @@ extern "C" {
 /* Key Utilities (64-bit FNV-1a Hash)                                        */
 /* ========================================================================= */
 
-static inline uint64_t
-CelsHashKey(const char *str)
-{
-    uint64_t hash = 14695981039346656037ULL;
-    while (*str) {
-        hash ^= (uint8_t)*str++;
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
 
-static inline uint64_t
-CelsKeyIndex(uint64_t baseKey, uint64_t index)
-{
-    return baseKey ^ (index * 0x517cc1b727220a95ULL);
-}
 
 #define CEL_KEY(str) CelsHashKey(str)
 #define CEL_KeyIndex(baseKey, index) CelsKeyIndex((uint64_t)(baseKey), (uint64_t)(index))
@@ -212,20 +197,22 @@ CelsKeyIndex(uint64_t baseKey, uint64_t index)
 
 #define _CEL_COMPOSABLE_DEF(FnName, keyName) \
     static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t keyName); \
-    static inline void FnName(uint64_t keyName) { \
-        CelsSession *s = CelsGetCurrentSession(); \
-        assert(s != NULL && #FnName " called outside of an active CelsSession"); \
-        if (CelsEnterComposable(s, keyName)) { \
-            _cels_body_##FnName(s, keyName); \
+    static inline void _cels_call_##FnName(CelsSession *s, uint64_t key) { \
+        CelsSession *sess = s ? s : CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        if (CelsEnterComposable(sess, key)) { \
+            _cels_body_##FnName(sess, key); \
         } \
-        CelsExitGroup(s); \
+        CelsExitGroup(sess); \
     } \
-    static inline void FnName##_s(CelsSession *s, uint64_t keyName) { \
-        assert(s != NULL && #FnName "_s called with NULL session"); \
-        if (CelsEnterComposable(s, keyName)) { \
-            _cels_body_##FnName(s, keyName); \
-        } \
-        CelsExitGroup(s); \
+    static inline void FnName##_key(uint64_t key) { \
+        _cels_call_##FnName(CelsGetCurrentSession(), key); \
+    } \
+    static inline void FnName##_s(CelsSession *s, uint64_t key) { \
+        _cels_call_##FnName(s, key); \
+    } \
+    static inline void FnName(void) { \
+        _cels_call_##FnName(CelsGetCurrentSession(), 0); \
     } \
     static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t keyName)
 

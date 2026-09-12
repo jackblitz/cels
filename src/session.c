@@ -401,6 +401,13 @@ CelsEnterComposable(CelsSession *s, uint64_t key)
     const uint32_t parentEnd = parentIdx + 1 + CelsGetGroup(s, parentIdx)->groupSize;
     uint32_t matchIdx = UINT32_MAX;
 
+    if (key == 0) {
+        const uint64_t parentKey = (parentIdx != UINT32_MAX)
+            ? CelsGetGroup(s, parentIdx)->key
+            : 0xCBF29CE484222325ULL;
+        key = CelsKeyIndex(parentKey, ((uint64_t)(cursor - parentIdx) + 1u) * 0x9e3779b97f4a7c15ULL);
+    }
+
     for (uint32_t i = cursor; i < parentEnd;) {
         CelsSlotGroup *const candidate = CelsGetGroup(s, i);
         if (candidate->key == key) {
