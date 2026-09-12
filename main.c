@@ -106,21 +106,14 @@ CEL_LifeCycle(WindowLifeCycle, WindowState) {
     }
 }
 
-/* --- Declarative Root Function --- */
-
-void RootApp(CelsSession *s) {
-    (void)s;
-    // CEL_Attach just adds/spawns the composition with its lifecycle!
-    CEL_Attach(CEL_Window, WindowLifeCycle);
-}
-
 /* --- Main --- */
 
 int main(void) {
     CelsSession session;
-    CelsSessionInit(&session, &(CelsSessionConfig){
-        .root = RootApp
-    });
+    CelsSessionInit(&session, NULL);
+
+    // Attach composition directly to the session - no RootApp wrapper function needed!
+    CEL_Attach(&session, CEL_Window, WindowLifeCycle);
 
     printf("=== Pass 1: Initial Mount ===\n");
     CelsSessionRecompose(&session);

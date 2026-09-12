@@ -129,49 +129,13 @@ CelsKeyIndex(uint64_t baseKey, uint64_t index)
 /* ========================================================================= */
 
 #define _CEL_ATTACH_2(Comp, Lifecycle) \
-    do { \
-        CelsSession *_cels_att_s = CelsGetCurrentSession(); \
-        uint64_t _cels_att_k = CelsHashKey(#Comp); \
-        bool _cels_att_alive = _cels_lifecycle_##Lifecycle(NULL); \
-        if (_cels_att_alive) { \
-            if (CelsEnterComposition(_cels_att_s, _cels_att_k)) { \
-                _cels_body_##Comp(_cels_att_s, _cels_att_k); \
-            } \
-            CelsExitGroup(_cels_att_s); \
-        } else { \
-            CelsPruneSubtreeByKey(_cels_att_s, _cels_att_k); \
-        } \
-    } while (0)
+    CelsSessionAttachComposition(CelsGetCurrentSession(), CelsHashKey(#Comp), _cels_body_##Comp, _cels_lifecycle_##Lifecycle, NULL)
 
-#define _CEL_ATTACH_3(Comp, state_ptr, Lifecycle) \
-    do { \
-        CelsSession *_cels_att_s = CelsGetCurrentSession(); \
-        uint64_t _cels_att_k = CelsHashKey(#Comp); \
-        bool _cels_att_alive = _cels_lifecycle_##Lifecycle((void*)(state_ptr)); \
-        if (_cels_att_alive) { \
-            if (CelsEnterComposition(_cels_att_s, _cels_att_k)) { \
-                _cels_body_##Comp(_cels_att_s, _cels_att_k); \
-            } \
-            CelsExitGroup(_cels_att_s); \
-        } else { \
-            CelsPruneSubtreeByKey(_cels_att_s, _cels_att_k); \
-        } \
-    } while (0)
+#define _CEL_ATTACH_3(sess, Comp, Lifecycle) \
+    CelsSessionAttachComposition((CelsSession*)(sess), CelsHashKey(#Comp), _cels_body_##Comp, _cels_lifecycle_##Lifecycle, NULL)
 
-#define _CEL_ATTACH_4(Comp, key, state_ptr, Lifecycle) \
-    do { \
-        CelsSession *_cels_att_s = CelsGetCurrentSession(); \
-        uint64_t _cels_att_k = (uint64_t)(key); \
-        bool _cels_att_alive = _cels_lifecycle_##Lifecycle((void*)(state_ptr)); \
-        if (_cels_att_alive) { \
-            if (CelsEnterComposition(_cels_att_s, _cels_att_k)) { \
-                _cels_body_##Comp(_cels_att_s, _cels_att_k); \
-            } \
-            CelsExitGroup(_cels_att_s); \
-        } else { \
-            CelsPruneSubtreeByKey(_cels_att_s, _cels_att_k); \
-        } \
-    } while (0)
+#define _CEL_ATTACH_4(sess, Comp, state_ptr, Lifecycle) \
+    CelsSessionAttachComposition((CelsSession*)(sess), CelsHashKey(#Comp), _cels_body_##Comp, _cels_lifecycle_##Lifecycle, (void*)(state_ptr))
 
 #define CEL_Attach(...) \
     _CEL_GET_MACRO_4(__VA_ARGS__, _CEL_ATTACH_4, _CEL_ATTACH_3, _CEL_ATTACH_2)(__VA_ARGS__)

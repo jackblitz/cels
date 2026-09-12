@@ -178,11 +178,41 @@ CelsSessionDestroy(CelsSession *s)
     memset(s, 0, sizeof(*s));
 }
 
+void
+CelsSessionAttachComposition(CelsSession *s,
+                             uint64_t key,
+                             void (*body)(CelsSession *s, uint64_t key),
+                             bool (*eval)(void *userData),
+                             void *statePtr)
+{
+    assert(s != NULL);
+    assert(body != NULL);
+
+    for (uint32_t i = 0; i < s->attachedCount; ++i) {
+        if (s->attachedCompositions[i].key == key) {
+            s->attachedCompositions[i].body = body;
+            s->attachedCompositions[i].lifecycleEval = eval;
+            s->attachedCompositions[i].statePtr = statePtr;
+            s->attachedCompositions[i].isAttached = true;
+            return;
+        }
+    }
+
+    assert(s->attachedCount < CELS_MAX_ATTACHED_COMPOSITIONS && "Exceeded CELS_MAX_ATTACHED_COMPOSITIONS");
+    s->attachedCompositions[s->attachedCount++] = (CelsAttachedComposition){
+        .key = key,
+        .body = body,
+        .lifecycleEval = eval,
+        .statePtr = statePtr,
+        .isAttached = true
+    };
+}
+
 CelsResult
 CelsSessionRecompose(CelsSession *s)
 {
     assert(s != NULL);
-    if (s->root == NULL) {
+    if (s->root == NULL && s->attachedCount == 0) {
         return CELS_ERROR_INVALID_STATE;
     }
 
@@ -209,7 +239,30 @@ CelsSessionRecompose(CelsSession *s)
         s->currentSlotOffset = 0;
         s->logicalCursor = 0;
 
-        s->root(s);
+        if (s->root != NULL) {
+            s->root(s);
+        }
+
+        for (uint32_t i = 0; i < s->attachedCount; ++i) {
+            CelsAttachedComposition *const comp = &s->attachedCompositions[i];
+            if (!comp->isAttached) {
+                continue;
+            }
+
+            bool alive = true;
+            if (comp->lifecycleEval != NULL) {
+                alive = comp->lifecycleEval(comp->statePtr);
+            }
+
+            if (alive) {
+                if (CelsEnterComposition(s, comp->key)) {
+                    comp->body(s, comp->key);
+                }
+                CelsExitGroup(s);
+            } else {
+                CelsPruneSubtreeByKey(s, comp->key);
+            }
+        }
 
         if (s->currentDepth != 0) {
             s->isRecomposing = false;

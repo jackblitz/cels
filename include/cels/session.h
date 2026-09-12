@@ -94,6 +94,16 @@ typedef struct CelsSlotAllocation {
     uint32_t size;
 } CelsSlotAllocation;
 
+#define CELS_MAX_ATTACHED_COMPOSITIONS 8u
+
+typedef struct CelsAttachedComposition {
+    uint64_t key;
+    void (*body)(CelsSession *s, uint64_t key);
+    bool (*lifecycleEval)(void *userData);
+    void *statePtr;
+    bool isAttached;
+} CelsAttachedComposition;
+
 /**
  * Primary session orchestrating composition, traversal, and reactive state.
  */
@@ -141,44 +151,20 @@ struct CelsSession {
 
     uint32_t maxDrainIterations;
 
-    /* Attached Composition Lifecycle */
-    void *attachedStatePtr;
-    bool (*attachedEval)(void *userData);
-    bool hasAttachedLifecycle;
+    /* Attached Compositions */
+    CelsAttachedComposition attachedCompositions[CELS_MAX_ATTACHED_COMPOSITIONS];
+    uint32_t attachedCount;
 };
 
 /* ========================================================================= */
-/* Attached Composition Lifecycle Helpers                                    */
+/* Attached Composition Functions                                            */
 /* ========================================================================= */
 
-static inline void
-CelsAttachLifecycle(CelsSession *s, void *statePtr, bool (*eval)(void *userData))
-{
-    if (s != NULL) {
-        s->attachedStatePtr = statePtr;
-        s->attachedEval = eval;
-        s->hasAttachedLifecycle = (eval != NULL);
-    }
-}
-
-static inline bool
-CelsEvalAttachedLifecycle(CelsSession *s)
-{
-    if (s == NULL || !s->hasAttachedLifecycle || s->attachedEval == NULL) {
-        return true;
-    }
-    return s->attachedEval(s->attachedStatePtr);
-}
-
-static inline void
-CelsClearAttachedLifecycle(CelsSession *s)
-{
-    if (s != NULL) {
-        s->hasAttachedLifecycle = false;
-        s->attachedStatePtr = NULL;
-        s->attachedEval = NULL;
-    }
-}
+void CelsSessionAttachComposition(CelsSession *s,
+                                  uint64_t key,
+                                  void (*body)(CelsSession *s, uint64_t key),
+                                  bool (*eval)(void *userData),
+                                  void *statePtr);
 
 /* ========================================================================= */
 /* Session Lifecycle Functions                                               */
