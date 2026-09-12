@@ -90,7 +90,7 @@ typedef void (*CelsRootFn)(CelsSession *s);
 
 typedef struct CelsStateHeader {
     uint16_t watcherCount;
-    uint32_t watcherKeys[CELS_MAX_WATCHERS];
+    uint64_t watcherKeys[CELS_MAX_WATCHERS];
 } CelsStateHeader;
 
 typedef struct CelsStateCell {
@@ -104,23 +104,32 @@ typedef struct CelsStateCell {
 
 typedef struct CelsObserverDesc {
     size_t size;
-    void (*onRemembered)(void *observer, CelsSession *s);
-    void (*onForgotten)(void *observer, CelsSession *s);
+    union {
+        void (*onRemembered)(void *observer, CelsSession *s);
+        void (*onCreate)(void *observer, CelsSession *s);
+        void (*OnCreate)(void *observer, CelsSession *s);
+    };
+    union {
+        void (*onForgotten)(void *observer, CelsSession *s);
+        void (*onDestroy)(void *observer, CelsSession *s);
+        void (*OnDestroy)(void *observer, CelsSession *s);
+    };
 } CelsObserverDesc;
 
 typedef struct CelsCleanupHook {
-    uint32_t groupKey;
+    uint64_t groupKey;
     void    *instance;
     void   (*onForgotten)(void *instance, CelsSession *s);
 } CelsCleanupHook;
 
 typedef struct CelsSlotGroup {
-    uint32_t key;
-    uint16_t parentIndex;
-    uint16_t groupSize;
+    uint64_t key;
+    uint32_t parentIndex;
+    uint32_t groupSize;
     uint32_t dataOffset;
     uint16_t dataSize;
     uint16_t flags;
+    uint32_t reserved;
 } CelsSlotGroup;
 
 typedef struct CelsSessionConfig {
@@ -139,7 +148,9 @@ struct CelsSession {
 
     uint8_t  activeStack[CELS_MAX_DEPTH];
     uint32_t groupIndexStack[CELS_MAX_DEPTH];
-    uint16_t oldGroupSizeStack[CELS_MAX_DEPTH];
+    uint32_t oldGroupSizeStack[CELS_MAX_DEPTH];
+    uint32_t slotOffsetStack[CELS_MAX_DEPTH];
+
 
     /* Dual Gap Buffer: Structural Groups */
     CelsSlotGroup groups[CELS_MAX_GROUPS];
@@ -160,7 +171,7 @@ struct CelsSession {
     uint32_t        cleanupCount;
 
     /* Invalidation Queue */
-    uint32_t invalidationQueue[CELS_MAX_QUEUE];
+    uint64_t invalidationQueue[CELS_MAX_QUEUE];
     uint32_t queueCount;
 
     uint32_t maxDrainIterations;
@@ -168,24 +179,25 @@ struct CelsSession {
 };
 
 /* ========================================================================= */
-/* Key Utilities (FNV-1a Hash)                                               */
+/* Key Utilities (64-bit FNV-1a Hash)                                        */
 /* ========================================================================= */
 
-static inline uint32_t CelsHashKey(const char *str) {
-    uint32_t hash = 2166136261u;
+static inline uint64_t CelsHashKey(const char *str) {
+    uint64_t hash = 14695981039346656037ULL;
     while (*str) {
         hash ^= (uint8_t)*str++;
-        hash *= 16777619u;
+        hash *= 1099511628211ULL;
     }
     return hash;
 }
 
-static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
-    return baseKey ^ (index * 0x9e3779b9u);
+static inline uint64_t CelsKeyIndex(uint64_t baseKey, uint64_t index) {
+    return baseKey ^ (index * 0x517cc1b727220a95ULL);
 }
 
 #define CEL_KEY(str) CelsHashKey(str)
-#define CEL_KeyIndex(baseKey, index) CelsKeyIndex((baseKey), (index))
+#define CEL_KeyIndex(baseKey, index) CelsKeyIndex((uint64_t)(baseKey), (uint64_t)(index))
+#define CEL_AUTO_KEY() (CelsHashKey(__FILE__) ^ ((uint64_t)__LINE__ * 0x517cc1b727220a95ULL))
 
 /* ========================================================================= */
 /* Macro Helpers for Overloading & Arity Dispatch                            */
@@ -233,7 +245,7 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
     for (Type *it = (var), *_cels_outer = (Type*)0; \
          !_cels_outer; \
          _cels_outer = (Type*)1) \
-        for (uint32_t _cels_k = (key); _cels_k != 0; _cels_k = 0) \
+        for (uint64_t _cels_k = (key); _cels_k != 0; _cels_k = 0) \
             for (int _cels_ent = CelsEnterComposition(CelsGetCurrentSession(), _cels_k), \
                      _cels_alive = (_cels_ent ? _cels_lifecycle_##Lifecycle(it) : 0), \
                      _cels_run = _cels_alive, \
@@ -243,8 +255,11 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
                                   (!_cels_alive ? CelsPruneSubtreeByKey(CelsGetCurrentSession(), _cels_k) : (void)0))) \
                 for ( ; _cels_run; _cels_run = 0)
 
+#define _CEL_COMPOSITION_3(Type, var, Lifecycle) \
+    _CEL_COMPOSITION_4(Type, CelsKeyIndex(CelsHashKey(#Type), (uint64_t)(uintptr_t)(var)), var, Lifecycle)
+
 #define CEL_Composition(...) \
-    _CEL_GET_MACRO_COMP(__VA_ARGS__, _CEL_COMPOSITION_4, _CEL_COMPOSITION_3_ERROR, _CEL_COMPOSITION_2, _CEL_COMPOSITION_1)(__VA_ARGS__)
+    _CEL_GET_MACRO_COMP(__VA_ARGS__, _CEL_COMPOSITION_4, _CEL_COMPOSITION_3, _CEL_COMPOSITION_2, _CEL_COMPOSITION_1)(__VA_ARGS__)
 
 #define _CEL_IS_s_s ~, 1
 #define _CEL_IS_s_session ~, 1
@@ -298,16 +313,31 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
         _CEL_CLOSE_CHOOSER(dummy, ##__VA_ARGS__, _CEL_CLOSE_1, _CEL_CLOSE_0)(__VA_ARGS__); \
     } while (0)
 
+#define cel_close(...) CEL_Close(__VA_ARGS__)
+
 #define CEL_Observer(Type) \
     typedef struct Type Type; \
     struct Type
 
-#define cel_remember_observer(session, Type, on_remembered, on_forgotten) \
+#define _cel_rem_obs_sess(session, Type, on_rem, on_forg) \
     ((Type*)CelsResolveSlot((session), sizeof(Type), NULL, &(CelsObserverDesc){ \
         .size         = sizeof(Type), \
-        .onRemembered = (void(*)(void*, CelsSession*))(on_remembered), \
-        .onForgotten  = (void(*)(void*, CelsSession*))(on_forgotten) \
+        .OnCreate     = (void(*)(void*, CelsSession*))(on_rem), \
+        .OnDestroy    = (void(*)(void*, CelsSession*))(on_forg) \
     }))
+
+#define _cel_rem_obs_curr(Type, on_rem, on_forg) \
+    _cel_rem_obs_sess(CelsGetCurrentSession(), Type, on_rem, on_forg)
+
+#define _CEL_REM_OBS_DISPATCH_1(a, Type, on_rem, on_forg) _cel_rem_obs_sess(a, Type, on_rem, on_forg)
+#define _CEL_REM_OBS_DISPATCH_0(Type, on_rem, on_forg, ...) _cel_rem_obs_curr(Type, on_rem, on_forg)
+#define _CEL_REM_OBS_DISPATCH_2(is_s, ...) _CEL_REM_OBS_DISPATCH_##is_s(__VA_ARGS__)
+#define _CEL_REM_OBS_DISPATCH(is_s, ...)   _CEL_REM_OBS_DISPATCH_2(is_s, __VA_ARGS__)
+
+#define cel_remember_observer(...) \
+    _CEL_REM_OBS_DISPATCH(_CEL_IS_SESSION_ARG(_CEL_FIRST(__VA_ARGS__)), __VA_ARGS__)
+
+#define cel_observer(...) cel_remember_observer(__VA_ARGS__)
 
 /* ========================================================================= */
 /* Persistent Component-Local Memory (cel_remember)                          */
@@ -359,10 +389,15 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
 #define cel_watch(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_WATCH_2, _CEL_WATCH_1)(__VA_ARGS__)
 
 /* Scoped mutation: infers struct type and exposes this-> */
-#define cel_mutate(session, state_ptr) \
+#define _cel_mutate_2(session, state_ptr) \
     for (__typeof__(*(state_ptr)) _cel_old_ = *(state_ptr), *this = (state_ptr); \
          this != NULL; \
          CelsStateCommitMutation((session), this, &_cel_old_, sizeof(*this)), this = NULL)
+
+#define _cel_mutate_1(state_ptr) \
+    _cel_mutate_2(CelsGetCurrentSession(), (state_ptr))
+
+#define cel_mutate(...) _CEL_GET_MACRO_2(__VA_ARGS__, _cel_mutate_2, _cel_mutate_1)(__VA_ARGS__)
 
 /* Query an active observer resource (native handles/observers only) by key */
 #define CEL_FindObserver(session, key, Type) \
@@ -373,8 +408,8 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
 /* ========================================================================= */
 
 #define _CEL_COMPOSABLE_DEF(FnName, keyName) \
-    static void _cels_body_##FnName(CelsSession *s, uint32_t keyName); \
-    static inline void FnName(uint32_t keyName) { \
+    static void _cels_body_##FnName(CelsSession *s, uint64_t keyName); \
+    static inline void FnName(uint64_t keyName) { \
         CelsSession *s = CelsGetCurrentSession(); \
         assert(s != NULL && #FnName " called outside of an active CelsSession"); \
         if (CelsEnterComposable(s, keyName)) { \
@@ -382,14 +417,14 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
         } \
         CelsExitGroup(s); \
     } \
-    static inline void FnName##_s(CelsSession *s, uint32_t keyName) { \
+    static inline void FnName##_s(CelsSession *s, uint64_t keyName) { \
         assert(s != NULL && #FnName "_s called with NULL session"); \
         if (CelsEnterComposable(s, keyName)) { \
             _cels_body_##FnName(s, keyName); \
         } \
         CelsExitGroup(s); \
     } \
-    static void _cels_body_##FnName(CelsSession *s, uint32_t keyName)
+    static void _cels_body_##FnName(CelsSession *s, uint64_t keyName)
 
 #define CEL_Composeable(FnName, keyName)        _CEL_COMPOSABLE_DEF(FnName, keyName)
 #define CEL_DefineComposable(FnName, keyName)   _CEL_COMPOSABLE_DEF(FnName, keyName)
@@ -397,8 +432,8 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
 #define CEL_Composable_Def(FnName, keyName)     _CEL_COMPOSABLE_DEF(FnName, keyName)
 
 #define CEL_Composable_Props(FnName, keyName, PropsType, propsName) \
-    static void _cels_body_##FnName(CelsSession *s, uint32_t keyName, PropsType propsName); \
-    static inline void FnName(uint32_t keyName, PropsType propsName) { \
+    static void _cels_body_##FnName(CelsSession *s, uint64_t keyName, PropsType propsName); \
+    static inline void FnName(uint64_t keyName, PropsType propsName) { \
         CelsSession *s = CelsGetCurrentSession(); \
         assert(s != NULL && #FnName " called outside of an active CelsSession"); \
         if (CelsEnterComposable(s, keyName)) { \
@@ -406,14 +441,14 @@ static inline uint32_t CelsKeyIndex(uint32_t baseKey, uint32_t index) {
         } \
         CelsExitGroup(s); \
     } \
-    static inline void FnName##_s(CelsSession *s, uint32_t keyName, PropsType propsName) { \
+    static inline void FnName##_s(CelsSession *s, uint64_t keyName, PropsType propsName) { \
         assert(s != NULL && #FnName "_s called with NULL session"); \
         if (CelsEnterComposable(s, keyName)) { \
             _cels_body_##FnName(s, keyName, propsName); \
         } \
         CelsExitGroup(s); \
     } \
-    static void _cels_body_##FnName(CelsSession *s, uint32_t keyName, PropsType propsName)
+    static void _cels_body_##FnName(CelsSession *s, uint64_t keyName, PropsType propsName)
 
 #define CEL_Composeable_Props(FnName, keyName, PropsType, propsName) \
     CEL_Composable_Props(FnName, keyName, PropsType, propsName)
@@ -444,38 +479,16 @@ void        CelsSessionSetRoot(CelsSession *s, CelsRootFn rootFn);
 void        CelsSessionDestroy(CelsSession *s);
 CelsResult  CelsSessionRecompose(CelsSession *s);
 
-bool        CelsEnterComposition(CelsSession *s, uint32_t rootKey);
-bool        CelsEnterComposable(CelsSession *s, uint32_t key);
+bool        CelsEnterComposition(CelsSession *s, uint64_t rootKey);
+bool        CelsEnterComposable(CelsSession *s, uint64_t key);
 void        CelsExitGroup(CelsSession *s);
 void        CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex);
-void        CelsPruneSubtreeByKey(CelsSession *s, uint32_t key);
+void        CelsPruneSubtreeByKey(CelsSession *s, uint64_t key);
 
 void*       CelsResolveSlot(CelsSession *s, size_t size, const void *initVal, const CelsObserverDesc *desc);
 void        CelsStateRead(CelsSession *s, const void *statePtr);
 void        CelsStateCommitMutation(CelsSession *s, const void *statePtr, const void *oldVal, size_t size);
-void*       CelsFindObserver(CelsSession *s, uint32_t key);
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* CELS_H */
-
-/* ========================================================================= */
-/* ENGINE IMPLEMENTATION                                                     */
-/* ========================================================================= */
-
-#ifdef CELS_IMPLEMENTATION
-
-static CELS_THREAD_LOCAL CelsSession *cels_current_session = NULL;
-
-CelsSession* CelsGetCurrentSession(void) {
-    return cels_current_session;
-}
-
-void CelsSetCurrentSession(CelsSession *s) {
-    cels_current_session = s;
-}
+void*       CelsFindObserver(CelsSession *s, uint64_t key);
 
 static inline uint32_t CelsGetLogicalGroupCount(const CelsSession *s) {
     return CELS_MAX_GROUPS - (s->groupsGapEnd - s->groupsGapStart);
@@ -495,6 +508,104 @@ static inline CelsSlotGroup* CelsGetGroup(CelsSession *s, uint32_t logical) {
 
 static inline uint8_t* CelsGetData(CelsSession *s, uint32_t logicalOffset) {
     return &s->dataArena[CelsDataLogicalToPhysical(s, logicalOffset)];
+}
+
+static inline bool CelsIsFreshMount(CelsSession *s) {
+    if (!s || s->currentDepth == 0) return false;
+    return (CelsGetGroup(s, s->currentGroupIndex)->flags & CELS_FLAG_FRESH_MOUNT) != 0;
+}
+
+#define cel_init if (CelsIsFreshMount(CelsGetCurrentSession()))
+#define cel_spawn cel_init
+#define cel_once  cel_init
+
+/* ========================================================================= */
+/* Flecs ECS Integration (CEL_Entity)                                        */
+/* ========================================================================= */
+
+#if defined(flecs_STATIC) || defined(FLECS_H) || defined(flecs_EXPORTS) || defined(CELS_ENABLE_FLECS)
+#ifndef _CELS_FLECS_INTEGRATION_DEFINED
+#define _CELS_FLECS_INTEGRATION_DEFINED
+
+typedef struct CelsEntitySlot {
+    ecs_world_t  *world;
+    ecs_entity_t  entity;
+} CelsEntitySlot;
+
+static inline void _cels_entity_cleanup(void *instance, CelsSession *s) {
+    (void)s;
+    CelsEntitySlot *slot = (CelsEntitySlot*)instance;
+    if (slot && slot->world && ecs_is_valid(slot->world, slot->entity)) {
+        ecs_delete(slot->world, slot->entity);
+    }
+    if (slot) {
+        slot->entity = 0;
+        slot->world = NULL;
+    }
+}
+
+static inline ecs_entity_t _cels_resolve_entity(
+    CelsSession *s, 
+    ecs_world_t *world, 
+    const char *name, 
+    uint64_t key
+) {
+    (void)key;
+    bool isMount = CelsIsFreshMount(s);
+
+    CelsEntitySlot *slot = (CelsEntitySlot*)CelsResolveSlot(
+        s, 
+        sizeof(CelsEntitySlot), 
+        NULL, 
+        &(CelsObserverDesc){
+            .size = sizeof(CelsEntitySlot),
+            .onForgotten = _cels_entity_cleanup
+        }
+    );
+
+    if (isMount && slot) {
+        slot->world = world;
+        slot->entity = ecs_new(world);
+        if (name && name[0] != '\0') {
+            ecs_set_name(world, slot->entity, name);
+        }
+    }
+    return slot ? slot->entity : 0;
+}
+
+#define CEL_Entity(world, name, key) \
+    for (int _cels_ent_run = (CelsEnterComposable(CelsGetCurrentSession(), (uint64_t)(key)) ? 1 : 0), _cels_ent_done = 0; \
+         !_cels_ent_done; \
+         _cels_ent_done = 1, CelsExitGroup(CelsGetCurrentSession())) \
+        for ( ; _cels_ent_run; _cels_ent_run = 0) \
+            for (ecs_entity_t it = _cels_resolve_entity(CelsGetCurrentSession(), (world), (name), (uint64_t)(key)); \
+                 it != 0; \
+                 it = 0)
+
+#endif /* _CELS_FLECS_INTEGRATION_DEFINED */
+#endif /* Flecs ECS Integration */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* CELS_H */
+
+/* ========================================================================= */
+/* ENGINE IMPLEMENTATION                                                     */
+/* ========================================================================= */
+
+#if defined(CELS_IMPLEMENTATION) && !defined(CELS_IMPLEMENTATION_INCLUDED)
+#define CELS_IMPLEMENTATION_INCLUDED
+
+static CELS_THREAD_LOCAL CelsSession *cels_current_session = NULL;
+
+CelsSession* CelsGetCurrentSession(void) {
+    return cels_current_session;
+}
+
+void CelsSetCurrentSession(CelsSession *s) {
+    cels_current_session = s;
 }
 
 static void CelsMoveGroupGap(CelsSession *s, uint32_t targetLogical) {
@@ -537,7 +648,7 @@ static void CelsMoveDataGap(CelsSession *s, uint32_t targetLogical) {
     }
 }
 
-static void CelsUnsubscribeGroupWatchers(CelsSession *s, uint32_t groupKey) {
+static void CelsUnsubscribeGroupWatchers(CelsSession *s, uint64_t groupKey) {
     for (uint32_t i = 0; i < s->stateCount; ++i) {
         CelsStateHeader *header = &s->states[i].header;
         for (uint16_t w = 0; w < header->watcherCount; ++w) {
@@ -549,7 +660,7 @@ static void CelsUnsubscribeGroupWatchers(CelsSession *s, uint32_t groupKey) {
     }
 }
 
-static void CelsFireCleanupsForGroup(CelsSession *s, uint32_t groupKey) {
+static void CelsFireCleanupsForGroup(CelsSession *s, uint64_t groupKey) {
     for (uint32_t i = s->cleanupCount; i > 0; --i) {
         uint32_t idx = i - 1;
         if (s->cleanups[idx].groupKey == groupKey) {
@@ -596,7 +707,7 @@ void CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex) {
         while (true) {
             CelsSlotGroup *p = CelsGetGroup(s, curr);
             assert(p->groupSize >= groupsToRemove);
-            p->groupSize -= (uint16_t)groupsToRemove;
+            p->groupSize -= groupsToRemove;
 
             if (curr == 0) break;
             curr = p->parentIndex;
@@ -604,7 +715,7 @@ void CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex) {
     }
 }
 
-void CelsPruneSubtreeByKey(CelsSession *s, uint32_t key) {
+void CelsPruneSubtreeByKey(CelsSession *s, uint64_t key) {
     if (!s) return;
     uint32_t totalGroups = CelsGetLogicalGroupCount(s);
     for (uint32_t i = 0; i < totalGroups; ++i) {
@@ -619,12 +730,16 @@ static void CelsDrainInvalidationQueue(CelsSession *s) {
     uint32_t totalGroups = CelsGetLogicalGroupCount(s);
 
     while (s->queueCount > 0) {
-        uint32_t targetKey = s->invalidationQueue[--s->queueCount];
+        uint64_t targetKey = s->invalidationQueue[--s->queueCount];
 
         for (uint32_t i = 0; i < totalGroups; ++i) {
             CelsSlotGroup *g = CelsGetGroup(s, i);
             if (g->key == targetKey) {
                 g->flags |= CELS_FLAG_INVALIDATED;
+
+                for (uint32_t c = i + 1; c <= i + g->groupSize && c < totalGroups; ++c) {
+                    CelsGetGroup(s, c)->flags |= CELS_FLAG_INVALIDATED;
+                }
 
                 if (i > 0) {
                     uint32_t curr = g->parentIndex;
@@ -720,7 +835,7 @@ CelsResult CelsSessionRecompose(CelsSession *s) {
     return CELS_OK;
 }
 
-bool CelsEnterComposition(CelsSession *s, uint32_t rootKey) {
+bool CelsEnterComposition(CelsSession *s, uint64_t rootKey) {
     assert(s->currentDepth == 0 && "CEL_Composition cannot be nested");
     cels_current_session = s;
     uint32_t depth = s->currentDepth++;
@@ -736,7 +851,8 @@ bool CelsEnterComposition(CelsSession *s, uint32_t rootKey) {
             .groupSize = 0,
             .dataOffset = 0,
             .dataSize = 0,
-            .flags = CELS_FLAG_FRESH_MOUNT
+            .flags = CELS_FLAG_FRESH_MOUNT,
+            .reserved = 0
         };
         s->groupsGapStart = 1;
     } else {
@@ -756,12 +872,14 @@ bool CelsEnterComposition(CelsSession *s, uint32_t rootKey) {
     return true;
 }
 
-bool CelsEnterComposable(CelsSession *s, uint32_t key) {
+bool CelsEnterComposable(CelsSession *s, uint64_t key) {
     assert(s->currentDepth > 0 && "CEL_Composable must be nested within CEL_Composition");
     assert(s->currentDepth < CELS_MAX_DEPTH && "Exceeded CELS_MAX_DEPTH");
 
     uint32_t depth = s->currentDepth++;
+    s->slotOffsetStack[depth - 1] = s->currentSlotOffset;
     uint32_t totalGroups = CelsGetLogicalGroupCount(s);
+
     uint32_t cursor = s->logicalCursor;
 
     if (cursor < totalGroups && CelsGetGroup(s, cursor)->key == key) {
@@ -811,11 +929,12 @@ bool CelsEnterComposable(CelsSession *s, uint32_t key) {
 
     s->groups[s->groupsGapStart] = (CelsSlotGroup){
         .key = key,
-        .parentIndex = (uint16_t)parentIdx,
+        .parentIndex = parentIdx,
         .groupSize = 0,
         .dataOffset = s->dataGapStart,
         .dataSize = 0,
-        .flags = CELS_FLAG_FRESH_MOUNT
+        .flags = CELS_FLAG_FRESH_MOUNT,
+        .reserved = 0
     };
     s->groupsGapStart++;
 
@@ -854,7 +973,9 @@ void CelsExitGroup(CelsSession *s) {
 
     if (depth > 0) {
         s->currentGroupIndex = s->groupIndexStack[depth - 1];
+        s->currentSlotOffset = s->slotOffsetStack[depth - 1];
     }
+
 }
 
 void* CelsResolveSlot(CelsSession *s, size_t size, const void *initVal, const CelsObserverDesc *desc) {
@@ -958,7 +1079,7 @@ void CelsStateCommitMutation(CelsSession *s, const void *statePtr, const void *o
     }
 }
 
-void* CelsFindObserver(CelsSession *s, uint32_t key) {
+void* CelsFindObserver(CelsSession *s, uint64_t key) {
     if (!s) return NULL;
     for (uint32_t i = 0; i < s->cleanupCount; ++i) {
         if (s->cleanups[i].groupKey == key) {

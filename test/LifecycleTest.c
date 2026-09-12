@@ -60,14 +60,16 @@ static Enemy g_goblin = { .hp = 100, .isAlive = true };
 static int   g_renderCount = 0;
 
 void GoblinApp(CelsSession *s) {
-    CEL_Composition(Enemy, CEL_KEY("GoblinHost"), &g_goblin, EnemyLifeCycle) {
+    // 3-arg auto-key: No manual key needed! Key is automatically derived from &g_goblin
+    CEL_Composition(Enemy, &g_goblin, EnemyLifeCycle) {
         g_renderCount++;
         printf("  [GoblinApp] Rendering Goblin! HP = %d (Render Pass #%d)\n", it->hp, g_renderCount);
 
         cel_remember_observer(s, EnemyTexture, Texture_OnRemembered, Texture_OnForgotten);
 
-        CEL_Composable(CEL_KEY("HealthBar")) {
-            printf("    [Child] Rendering HealthBar widget\n");
+        // Uses CEL_AUTO_KEY() for the child composable
+        CEL_Composable(CEL_AUTO_KEY()) {
+            printf("    [Child] Rendering HealthBar widget (auto-keyed)\n");
         }
     }
 }
