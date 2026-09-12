@@ -6,3 +6,16 @@
 /cmake-build-debug/
 
 /.internaldocs/
+
+# Private Docs
+/docs/
+docs/
+docs/coding-standards-c99.md
+
+
+# Benchmark outputs
+/benchmark/
+/test/benchmark/out/*.html
+/test/benchmark/out/benchmark_v*.json
+/test/benchmark/out/test_*
+

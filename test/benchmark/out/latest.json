@@ -1,0 +1,40 @@
+{
+  "cels_version": {
+    "string": "0.1.0",
+    "code": 65537,
+    "major": 0,
+    "minor": 1,
+    "patch": 0,
+    "build": 1
+  },
+  "metadata": {
+    "timestamp": 1789246803,
+    "iso_date": "2026-09-12T21:00:03Z",
+    "os": "Windows",
+    "compiler": "GCC 15.2.0",
+    "arch": "x86_64"
+  },
+  "benchmarks": [
+    {
+      "name": "Test_Workload",
+      "description": "Test description",
+      "sessions": 1,
+      "iterations": 100,
+      "total_time_ms": 1.250,
+      "ops_per_sec": 80000.0,
+      "latency_us": {
+        "min": 0.01,
+        "mean": 0.02,
+        "p50": 0.02,
+        "p90": 0.03,
+        "p95": 0.04,
+        "p99": 0.05,
+        "max": 0.10
+      },
+      "memory": {
+        "active_groups_peak": 10,
+        "data_arena_peak_bytes": 128
+      }
+    }
+  ]
+}
