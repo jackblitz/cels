@@ -140,7 +140,45 @@ struct CelsSession {
     uint32_t queueCount;
 
     uint32_t maxDrainIterations;
+
+    /* Attached Composition Lifecycle */
+    void *attachedStatePtr;
+    bool (*attachedEval)(void *userData);
+    bool hasAttachedLifecycle;
 };
+
+/* ========================================================================= */
+/* Attached Composition Lifecycle Helpers                                    */
+/* ========================================================================= */
+
+static inline void
+CelsAttachLifecycle(CelsSession *s, void *statePtr, bool (*eval)(void *userData))
+{
+    if (s != NULL) {
+        s->attachedStatePtr = statePtr;
+        s->attachedEval = eval;
+        s->hasAttachedLifecycle = (eval != NULL);
+    }
+}
+
+static inline bool
+CelsEvalAttachedLifecycle(CelsSession *s)
+{
+    if (s == NULL || !s->hasAttachedLifecycle || s->attachedEval == NULL) {
+        return true;
+    }
+    return s->attachedEval(s->attachedStatePtr);
+}
+
+static inline void
+CelsClearAttachedLifecycle(CelsSession *s)
+{
+    if (s != NULL) {
+        s->hasAttachedLifecycle = false;
+        s->attachedStatePtr = NULL;
+        s->attachedEval = NULL;
+    }
+}
 
 /* ========================================================================= */
 /* Session Lifecycle Functions                                               */

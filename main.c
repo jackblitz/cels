@@ -54,22 +54,12 @@ static void OnIncrementClick(void *userData, CelsSession *s) {
 
 /* --- Reusable Composable Component Definitions --- */
 
-// 1. Container Composable: manages SDL window lifecycle and hosts child components
-CEL_Composeable(CEL_SDLWindow, key) {
-    cel_lifecycle_state(s, SdlWindow, SdlWindow_OnCreated, SdlWindow_OnDestroyed);
-}
-
-// 2. Leaf Composable: manages its own local remembered state across recompositions
+// 1. Leaf Composable: manages its own local remembered state across recompositions
 CEL_Composeable(CEL_CounterText, key) {
     // Persistent Local Memory:
     // cel_remember allocates private, self-contained slots for this component.
     int  *clickCount = cel_remember(int, 0);
     bool *isHovered  = cel_remember(bool, false);
-
-    // cel_spawn runs ONLY when this composable is first spawned/mounted:
-    cel_spawn {
-        printf("    [Spawn] CEL_CounterText spawned into slot table!\n");
-    }
 
     int  count   = cel_watch(clickCount);
     bool hovered = cel_watch(isHovered);
@@ -77,13 +67,10 @@ CEL_Composeable(CEL_CounterText, key) {
     printf("    -> Window is open! Click count: %d (hovered: %s)\n", 
            count, hovered ? "true" : "false");
 
-    // Declarative Spawning: BadgeNotification only exists when count > 0.
-    // When count transitions 0 -> 1, this child composable spawns into the tree!
+    // Dynamic child composable: BadgeNotification only rendered when count > 0
     if (count > 0) {
         CEL_Composable(CEL_KEY("BadgeNotification")) {
-            cel_spawn {
-                printf("    [Spawn] BadgeNotification dynamically spawned! (count = %d)\n", count);
-            }
+            printf("    [BadgeNotification] Notification badge active (count = %d)\n", count);
         }
     }
 
@@ -92,6 +79,12 @@ CEL_Composeable(CEL_CounterText, key) {
         .onClick = OnIncrementClick,
         .userData = clickCount
     };
+}
+
+// 2. Root Window Composable Component: hosts SDL window lifecycle & children
+CEL_Composeable(CEL_Window, key) {
+    cel_lifecycle_state(s, SdlWindow, SdlWindow_OnCreated, SdlWindow_OnDestroyed);
+    CEL_CounterText(CEL_KEY("CounterText"));
 }
 
 /* --- Top-Level Composition Lifecycle --- */
@@ -112,14 +105,9 @@ CEL_LifeCycle(WindowLifeCycle, WindowState) {
 
 void RootApp(CelsSession *s) {
     (void)s;
-    // Spawns a reactive Composition bound to WindowState & WindowLifeCycle.
-    // When WindowLifeCycle calls cel_destroy(), CELS automatically despawns the Composition.
-    CEL_Composition(WindowState, &g_mainWindow, WindowLifeCycle) {
-        // Container composable with children nested inside
-        CEL_Composable(CEL_SDLWindow, CEL_KEY("MainWindow")) {
-            CEL_CounterText(CEL_KEY("CounterText"));
-        }
-    }
+    // Spawns CEL_Window composition bound to WindowState & WindowLifeCycle
+    CEL_Attach(&g_mainWindow, WindowLifeCycle);
+    CEL_Composition(CEL_Window, CEL_KEY("MainWindow"));
 }
 
 /* --- Main --- */
