@@ -222,6 +222,13 @@ GroupAt(const CelsSlotTable *table, CelsComposableId composable)
     return &table->groups[physical];
 }
 
+/**
+ * Reads the invalidation and lifecycle flags for a group.
+ *
+ * @param table      Pointer to the slot table. May be NULL.
+ * @param composable Logical group index.
+ * @return The group's CelsGroupFlags bitmask, or CELS_GROUP_FLAG_NONE if invalid.
+ */
 uint16_t
 CelsSlotTableGroupFlags(const CelsSlotTable *table, CelsComposableId composable)
 {
@@ -233,6 +240,17 @@ CelsSlotTableGroupFlags(const CelsSlotTable *table, CelsComposableId composable)
     return (group != NULL) ? group->flags : (uint16_t)CELS_GROUP_FLAG_NONE;
 }
 
+/**
+ * Marks a group as invalidated and propagates dirty flags upward to the root.
+ *
+ * Sets CELS_GROUP_FLAG_INVALIDATED on the targeted group and sets
+ * CELS_GROUP_FLAG_CONTAINS_INVALIDATED on every ancestor group by climbing parentIndex.
+ * Halts at the root, at an ancestor already marked, or if cycle protection limit is reached.
+ *
+ * @param table      Pointer to the slot table. Non-NULL.
+ * @param composable Logical group index to invalidate.
+ * @return CELS_OK, CELS_ERROR_INVALID_ARGUMENT, or CELS_ERROR_INDEX_OUT_OF_BOUNDS.
+ */
 CelsResult
 CelsSlotTableGroupInvalidate(CelsSlotTable *table, CelsComposableId composable)
 {
@@ -269,6 +287,14 @@ CelsSlotTableGroupInvalidate(CelsSlotTable *table, CelsComposableId composable)
     return CELS_OK;
 }
 
+/**
+ * Clears invalidation flags on a specific group.
+ *
+ * Called when a recomposition walk commits to descending into and executing a group.
+ *
+ * @param table      Pointer to the slot table. May be NULL.
+ * @param composable Logical group index to clear.
+ */
 void
 CelsSlotTableGroupClearFlags(CelsSlotTable *table, CelsComposableId composable)
 {
@@ -282,6 +308,11 @@ CelsSlotTableGroupClearFlags(CelsSlotTable *table, CelsComposableId composable)
     }
 }
 
+/**
+ * Clears invalidation flags across all active groups in the table.
+ *
+ * @param table Pointer to the slot table. May be NULL.
+ */
 void
 CelsSlotTableClearAllFlags(CelsSlotTable *table)
 {
@@ -298,6 +329,17 @@ CelsSlotTableClearAllFlags(CelsSlotTable *table)
     }
 }
 
+/**
+ * Adjusts logical parentIndex references affected by group insertion or deletion.
+ *
+ * Walks active groups physically (skipping the gap) and shifts any parentIndex
+ * at or above threshold by delta. Ensures that invalidation chains remain intact
+ * when groups shift in the gap buffer.
+ *
+ * @param table     Pointer to the slot table. May be NULL.
+ * @param threshold Lowest logical parent index affected by the shift.
+ * @param delta     Signed offset to add to affected parent indices.
+ */
 void
 CelsSlotTableGroupsShiftParents(CelsSlotTable *table,
                                 uint32_t threshold,

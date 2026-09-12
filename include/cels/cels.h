@@ -40,6 +40,7 @@
 #include "cels/session.h"
 #include "cels/slot_table.h"
 #include "cels/state.h"
+#include "cels/version.h"
 
 #ifdef __cplusplus
 extern "C" {

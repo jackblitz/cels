@@ -23,6 +23,15 @@
     #endif
 #endif
 
+/**
+ * Allocates a 64-byte cache-line aligned memory slab.
+ *
+ * Slabs are aligned to CELS_CACHE_LINE_SIZE (64 bytes) to guarantee that
+ * groups, slot allocations, and arena boundaries match CPU cache lines.
+ *
+ * @param size Total byte size of the slab to allocate.
+ * @return Pointer to 64-byte aligned memory, or NULL on allocation failure.
+ */
 static void *
 CelsAllocAlignedSlab(size_t size)
 {
@@ -39,6 +48,11 @@ CelsAllocAlignedSlab(size_t size)
 #endif
 }
 
+/**
+ * Releases memory previously allocated with CelsAllocAlignedSlab.
+ *
+ * @param ptr Pointer to aligned slab memory. NULL is safely ignored.
+ */
 static void
 CelsFreeAlignedSlab(void *ptr)
 {
@@ -54,18 +68,39 @@ CelsFreeAlignedSlab(void *ptr)
 
 static CELS_THREAD_LOCAL CelsSession *s_currentSession = NULL;
 
+/**
+ * Returns the currently active ambient session for the calling thread.
+ *
+ * Used by macros when an explicit session parameter is omitted.
+ *
+ * @return Active CelsSession pointer, or NULL if no session is active.
+ */
 CelsSession *
 CelsGetCurrentSession(void)
 {
     return s_currentSession;
 }
 
+/**
+ * Sets the active ambient session for the calling thread.
+ *
+ * @param session Target session to bind to current thread context. May be NULL.
+ */
 void
 CelsSetCurrentSession(CelsSession *session)
 {
     s_currentSession = session;
 }
 
+/**
+ * Shifts the groups gap buffer to targetLogical index.
+ *
+ * Moves elements around the gap using memmove to open insertion space
+ * or compact memory at targetLogical while maintaining logical ordering.
+ *
+ * @param s             Target session. Non-NULL.
+ * @param targetLogical Desired logical gap start index.
+ */
 static void
 MoveGroupGap(CelsSession *s, uint32_t targetLogical)
 {
@@ -90,6 +125,15 @@ MoveGroupGap(CelsSession *s, uint32_t targetLogical)
     }
 }
 
+/**
+ * Invokes onDestroy callbacks for all lifecycle states belonging to groupId.
+ *
+ * Walks the cleanups array in reverse order of creation and fires any registered
+ * destructor before removing the hook and compacting the array.
+ *
+ * @param s       Target session. Non-NULL.
+ * @param groupId Unique group identifier whose resources are being released.
+ */
 static void
 FireCleanupsForGroup(CelsSession *s, uint32_t groupId)
 {
@@ -107,6 +151,15 @@ FireCleanupsForGroup(CelsSession *s, uint32_t groupId)
     }
 }
 
+/**
+ * Reclaims all data arena slots allocated to groupId.
+ *
+ * Also purges any reactive state cells registered in the reclaimed memory range
+ * to prevent dangling pointer subscriptions.
+ *
+ * @param s       Target session. Non-NULL.
+ * @param groupId Unique group identifier whose slots should be reclaimed.
+ */
 static void
 ReleaseSlotsForGroup(CelsSession *s, uint32_t groupId)
 {
@@ -128,6 +181,14 @@ ReleaseSlotsForGroup(CelsSession *s, uint32_t groupId)
     }
 }
 
+/**
+ * Drains the invalidation queue and marks affected groups and ancestor paths.
+ *
+ * Sets CELS_FLAG_INVALIDATED on the targeted group and all its transitive descendants,
+ * and sets CELS_FLAG_CONTAINS_INVALIDATED on each ancestor up to the root.
+ *
+ * @param s Target session. Non-NULL.
+ */
 static void
 DrainInvalidationQueue(CelsSession *s)
 {
@@ -164,6 +225,16 @@ DrainInvalidationQueue(CelsSession *s)
     }
 }
 
+/**
+ * Initializes a session, carving partitions out of an aligned memory slab.
+ *
+ * Configures the groups gap buffer, the slot allocation table, the nonmoving
+ * data arena, and the reactive state registry within the slab. If config->slab
+ * is NULL, allocates an aligned slab of the requested size.
+ *
+ * @param s      Session to initialize. Non-NULL.
+ * @param config Optional session configuration. If NULL, defaults are used.
+ */
 void
 CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
 {
@@ -231,6 +302,12 @@ CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
     CelsStateRegistryInit(&s->stateRegistry);
 }
 
+/**
+ * Assigns or replaces the root composable function for the session.
+ *
+ * @param s      Target session. Non-NULL.
+ * @param rootFn Root composable callback function.
+ */
 void
 CelsSessionSetRoot(CelsSession *s, CelsRootFn rootFn)
 {
@@ -238,6 +315,14 @@ CelsSessionSetRoot(CelsSession *s, CelsRootFn rootFn)
     s->root = rootFn;
 }
 
+/**
+ * Tears down a session, releasing all active lifecycle states and slab memory.
+ *
+ * Invokes onDestroy on all registered lifecycle states, releases slot memory,
+ * and frees the internal slab if owned by the session.
+ *
+ * @param s Target session. NULL is safely ignored.
+ */
 void
 CelsSessionDestroy(CelsSession *s)
 {
@@ -261,6 +346,18 @@ CelsSessionDestroy(CelsSession *s)
     memset(s, 0, sizeof(*s));
 }
 
+/**
+ * Attaches an independent top-level composition to the session with a lifecycle evaluator.
+ *
+ * During recomposition, each attached composition's lifecycle evaluator is checked.
+ * If true, the composition is executed; if false, it is pruned from the tree.
+ *
+ * @param s        Target session. Non-NULL.
+ * @param key      Unique composition identifier.
+ * @param body     Composition function pointer. Non-NULL.
+ * @param eval     Lifecycle evaluator function pointer. May be NULL.
+ * @param statePtr Optional user state pointer passed to eval. May be NULL.
+ */
 void
 CelsSessionAttachComposition(CelsSession *s,
                              uint64_t key,
@@ -297,6 +394,16 @@ CelsSessionAttachComposition(CelsSession *s,
     };
 }
 
+/**
+ * Executes a recomposition pass over the session tree.
+ *
+ * Drains pending invalidations, marks affected groups and ancestors, and
+ * traverses the hierarchy. Unchanged subtrees are skipped in O(1). Continues
+ * in a loop until invalidations settle or maxDrainIterations is reached.
+ *
+ * @param s Target session. Non-NULL.
+ * @return CELS_OK on success, or an error code on invalid state or non-convergence.
+ */
 CelsResult
 CelsSessionRecompose(CelsSession *s)
 {
@@ -379,6 +486,15 @@ CelsSessionRecompose(CelsSession *s)
     return CELS_OK;
 }
 
+/**
+ * Prunes a composition subtree, firing cleanups and reclaiming slot memory.
+ *
+ * Fires onDestroy cleanups in reverse creation order, unsubscribes reactive
+ * state watchers, releases arena allocations, and shifts the groups gap buffer.
+ *
+ * @param s                Target session. Non-NULL.
+ * @param rootLogicalIndex Logical group index of the subtree root to remove.
+ */
 void
 CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex)
 {
@@ -425,6 +541,12 @@ CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex)
     }
 }
 
+/**
+ * Finds an active group by its 64-bit key and prunes its entire subtree.
+ *
+ * @param s   Target session. NULL is safely ignored.
+ * @param key Callsite key of the group to prune.
+ */
 void
 CelsPruneSubtreeByKey(CelsSession *s, uint64_t key)
 {
@@ -441,6 +563,17 @@ CelsPruneSubtreeByKey(CelsSession *s, uint64_t key)
     }
 }
 
+/**
+ * Establishes a root composition scope in the slot table.
+ *
+ * Initializes the root group (index 0) if the table is empty, or verifies that
+ * the existing root group matches rootKey. Must not be nested within another
+ * active composition.
+ *
+ * @param s       Target session. Non-NULL.
+ * @param rootKey Stable 64-bit key for the root composition.
+ * @return true if the composition should be entered; false on error.
+ */
 bool
 CelsEnterComposition(CelsSession *s, uint64_t rootKey)
 {
@@ -495,6 +628,22 @@ CelsEnterComposition(CelsSession *s, uint64_t rootKey)
     return true;
 }
 
+/**
+ * Enters a composable group during traversal, executing reconciliation and skipping.
+ *
+ * Implements the core traversal algorithm:
+ * 1. Synthesizes a key if key == 0.
+ * 2. Checks if an existing group at the cursor matches key, or searches sibling groups
+ *    and moves them forward if reordered.
+ * 3. Evaluates invalidation flags: if clean, increments the cursor past the subtree
+ *    in O(1) and returns false (skipping execution).
+ * 4. If dirty, clears flags and returns true to run the body.
+ * 5. If fresh, inserts a new group into the gap buffer and returns true.
+ *
+ * @param s   Target session. Non-NULL.
+ * @param key Stable 64-bit key, or 0 for auto-synthesized key.
+ * @return true if the composable body should execute; false if skipped in O(1).
+ */
 bool
 CelsEnterComposable(CelsSession *s, uint64_t key)
 {
@@ -628,6 +777,15 @@ CelsEnterComposable(CelsSession *s, uint64_t key)
     return true;
 }
 
+/**
+ * Exits the current composition group, pruning unvisited children.
+ *
+ * Checks if the logical cursor reached the expected boundary of the group. Any
+ * child groups that were not visited during this pass are pruned. Finalizes the
+ * group data size on fresh mount and restores traversal stacks to the parent group.
+ *
+ * @param s Target session. Non-NULL.
+ */
 void
 CelsExitGroup(CelsSession *s)
 {
@@ -660,6 +818,20 @@ CelsExitGroup(CelsSession *s)
     }
 }
 
+/**
+ * Resolves persistent slot memory in the session arena for the active group.
+ *
+ * On fresh mount: allocates an aligned slot in s->dataArena, seeds it with initVal,
+ * and registers lifecycle cleanups if desc is provided.
+ * On subsequent passes: locates the previously allocated slot at currentSlotOffset
+ * and returns the exact same stable pointer (guaranteeing pinned memory).
+ *
+ * @param s       Target session. Non-NULL.
+ * @param size    Byte size of memory to allocate or resolve.
+ * @param initVal Optional pointer to seed data on fresh mount. May be NULL.
+ * @param desc    Optional lifecycle descriptor (onCreate/onDestroy). May be NULL.
+ * @return Pointer to persistent slot memory in session data arena, or NULL on overflow.
+ */
 void *
 CelsResolveSlot(CelsSession *s,
                 size_t size,
@@ -765,6 +937,16 @@ CelsResolveSlot(CelsSession *s,
     return NULL;
 }
 
+/**
+ * Resolves a live state pointer from the session hierarchy by group key.
+ *
+ * Traverses active cleanup instances, attached compositions, and group data slots
+ * matching key to return the live state pointer. Eliminates global variables.
+ *
+ * @param s   Target session. May be NULL.
+ * @param key Callsite key of the composition group.
+ * @return Pointer to state struct, or NULL if not found or session is NULL.
+ */
 void *
 CelsGetState(CelsSession *s, uint64_t key)
 {
@@ -798,12 +980,26 @@ CelsGetState(CelsSession *s, uint64_t key)
     return NULL;
 }
 
+/**
+ * Alias for CelsGetState for backwards compatibility.
+ *
+ * @param s   Target session. May be NULL.
+ * @param key Callsite key of the composition group.
+ * @return Pointer to state struct, or NULL if not found.
+ */
 void *
 CelsFindLifecycleState(CelsSession *s, uint64_t key)
 {
     return CelsGetState(s, key);
 }
 
+/**
+ * Alias for CelsGetState for backwards compatibility.
+ *
+ * @param s   Target session. May be NULL.
+ * @param key Callsite key of the composition group.
+ * @return Pointer to state struct, or NULL if not found.
+ */
 void *
 CelsFindObserver(CelsSession *s, uint64_t key)
 {
