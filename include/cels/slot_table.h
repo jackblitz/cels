@@ -145,16 +145,20 @@ typedef uint64_t CelsSlotValue;
  * Total size is exactly 32 bytes (2 groups per 64-byte cache line).
  */
 typedef struct CelsSlotGroup {
-    uint64_t userData;     // Opaque caller word; CELS never interprets it
-    uint32_t key;          // Stable callsite key / hash
+    uint64_t key;          // Stable callsite key / hash (64-bit)
+    uint64_t userData;     // Opaque caller word / stable group identity
     uint32_t parentIndex;  // Logical index of parent group (UINT32_MAX if root)
-    uint32_t slotIndex;    // Physical/anchored index in slots array
-    uint32_t aux;          // Auxiliary user tag / flags
-    uint16_t slotCount;    // Number of word slots owned directly by this group
+    uint32_t slotIndex;    // Physical index in slots array / arena offset
+    uint16_t slotCount;    // Number of word slots / data size in bytes
     uint16_t groupSize;    // Transitive child groups in subtree (for O(1) skip)
     uint16_t nodeCount;    // Caller-defined node tally for the subtree
     uint16_t flags;        // CelsGroupFlags invalidation bits
 } CelsSlotGroup;
+
+/* Backwards compatibility aliases */
+#define reserved userData
+#define dataOffset slotIndex
+#define dataSize slotCount
 
 /**
  * Dual gap buffer carved out of a single contiguous, cache-aligned memory slab.
@@ -354,7 +358,7 @@ void CelsSlotTableGroupsShiftParents(CelsSlotTable *table,
  * @return Pointer to matching CelsSlotGroup in table, or NULL if not found.
  */
 CelsSlotGroup *CelsSlotTableFindGroup(const CelsSlotTable *table,
-                                     uint32_t key,
+                                     uint64_t key,
                                      uint32_t *outLogicalIdx);
 
 /**
@@ -475,7 +479,7 @@ CelsResult CelsSlotWriterGapMoveTo(CelsSlotWriter *writer,
  * @return CELS_OK or CELS_ERROR_CAPACITY_EXCEEDED.
  */
 CelsResult CelsSlotWriterGroupStart(CelsSlotWriter *writer,
-                                    uint32_t key,
+                                    uint64_t key,
                                     uint64_t userData,
                                     uint32_t *outGroupIndex);
 

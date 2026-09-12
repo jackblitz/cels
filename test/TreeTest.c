@@ -49,11 +49,11 @@ static inline uint32_t GetActiveCount(const CelsSession *s) {
 static void PrintNode(const CelsSession *s, uint32_t logicalIdx, const char *prefix, bool isLast) {
     const CelsSlotGroup *g = GetGroup(s, logicalIdx);
 
-    printf("%s%s[%s] (0x%08X) | descendants: %u | slots: %u B | parent: %u\n",
+    printf("%s%s[%s] (0x%08llX) | descendants: %u | slots: %u B | parent: %u\n",
            prefix,
            isLast ? "└── " : "├── ",
-           GetKeyName(g->key),
-           g->key,
+           GetKeyName((uint32_t)g->key),
+           (unsigned long long)g->key,
            g->groupSize,
            g->dataSize,
            g->parentIndex);
@@ -86,8 +86,8 @@ void CelsDumpTree(const CelsSession *s) {
     printf("\n=== COMPOSABLE TREE DUMP (%u active nodes, %u arena bytes) ===\n",
            totalGroups, s->dataGapStart);
 
-    printf("[%s] (0x%08X) | descendants: %u | slots: %u B\n",
-           GetKeyName(root->key), root->key, root->groupSize, root->dataSize);
+    printf("[%s] (0x%08llX) | descendants: %u | slots: %u B\n",
+           GetKeyName((uint32_t)root->key), (unsigned long long)root->key, root->groupSize, root->dataSize);
 
     uint32_t childLogical = 1;
     uint32_t endLogical = 1 + root->groupSize;

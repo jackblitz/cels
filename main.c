@@ -17,18 +17,18 @@ static WindowState g_mainWindow = {
 
 /* --- Observer Resource (Native Lifecycle) --- */
 
-CEL_Observer(SdlWindow) {
+CEL_State(SdlWindow) {
     void *nativeHandle;
 };
 
-static void SdlWindow_OnRemembered(SdlWindow *self, CelsSession *s) {
+static void SdlWindow_OnCreated(SdlWindow *self, CelsSession *s) {
     (void)s;
     self->nativeHandle = (void*)0x12345678;
     printf("  [Lifecycle] SdlWindow opened (%p) [%dx%d]\n", 
            self->nativeHandle, g_mainWindow.width, g_mainWindow.height);
 }
 
-static void SdlWindow_OnForgotten(SdlWindow *self, CelsSession *s) {
+static void SdlWindow_OnDestroyed(SdlWindow *self, CelsSession *s) {
     (void)s;
     printf("  [Lifecycle] SdlWindow closed (%p)\n", self->nativeHandle);
     self->nativeHandle = NULL;
@@ -56,7 +56,7 @@ static void OnIncrementClick(void *userData, CelsSession *s) {
 
 // 1. Container Composable: manages SDL window lifecycle and hosts child components
 CEL_Composeable(CEL_SDLWindow, key) {
-    cel_remember_observer(s, SdlWindow, SdlWindow_OnRemembered, SdlWindow_OnForgotten);
+    cel_lifecycle_state(s, SdlWindow, SdlWindow_OnCreated, SdlWindow_OnDestroyed);
 }
 
 // 2. Leaf Composable: manages its own local remembered state across recompositions
@@ -106,8 +106,8 @@ int main(void) {
     printf("=== Pass 1: Initial Mount ===\n");
     CelsSessionRecompose(&session);
 
-    // Observers (native handles/resources) can be queried externally by key:
-    SdlWindow *winObs = CEL_FindObserver(&session, CEL_KEY("MainWindow"), SdlWindow);
+    // Lifecycle state (native handles/resources) can be queried externally by key:
+    SdlWindow *winObs = CEL_FindLifecycleState(&session, CEL_KEY("MainWindow"), SdlWindow);
     printf("  [Observer Query] Found native window handle: %p\n", winObs ? winObs->nativeHandle : NULL);
 
     printf("\n=== Quiet Check (Nothing Changed) ===\n");

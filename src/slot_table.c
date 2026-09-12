@@ -337,7 +337,7 @@ CelsSlotTableGroupsShiftParents(CelsSlotTable *table,
  */
 CelsSlotGroup *
 CelsSlotTableFindGroup(const CelsSlotTable *table,
-                       uint32_t key,
+                       uint64_t key,
                        uint32_t *outLogicalIdx)
 {
     if (table == NULL) {
@@ -758,7 +758,7 @@ CelsSlotWriterGapMoveTo(CelsSlotWriter *writer,
  */
 CelsResult
 CelsSlotWriterGroupStart(CelsSlotWriter *writer,
-                         uint32_t key,
+                         uint64_t key,
                          uint64_t userData,
                          uint32_t *outGroupIndex)
 {
@@ -780,11 +780,10 @@ CelsSlotWriterGroupStart(CelsSlotWriter *writer,
         : writer->parentStack[writer->depth - 1];
 
     const CelsSlotGroup newGroup = {
-        .userData = userData,
         .key = key,
+        .userData = userData,
         .parentIndex = parentIndex,
         .slotIndex = table->slotGapStart,
-        .aux = 0,
         .slotCount = 0,
         .groupSize = 0,
         .nodeCount = 0,

@@ -29,22 +29,37 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# Core Slot Table module (C99, zero heap allocation)
-add_library(cels_slot_table STATIC
+# Core CELS library (C99 modular implementation)
+add_library(cels STATIC
     src/slot_table.c
+    src/session.c
+    src/state.c
 )
-target_include_directories(cels_slot_table PUBLIC
+target_include_directories(cels PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+# Main Executable
+add_executable(cels_app main.c)
+target_link_libraries(cels_app PRIVATE cels)
+set_target_properties(cels_app PROPERTIES OUTPUT_NAME cels)
 
 # Test Suite
 enable_testing()
 
 add_executable(test_slot_table test/test_slot_table.c)
-target_link_libraries(test_slot_table PRIVATE cels_slot_table)
+target_link_libraries(test_slot_table PRIVATE cels)
 add_test(NAME test_slot_table COMMAND test_slot_table)
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/include/cels/cels.h")
-    add_executable(cels main.c)
-    target_link_libraries(cels PRIVATE cels_slot_table)
-endif()
+add_executable(TreeTest test/TreeTest.c)
+target_link_libraries(TreeTest PRIVATE cels)
+add_test(NAME TreeTest COMMAND TreeTest)
+
+add_executable(LifecycleTest test/LifecycleTest.c)
+target_link_libraries(LifecycleTest PRIVATE cels)
+add_test(NAME LifecycleTest COMMAND LifecycleTest)
+
+add_executable(StateLifetimeTest test/StateLifetimeTest.c)
+target_link_libraries(StateLifetimeTest PRIVATE cels)
+add_test(NAME StateLifetimeTest COMMAND StateLifetimeTest)
