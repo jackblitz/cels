@@ -304,11 +304,19 @@ CelsKeyIndex(uint64_t baseKey, uint64_t index)
 #define cel_remember_observer(...) cel_lifecycle_state(__VA_ARGS__)
 #define cel_observer(...)          cel_lifecycle_state(__VA_ARGS__)
 
-#define CEL_FindLifecycleState(session, key, Type) \
-    ((Type*)CelsFindLifecycleState((session), (key)))
+#define _CEL_GET_STATE_3(session, key, Type) \
+    ((Type*)CelsGetState((session), (key)))
 
-#define CEL_FindObserver(session, key, Type) \
-    ((Type*)CelsFindObserver((session), (key)))
+#define _CEL_GET_STATE_2(key, Type) \
+    ((Type*)CelsGetState(CelsGetCurrentSession(), (key)))
+
+#define CEL_GetState(...) \
+    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_GET_STATE_3, _CEL_GET_STATE_2)(__VA_ARGS__)
+
+/* Backwards compatibility aliases */
+#define CEL_FindLifecycleState(...) CEL_GetState(__VA_ARGS__)
+#define CEL_FindObserver(...)       CEL_GetState(__VA_ARGS__)
+#define CEL_FindState(...)          CEL_GetState(__VA_ARGS__)
 
 /* ========================================================================= */
 /* Persistent Component Memory (cel_remember)                                */

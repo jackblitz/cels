@@ -242,6 +242,7 @@ void *CelsResolveSlot(CelsSession *session,
  * @param key     Group key.
  * @return Pointer to instance, or NULL if not found.
  */
+void *CelsGetState(CelsSession *session, uint64_t key);
 void *CelsFindLifecycleState(CelsSession *session, uint64_t key);
 void *CelsFindObserver(CelsSession *session, uint64_t key);
 

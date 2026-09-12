@@ -118,9 +118,9 @@ int main(void) {
     printf("=== Pass 1: Initial Mount ===\n");
     CelsSessionRecompose(&session);
 
-    // Lifecycle state (native handles/resources) can be queried externally by key:
-    SdlWindow *winObs = CEL_FindLifecycleState(&session, CEL_KEY("CEL_Window"), SdlWindow);
-    printf("  [Observer Query] Found native window handle: %p\n", winObs ? winObs->nativeHandle : NULL);
+    // State (native handles/resources) can be queried externally by key:
+    SdlWindow *winObs = CEL_GetState(&session, CEL_KEY("CEL_Window"), SdlWindow);
+    printf("  [CEL_GetState] Found native window handle: %p\n", winObs ? winObs->nativeHandle : NULL);
 
     printf("\n=== Quiet Check (Nothing Changed) ===\n");
     // Exits in O(1) immediately: queue is empty, nothing prints

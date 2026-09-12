@@ -261,6 +261,7 @@ CelsSessionRecompose(CelsSession *s)
                 CelsExitGroup(s);
             } else {
                 CelsPruneSubtreeByKey(s, comp->key);
+                comp->statePtr = NULL;
             }
         }
 
@@ -608,22 +609,46 @@ CelsResolveSlot(CelsSession *s,
 }
 
 void *
-CelsFindLifecycleState(CelsSession *s, uint64_t key)
+CelsGetState(CelsSession *s, uint64_t key)
 {
     if (s == NULL) {
         return NULL;
     }
 
+    /* 1. Check active cleanups (lifecycle states) */
     for (uint32_t i = 0; i < s->cleanupCount; ++i) {
         if (s->cleanups[i].groupKey == key) {
             return s->cleanups[i].instance;
         }
     }
+
+    /* 2. Check attached compositions with matching key and state pointer */
+    for (uint32_t i = 0; i < s->attachedCount; ++i) {
+        if (s->attachedCompositions[i].key == key && s->attachedCompositions[i].statePtr != NULL) {
+            return s->attachedCompositions[i].statePtr;
+        }
+    }
+
+    /* 3. Check general group data slot if present */
+    const uint32_t groupCount = CelsGetLogicalGroupCount(s);
+    for (uint32_t i = 0; i < groupCount; ++i) {
+        const CelsSlotGroup *const g = CelsGetGroup(s, i);
+        if (g != NULL && g->key == key && g->slotCount > 0) {
+            return (void *)&s->dataArena[g->slotIndex];
+        }
+    }
+
     return NULL;
+}
+
+void *
+CelsFindLifecycleState(CelsSession *s, uint64_t key)
+{
+    return CelsGetState(s, key);
 }
 
 void *
 CelsFindObserver(CelsSession *s, uint64_t key)
 {
-    return CelsFindLifecycleState(s, key);
+    return CelsGetState(s, key);
 }
