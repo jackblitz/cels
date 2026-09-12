@@ -3,50 +3,36 @@
 #include <stdio.h>
 
 /* ========================================================================= */
-/* 1. Reactive State Definitions                                             */
+/* 1. Component State Definition (No Global Variables)                       */
 /* ========================================================================= */
 
-// Reactive state governing window properties and lifetime
+// Reactive state governing window properties and native resources
 CEL_State(WindowState) {
     bool isOpen;
     int  width;
     int  height;
-};
-
-static WindowState g_windowState = {
-    .isOpen = true,
-    .width  = 800,
-    .height = 600
-};
-
-// Application-level reactive state
-CEL_State(AppState) {
-    int counter;
-};
-
-static AppState g_appState = {
-    .counter = 0
-};
-
-/* ========================================================================= */
-/* 2. Native Resources & Lifecycle State                                     */
-/* ========================================================================= */
-
-// Represents an external/native resource (e.g. an SDL/GLFW window handle)
-CEL_State(SdlWindow) {
     void *nativeHandle;
 };
 
-static void SdlWindow_OnCreated(SdlWindow *self, CelsSession *s) {
+/* ========================================================================= */
+/* 2. Lifecycle Callbacks for Managed Resources                              */
+/* ========================================================================= */
+
+// Called on mount when the state slot is allocated in the slot table
+static void Window_OnCreated(WindowState *self, CelsSession *s) {
     (void)s;
+    self->isOpen = true;
+    self->width  = 800;
+    self->height = 600;
     self->nativeHandle = (void*)0x12345678;
-    printf("  [Lifecycle] SdlWindow opened (%p) [%dx%d]\n",
-           self->nativeHandle, g_windowState.width, g_windowState.height);
+    printf("  [Lifecycle] Window opened (%p) [%dx%d]\n",
+           self->nativeHandle, self->width, self->height);
 }
 
-static void SdlWindow_OnDestroyed(SdlWindow *self, CelsSession *s) {
+// Called on despawn when the composition is pruned from the tree
+static void Window_OnDestroyed(WindowState *self, CelsSession *s) {
     (void)s;
-    printf("  [Lifecycle] SdlWindow closed (%p)\n", self->nativeHandle);
+    printf("  [Lifecycle] Window closed (%p)\n", self->nativeHandle);
     self->nativeHandle = NULL;
 }
 
@@ -54,25 +40,25 @@ static void SdlWindow_OnDestroyed(SdlWindow *self, CelsSession *s) {
 /* 3. Reusable UI Composables                                                */
 /* ========================================================================= */
 
-// Leaf composable: rendered conditionally inside other composables
+// Leaf composable: auto-keyed by the engine, takes no parameters
 CEL_Composable(CEL_StatusBadge, key) {
-    printf("    [Badge] Notification badge active!\n");
+    printf("    [Badge] Window is active & visible!\n");
 }
 
-// Container composable: demonstrates persistent local memory and reactive state
-CEL_Composable(CEL_WindowContent, key) {
+// Container composable: receives WindowState* passed down from parent composition
+CEL_Composable(CEL_WindowContent, WindowState*, win) {
     // Component-local persistent memory: preserved across recompositions
     int *localRenderCount = cel_remember(int, 0);
     (*localRenderCount)++;
 
-    // Reactive subscription: component automatically re-runs when g_appState changes
-    AppState state = cel_watch(&g_appState);
+    // Reactive subscription: watches the passed-in state, re-runs when mutated
+    WindowState state = cel_watch(win);
 
-    printf("  [Content] Local render count: %d | App counter: %d\n",
-           *localRenderCount, state.counter);
+    printf("  [Content] Local render count: %d | Window: %dx%d (open: %s)\n",
+           *localRenderCount, state.width, state.height, state.isOpen ? "true" : "false");
 
-    // Conditional composition: auto-keyed by the composition engine
-    if (state.counter > 0) {
+    // Render child badge while window is open
+    if (state.isOpen) {
         CEL_StatusBadge();
     }
 }
@@ -81,24 +67,28 @@ CEL_Composable(CEL_WindowContent, key) {
 /* 4. Composition & Lifecycle Controller                                     */
 /* ========================================================================= */
 
-// Composition: owns the subtree and manages native resource lifecycles
+// Root Composition: initializes lifecycle state on mount and passes it to children
 CEL_Composition(CEL_Window, key) {
-    // Bind native resource lifecycle to this composition node
-    cel_lifecycle_state(s, SdlWindow, SdlWindow_OnCreated, SdlWindow_OnDestroyed);
+    // Allocated and initialized in the slot table on mount:
+    WindowState *win = cel_lifecycle_state(
+        WindowState,
+        Window_OnCreated,
+        Window_OnDestroyed
+    );
 
-    // Compose child hierarchy without explicit keys: auto-assigned by engine
-    CEL_WindowContent();
+    // Pass the state through the composition tree to child composables:
+    CEL_WindowContent(win);
 }
 
-// Lifecycle evaluator: controls when the composition remains active or despawns
+// Lifecycle evaluator: observes the composition's state and triggers despawn
 CEL_LifeCycle(WindowLifeCycle, WindowState) {
-    // Subscribe composition lifetime to WindowState changes
-    WindowState *target = it ? it : &g_windowState;
-    WindowState win = cel_watch(target);
-
-    if (!win.isOpen) {
-        printf("  [WindowLifeCycle] Window close requested -> calling cel_destroy()\n");
-        cel_destroy();
+    if (it != NULL) {
+        // Watch the state managed by the composition
+        WindowState state = cel_watch(it);
+        if (!state.isOpen) {
+            printf("  [WindowLifeCycle] Window close requested -> calling cel_destroy()\n");
+            cel_destroy();
+        }
     }
 }
 
@@ -110,41 +100,46 @@ int main(void) {
     CelsSession session;
     CelsSessionInit(&session, NULL);
 
-    // Attach the root composition with its lifecycle evaluator
+    // Attach root composition with its lifecycle evaluator
     CEL_Attach(&session, CEL_Window, WindowLifeCycle);
 
     // Pass 1: Initial Mount
-    // Builds the composition tree, allocates slots, and initializes native handles
+    // Builds tree, calls Window_OnCreated to initialize state in the slot table
     printf("=== Pass 1: Initial Mount ===\n");
     CelsSessionRecompose(&session);
 
-    // State Query: Retrieve active state or native handles from the session by key
-    SdlWindow *win = CEL_GetState(&session, CEL_KEY("CEL_Window"), SdlWindow);
-    printf("  [CEL_GetState] Found native window handle: %p\n",
-           win ? win->nativeHandle : NULL);
+    // State Query: Retrieve live state from the session by key (no global variables!)
+    WindowState *win = CEL_GetState(&session, CEL_KEY("CEL_Window"), WindowState);
+    printf("  [CEL_GetState] Found window state: %p [%dx%d, open: %s]\n",
+           win ? win->nativeHandle : NULL,
+           win ? win->width : 0,
+           win ? win->height : 0,
+           (win && win->isOpen) ? "true" : "false");
 
-    // Quiet Check: No state changed, so recomposition skips the tree in O(1)
+    // Quiet Check: No state changed -> O(1) instant skip
     printf("\n=== Quiet Check (Nothing Changed) ===\n");
     CelsSessionRecompose(&session);
     printf("  Quiet recompose completed instantly (0 work done).\n");
 
-    // Event 1: Mutating reactive state triggers fine-grained recomposition
-    printf("\n=== Event 1: Increment Counter (cel_mutate) ===\n");
-    cel_mutate(&session, &g_appState) {
-        this->counter++;
+    // Event 1: Mutate the state retrieved from the session
+    printf("\n=== Event 1: Resize Window to 1024x768 (cel_mutate) ===\n");
+    cel_mutate(&session, win) {
+        this->width  = 1024;
+        this->height = 768;
     }
     CelsSessionRecompose(&session);
 
-    // Event 2: Further mutation re-evaluates watched components
-    printf("\n=== Event 2: Increment Counter Again ===\n");
-    cel_mutate(&session, &g_appState) {
-        this->counter++;
+    // Event 2: Mutate window size again
+    printf("\n=== Event 2: Resize Window to 1920x1080 ===\n");
+    cel_mutate(&session, win) {
+        this->width  = 1920;
+        this->height = 1080;
     }
     CelsSessionRecompose(&session);
 
-    // Event 3: Lifecycle mutation triggers composition despawn and cleanup
+    // Event 3: Close the window -> triggers CEL_LifeCycle -> cel_destroy() -> OnDestroyed
     printf("\n=== Event 3: Close Window ===\n");
-    cel_mutate(&session, &g_windowState) {
+    cel_mutate(&session, win) {
         this->isOpen = false;
     }
     CelsSessionRecompose(&session);

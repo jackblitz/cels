@@ -216,6 +216,27 @@ extern "C" {
     } \
     static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t keyName)
 
+#define _CEL_COMPOSABLE_3(FnName, ArgType, ArgName) \
+    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key, ArgType ArgName); \
+    static inline void _cels_call_##FnName(CelsSession *s, uint64_t key, ArgType ArgName) { \
+        CelsSession *sess = s ? s : CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        if (CelsEnterComposable(sess, key)) { \
+            _cels_body_##FnName(sess, key, ArgName); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static inline void FnName##_key(uint64_t key, ArgType ArgName) { \
+        _cels_call_##FnName(CelsGetCurrentSession(), key, ArgName); \
+    } \
+    static inline void FnName##_s(CelsSession *s, uint64_t key, ArgType ArgName) { \
+        _cels_call_##FnName(s, key, ArgName); \
+    } \
+    static inline void FnName(ArgType ArgName) { \
+        _cels_call_##FnName(CelsGetCurrentSession(), 0, ArgName); \
+    } \
+    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key, ArgType ArgName)
+
 #define _CEL_COMPOSABLE_LEGACY_BLOCK(session, key) \
     do { \
         if (CelsEnterComposable((session), (key)))
@@ -233,7 +254,7 @@ extern "C" {
          _cels_done = 1, CelsExitGroup(CelsGetCurrentSession())) \
         for ( ; _cels_run; _cels_run = 0)
 
-#define CEL_Composable(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_COMPOSABLE_2, _CEL_COMPOSABLE_1)(__VA_ARGS__)
+#define CEL_Composable(...) _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_COMPOSABLE_3, _CEL_COMPOSABLE_2, _CEL_COMPOSABLE_1)(__VA_ARGS__)
 
 #define CEL_Composeable(FnName, keyName)      _CEL_COMPOSABLE_DEF(FnName, keyName)
 #define CEL_DefineComposable(FnName, keyName) _CEL_COMPOSABLE_DEF(FnName, keyName)
@@ -241,7 +262,9 @@ extern "C" {
 #define CEL_Composable_Def(FnName, keyName)   _CEL_COMPOSABLE_DEF(FnName, keyName)
 
 #define CEL_BOX(key) _CEL_COMPOSABLE_1(key)
-#define CEL_Compose(Component, key) Component(key)
+#define _CEL_COMPOSE_1(Component) Component()
+#define _CEL_COMPOSE_2(Component, arg) Component(arg)
+#define CEL_Compose(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_COMPOSE_2, _CEL_COMPOSE_1)(__VA_ARGS__)
 
 #define _CEL_CLOSE_0() CelsExitGroup(CelsGetCurrentSession())
 #define _CEL_CLOSE_1(session) CelsExitGroup((session))
@@ -267,13 +290,30 @@ extern "C" {
 #define _cel_lifecycle_state_curr(Type, on_create, on_destroy) \
     _cel_lifecycle_state_sess(CelsGetCurrentSession(), Type, on_create, on_destroy)
 
-#define _CEL_LIFECYCLE_STATE_DISPATCH_1(a, Type, on_c, on_d) _cel_lifecycle_state_sess(a, Type, on_c, on_d)
-#define _CEL_LIFECYCLE_STATE_DISPATCH_0(Type, on_c, on_d, ...) _cel_lifecycle_state_curr(Type, on_c, on_d)
-#define _CEL_LIFECYCLE_STATE_DISPATCH_2(is_s, ...) _CEL_LIFECYCLE_STATE_DISPATCH_##is_s(__VA_ARGS__)
-#define _CEL_LIFECYCLE_STATE_DISPATCH(is_s, ...)   _CEL_LIFECYCLE_STATE_DISPATCH_2(is_s, __VA_ARGS__)
+#define _cel_lifecycle_state_init_sess(session, Type, init_val, on_create, on_destroy) \
+    ((Type*)CelsResolveSlot((session), sizeof(Type), (const void*)(init_val), &(CelsLifecycleDesc){ \
+        .size      = sizeof(Type), \
+        .onCreate  = (void(*)(void*, CelsSession*))(on_create), \
+        .onDestroy = (void(*)(void*, CelsSession*))(on_destroy) \
+    }))
+
+#define _cel_lifecycle_state_init_curr(Type, init_val, on_create, on_destroy) \
+    _cel_lifecycle_state_init_sess(CelsGetCurrentSession(), Type, init_val, on_create, on_destroy)
+
+#define _CEL_LIFECYCLE_STATE_4_DISPATCH_1(sess, Type, on_c, on_d) \
+    _cel_lifecycle_state_sess(sess, Type, on_c, on_d)
+
+#define _CEL_LIFECYCLE_STATE_4_DISPATCH_0(Type, init_val, on_c, on_d) \
+    _cel_lifecycle_state_init_curr(Type, init_val, on_c, on_d)
+
+#define _CEL_LIFECYCLE_STATE_4(a, b, c, d) \
+    _CEL_CAT(_CEL_LIFECYCLE_STATE_4_DISPATCH_, _CEL_IS_SESSION_ARG(a))(a, b, c, d)
+
+#define _CEL_LIFECYCLE_STATE_3(Type, on_c, on_d) \
+    _cel_lifecycle_state_curr(Type, on_c, on_d)
 
 #define cel_lifecycle_state(...) \
-    _CEL_LIFECYCLE_STATE_DISPATCH(_CEL_IS_SESSION_ARG(_CEL_FIRST(__VA_ARGS__)), __VA_ARGS__)
+    _CEL_GET_MACRO_4(__VA_ARGS__, _CEL_LIFECYCLE_STATE_4, _CEL_LIFECYCLE_STATE_3)(__VA_ARGS__)
 
 /* Backwards compatibility aliases */
 #define cel_remember_observer(...) cel_lifecycle_state(__VA_ARGS__)

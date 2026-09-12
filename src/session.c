@@ -249,6 +249,10 @@ CelsSessionRecompose(CelsSession *s)
                 continue;
             }
 
+            if (comp->statePtr == NULL) {
+                comp->statePtr = CelsGetState(s, comp->key);
+            }
+
             bool alive = true;
             if (comp->lifecycleEval != NULL) {
                 alive = comp->lifecycleEval(comp->statePtr);
@@ -259,6 +263,9 @@ CelsSessionRecompose(CelsSession *s)
                     comp->body(s, comp->key);
                 }
                 CelsExitGroup(s);
+                if (comp->statePtr == NULL) {
+                    comp->statePtr = CelsGetState(s, comp->key);
+                }
             } else {
                 CelsPruneSubtreeByKey(s, comp->key);
                 comp->statePtr = NULL;
