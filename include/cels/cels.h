@@ -202,50 +202,6 @@ CelsKeyIndex(uint64_t baseKey, uint64_t index)
 /* Composable Nodes & Invocations                                            */
 /* ========================================================================= */
 
-#define _CEL_COMPOSABLE_LEGACY_BLOCK(session, key) \
-    do { \
-        if (CelsEnterComposable((session), (key)))
-
-#define _CEL_COMPOSABLE_COMPONENT_BLOCK(Component, key) \
-    for (int _cels_run = (CelsEnterComposable(CelsGetCurrentSession(), (key)) \
-                          ? (_cels_body_##Component(CelsGetCurrentSession(), (key)), 1) \
-                          : 0), _cels_done = 0; \
-         !_cels_done; \
-         _cels_done = 1, CelsExitGroup(CelsGetCurrentSession())) \
-        for ( ; _cels_run; _cels_run = 0)
-
-#define _CEL_DISPATCH_COMPOSABLE_2(is_sess, a, b) _CEL_DISPATCH_COMPOSABLE_IMPL_##is_sess(a, b)
-#define _CEL_DISPATCH_COMPOSABLE(is_sess, a, b) _CEL_DISPATCH_COMPOSABLE_2(is_sess, a, b)
-#define _CEL_DISPATCH_COMPOSABLE_IMPL_1(a, b) _CEL_COMPOSABLE_LEGACY_BLOCK(a, b)
-#define _CEL_DISPATCH_COMPOSABLE_IMPL_0(a, b) _CEL_COMPOSABLE_COMPONENT_BLOCK(a, b)
-
-#define _CEL_COMPOSABLE_2(a, b) _CEL_DISPATCH_COMPOSABLE(_CEL_IS_SESSION_ARG(a), a, b)
-
-#define _CEL_COMPOSABLE_1(key) \
-    for (int _cels_run = (CelsEnterComposable(CelsGetCurrentSession(), (key)) ? 1 : 0), _cels_done = 0; \
-         !_cels_done; \
-         _cels_done = 1, CelsExitGroup(CelsGetCurrentSession())) \
-        for ( ; _cels_run; _cels_run = 0)
-
-#define CEL_Composable(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_COMPOSABLE_2, _CEL_COMPOSABLE_1)(__VA_ARGS__)
-
-#define CEL_BOX(key) _CEL_COMPOSABLE_1(key)
-#define CEL_Compose(Component, key) Component(key)
-
-#define _CEL_CLOSE_0() CelsExitGroup(CelsGetCurrentSession())
-#define _CEL_CLOSE_1(session) CelsExitGroup((session))
-#define _CEL_CLOSE_CHOOSER(...) _CEL_ARG_2(__VA_ARGS__, _CEL_CLOSE_1, _CEL_CLOSE_0)
-
-#define CEL_Close(...) \
-        _CEL_CLOSE_CHOOSER(dummy, ##__VA_ARGS__, _CEL_CLOSE_1, _CEL_CLOSE_0)(__VA_ARGS__); \
-    } while (0)
-
-#define cel_close(...) CEL_Close(__VA_ARGS__)
-
-/* ========================================================================= */
-/* Composable Function Definitions                                           */
-/* ========================================================================= */
-
 #ifndef CELS_UNUSED
     #if defined(__GNUC__) || defined(__clang__)
         #define CELS_UNUSED __attribute__((unused))
@@ -273,10 +229,42 @@ CelsKeyIndex(uint64_t baseKey, uint64_t index)
     } \
     static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t keyName)
 
+#define _CEL_COMPOSABLE_LEGACY_BLOCK(session, key) \
+    do { \
+        if (CelsEnterComposable((session), (key)))
+
+#define _CEL_DISPATCH_COMPOSABLE_2(is_sess, a, b) _CEL_DISPATCH_COMPOSABLE_IMPL_##is_sess(a, b)
+#define _CEL_DISPATCH_COMPOSABLE(is_sess, a, b) _CEL_DISPATCH_COMPOSABLE_2(is_sess, a, b)
+#define _CEL_DISPATCH_COMPOSABLE_IMPL_1(a, b) _CEL_COMPOSABLE_LEGACY_BLOCK(a, b)
+#define _CEL_DISPATCH_COMPOSABLE_IMPL_0(a, b) _CEL_COMPOSABLE_DEF(a, b)
+
+#define _CEL_COMPOSABLE_2(a, b) _CEL_DISPATCH_COMPOSABLE(_CEL_IS_SESSION_ARG(a), a, b)
+
+#define _CEL_COMPOSABLE_1(key) \
+    for (int _cels_run = (CelsEnterComposable(CelsGetCurrentSession(), (key)) ? 1 : 0), _cels_done = 0; \
+         !_cels_done; \
+         _cels_done = 1, CelsExitGroup(CelsGetCurrentSession())) \
+        for ( ; _cels_run; _cels_run = 0)
+
+#define CEL_Composable(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_COMPOSABLE_2, _CEL_COMPOSABLE_1)(__VA_ARGS__)
+
 #define CEL_Composeable(FnName, keyName)      _CEL_COMPOSABLE_DEF(FnName, keyName)
 #define CEL_DefineComposable(FnName, keyName) _CEL_COMPOSABLE_DEF(FnName, keyName)
 #define CEL_ComposableFn(FnName, keyName)     _CEL_COMPOSABLE_DEF(FnName, keyName)
 #define CEL_Composable_Def(FnName, keyName)   _CEL_COMPOSABLE_DEF(FnName, keyName)
+
+#define CEL_BOX(key) _CEL_COMPOSABLE_1(key)
+#define CEL_Compose(Component, key) Component(key)
+
+#define _CEL_CLOSE_0() CelsExitGroup(CelsGetCurrentSession())
+#define _CEL_CLOSE_1(session) CelsExitGroup((session))
+#define _CEL_CLOSE_CHOOSER(...) _CEL_ARG_2(__VA_ARGS__, _CEL_CLOSE_1, _CEL_CLOSE_0)
+
+#define CEL_Close(...) \
+        _CEL_CLOSE_CHOOSER(dummy, ##__VA_ARGS__, _CEL_CLOSE_1, _CEL_CLOSE_0)(__VA_ARGS__); \
+    } while (0)
+
+#define cel_close(...) CEL_Close(__VA_ARGS__)
 
 /* ========================================================================= */
 /* Lifecycle State (cel_lifecycle_state) & Observers                         */

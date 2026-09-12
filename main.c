@@ -2,21 +2,37 @@
 #include "cels.h"
 #include <stdio.h>
 
-/* --- Reactive Window State --- */
+/* ========================================================================= */
+/* 1. Reactive State Definitions                                             */
+/* ========================================================================= */
+
+// Reactive state governing window properties and lifetime
 CEL_State(WindowState) {
     bool isOpen;
     int  width;
     int  height;
 };
 
-static WindowState g_mainWindow = {
+static WindowState g_windowState = {
     .isOpen = true,
     .width  = 800,
     .height = 600
 };
 
-/* --- Observer Resource (Native Lifecycle) --- */
+// Application-level reactive state
+CEL_State(AppState) {
+    int counter;
+};
 
+static AppState g_appState = {
+    .counter = 0
+};
+
+/* ========================================================================= */
+/* 2. Native Resources & Lifecycle State                                     */
+/* ========================================================================= */
+
+// Represents an external/native resource (e.g. an SDL/GLFW window handle)
 CEL_State(SdlWindow) {
     void *nativeHandle;
 };
@@ -24,8 +40,8 @@ CEL_State(SdlWindow) {
 static void SdlWindow_OnCreated(SdlWindow *self, CelsSession *s) {
     (void)s;
     self->nativeHandle = (void*)0x12345678;
-    printf("  [Lifecycle] SdlWindow opened (%p) [%dx%d]\n", 
-           self->nativeHandle, g_mainWindow.width, g_mainWindow.height);
+    printf("  [Lifecycle] SdlWindow opened (%p) [%dx%d]\n",
+           self->nativeHandle, g_windowState.width, g_windowState.height);
 }
 
 static void SdlWindow_OnDestroyed(SdlWindow *self, CelsSession *s) {
@@ -34,123 +50,111 @@ static void SdlWindow_OnDestroyed(SdlWindow *self, CelsSession *s) {
     self->nativeHandle = NULL;
 }
 
-/* --- UI Event Wiring (Self-Contained Component Memory) --- */
+/* ========================================================================= */
+/* 3. Reusable UI Composables                                                */
+/* ========================================================================= */
 
-// In a real UI system (SDL/GLFW), components register event callbacks with the event loop.
-// The component attaches its own private remembered pointer as userData.
-typedef struct ButtonComponent {
-    void (*onClick)(void *userData, CelsSession *s);
-    void *userData;
-} ButtonComponent;
-
-static ButtonComponent g_incrementButton;
-
-static void OnIncrementClick(void *userData, CelsSession *s) {
-    int *clickCount = (int*)userData;
-    cel_mutate(s, clickCount) {
-        (*this)++;
-    }
-}
-
-/* --- Reusable Composable Component Definitions --- */
-
-// 1. Leaf Composable: called from inside another Composable (nested composable)
-CEL_Composeable(CEL_Badge, key) {
+// Leaf composable: rendered conditionally inside other composables
+CEL_Composable(CEL_StatusBadge, key) {
     (void)key;
-    printf("    [Badge Composable] Notification badge rendered (called from CEL_CounterText)!\n");
+    printf("    [Badge] Notification badge active!\n");
 }
 
-// 2. Mid-level Composable: called from inside a Composition, and calls CEL_Badge inside itself
-CEL_Composeable(CEL_CounterText, key) {
-    // Persistent Local Memory:
-    // cel_remember allocates private, self-contained slots for this component.
-    int  *clickCount = cel_remember(int, 0);
-    bool *isHovered  = cel_remember(bool, false);
+// Container composable: demonstrates persistent local memory and reactive state
+CEL_Composable(CEL_WindowContent, key) {
+    (void)key;
 
-    int  count   = cel_watch(clickCount);
-    bool hovered = cel_watch(isHovered);
+    // Component-local persistent memory: preserved across recompositions
+    int *localRenderCount = cel_remember(int, 0);
+    (*localRenderCount)++;
 
-    printf("    -> Window is open! Click count: %d (hovered: %s)\n", 
-           count, hovered ? "true" : "false");
+    // Reactive subscription: component automatically re-runs when g_appState changes
+    AppState state = cel_watch(&g_appState);
 
-    // Calling a Composable from inside another Composable:
-    if (count > 0) {
-        CEL_Badge(CEL_KEY("BadgeNotification"));
+    printf("  [Content] Local render count: %d | App counter: %d\n",
+           *localRenderCount, state.counter);
+
+    // Conditional composition: render child composable based on reactive state
+    if (state.counter > 0) {
+        CEL_StatusBadge(CEL_KEY("StatusBadge"));
     }
-
-    // The component wires its own private remembered pointer into its click callback:
-    g_incrementButton = (ButtonComponent){
-        .onClick = OnIncrementClick,
-        .userData = clickCount
-    };
 }
 
-// 2. Root Window Composition (defined OUTSIDE RootApp): hosts SDL window lifecycle & children
+/* ========================================================================= */
+/* 4. Composition & Lifecycle Controller                                     */
+/* ========================================================================= */
+
+// Composition: owns the subtree and manages native resource lifecycles
 CEL_Composition(CEL_Window, key) {
+    (void)key;
+
+    // Bind native resource lifecycle to this composition node
     cel_lifecycle_state(s, SdlWindow, SdlWindow_OnCreated, SdlWindow_OnDestroyed);
-    CEL_CounterText(CEL_KEY("CounterText"));
+
+    // Compose child hierarchy
+    CEL_WindowContent(CEL_KEY("WindowContent"));
 }
 
-/* --- Top-Level Composition Lifecycle --- */
-
+// Lifecycle evaluator: controls when the composition remains active or despawns
 CEL_LifeCycle(WindowLifeCycle, WindowState) {
-    // cel_watch subscribes this Composition root to changes in WindowState
-    WindowState *target = it ? it : &g_mainWindow;
+    // Subscribe composition lifetime to WindowState changes
+    WindowState *target = it ? it : &g_windowState;
     WindowState win = cel_watch(target);
-    printf("  [WindowLifeCycle] Evaluating Window -> isOpen: %s [%dx%d]\n",
-           win.isOpen ? "true" : "false", win.width, win.height);
 
     if (!win.isOpen) {
-        printf("  [WindowLifeCycle] Close condition met -> triggering cel_destroy() to despawn Composition\n");
+        printf("  [WindowLifeCycle] Window close requested -> calling cel_destroy()\n");
         cel_destroy();
     }
 }
 
-/* --- Main --- */
+/* ========================================================================= */
+/* 5. Application Entry Point                                                */
+/* ========================================================================= */
 
 int main(void) {
     CelsSession session;
     CelsSessionInit(&session, NULL);
 
-    // Attach composition directly to the session - no RootApp wrapper function needed!
+    // Attach the root composition with its lifecycle evaluator
     CEL_Attach(&session, CEL_Window, WindowLifeCycle);
 
+    // Pass 1: Initial Mount
+    // Builds the composition tree, allocates slots, and initializes native handles
     printf("=== Pass 1: Initial Mount ===\n");
     CelsSessionRecompose(&session);
 
-    // State (native handles/resources) can be queried externally by key:
-    SdlWindow *winObs = CEL_GetState(&session, CEL_KEY("CEL_Window"), SdlWindow);
-    printf("  [CEL_GetState] Found native window handle: %p\n", winObs ? winObs->nativeHandle : NULL);
+    // State Query: Retrieve active state or native handles from the session by key
+    SdlWindow *win = CEL_GetState(&session, CEL_KEY("CEL_Window"), SdlWindow);
+    printf("  [CEL_GetState] Found native window handle: %p\n",
+           win ? win->nativeHandle : NULL);
 
+    // Quiet Check: No state changed, so recomposition skips the tree in O(1)
     printf("\n=== Quiet Check (Nothing Changed) ===\n");
-    // Exits in O(1) immediately: queue is empty, nothing prints
     CelsSessionRecompose(&session);
-    printf("Quiet recompose completed instantly (0 work done).\n");
+    printf("  Quiet recompose completed instantly (0 work done).\n");
 
-    printf("\n=== Event 1: User clicks button (0 -> 1) ===\n");
-    if (g_incrementButton.onClick) {
-        g_incrementButton.onClick(g_incrementButton.userData, &session);
+    // Event 1: Mutating reactive state triggers fine-grained recomposition
+    printf("\n=== Event 1: Increment Counter (cel_mutate) ===\n");
+    cel_mutate(&session, &g_appState) {
+        this->counter++;
     }
-
-    printf("=== Pass 2: Recompose triggers dynamic spawning of BadgeNotification ===\n");
     CelsSessionRecompose(&session);
 
-    printf("\n=== Event 2: User clicks button again (1 -> 2) ===\n");
-    if (g_incrementButton.onClick) {
-        g_incrementButton.onClick(g_incrementButton.userData, &session);
+    // Event 2: Further mutation re-evaluates watched components
+    printf("\n=== Event 2: Increment Counter Again ===\n");
+    cel_mutate(&session, &g_appState) {
+        this->counter++;
     }
-
-    printf("=== Pass 3: Recompose existing badge (cel_spawn does NOT re-run) ===\n");
     CelsSessionRecompose(&session);
 
-    printf("\n=== Event 3: User closes window (cel_mutate on WindowState) ===\n");
-    cel_mutate(&session, &g_mainWindow) {
+    // Event 3: Lifecycle mutation triggers composition despawn and cleanup
+    printf("\n=== Event 3: Close Window ===\n");
+    cel_mutate(&session, &g_windowState) {
         this->isOpen = false;
     }
-
-    printf("=== Pass 4: Recompose triggers CEL_LifeCycle -> cel_destroy() -> Despawn ===\n");
     CelsSessionRecompose(&session);
 
+    // Cleanup session and free internal arenas
     CelsSessionDestroy(&session);
     return 0;
 }
