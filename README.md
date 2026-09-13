@@ -173,3 +173,179 @@ cmake -B build && cmake --build build && ./build/my_host
 - **`rebuild_my_app.bat` / `.sh`**: Ready-to-run terminal rebuild scripts in the build directory.
 
 ---
+
+## Host Engine Architecture & Integration
+
+CELS supports two deployment workflows using the **exact same C99 engine loop**:
+1. **Dynamic Hot-Reloading in Development (`Debug`)**: Rebuilds swap in `<50ms` with zero Windows DLL file locks and full state retention in L1 cache slabs.
+2. **Single-Binary Monolithic in Production (`Release`)**: Host and app compile into a single standalone `.exe` with zero `.dll` dependencies and maximum compiler inlining.
+
+### Unified Engine Main Loop
+
+Developers control their own hardware subsystems, input polling, and frame loop without any OS headers (`windows.h`), path utilities, or external rebuild scripts:
+
+```c
+#include <cels.h>
+
+int main(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+
+    // 1. Initialize host engine
+    CelsEngine engine;
+    CelsEngineInit(&engine, NULL, NULL);
+
+    // 2. Register persistent engine subsystems (survives dynamic reloads)
+    static PlatformSubsystem platform = { .renderer = "Vulkan", .targetFps = 60 };
+    CEL_RegisterModule(&engine, PlatformSubsystem, &platform);
+
+    // 3. Mount application (auto-discovers DLL in Debug, static bind in Release)
+    if (CelsEngineLoadApp(&engine, "my_app") != CELS_OK) {
+        CelsEngineDestroy(&engine);
+        return 1;
+    }
+
+    // 4. Main Game / Engine Loop
+    while (!engine.shouldQuit) {
+        // Automatically detects on-disk rebuilds in Debug; inlines to false in Release
+        if (CelsAppRuntimeCheck(&engine)) {
+            printf("[Engine] Application code hot-swapped!\n");
+        }
+
+        Engine_PollEvents();
+        Engine_Update();
+
+        // Recompose declarative UI & reactive state
+        CelsSessionRecompose(&engine.session);
+
+        Engine_Render();
+    }
+
+    // 5. Clean teardown
+    CelsEngineDestroy(&engine);
+    return 0;
+}
+```
+
+| Deployment Mode | Build Type | CMake Mode | Runtime Behavior |
+|---|---|---|---|
+| **Hot-Reload** | `Debug` | `MODE HOT_RELOAD` (default) | `CelsEngineLoadApp` creates shadow copy `.hot_*.tmp.dll`. `CelsAppRuntimeCheck` polls timestamps and hot-swaps code live in `<50ms`. |
+| **Monolithic** | `Release` | `MODE SINGLE_BINARY` | Compiles into a single `.exe`. `CelsEngineLoadApp` binds statically. `CelsAppRuntimeCheck` is a zero-cost inline returning `false`. |
+
+---
+
+## Non-Hot-Reloading Setup (Single-Binary & Static Linking)
+
+If your project does not need dynamic DLL hot-reloading (e.g., embedded systems, production distribution, or traditional static binaries), you can disable hot-reloading entirely and compile everything into a single `.exe`.
+
+### Approach 1: Single-Binary via `cels_add_application` (Recommended)
+
+Pass the `SINGLE_BINARY` (or `MONOLITHIC`) flag directly in your `CMakeLists.txt`:
+
+```cmake
+cmake_minimum_required(VERSION 3.20...4.3)
+project(my_app C)
+
+include(FetchContent)
+FetchContent_Declare(
+    cels
+    GIT_REPOSITORY https://github.com/jackblitz/cels.git
+    GIT_TAG v0.1.0
+)
+FetchContent_MakeAvailable(cels)
+
+# Forces a single monolithic executable in ALL build configurations (Debug & Release)
+cels_add_application(
+    HOST my_app
+    APP my_app_logic
+    HOST_SOURCES src/host.c
+    APP_SOURCES src/app.c
+    SINGLE_BINARY
+)
+```
+
+Alternatively, leave `MODE AUTO` and pass `-DCELS_HOT_RELOAD=OFF` or `-DCMAKE_BUILD_TYPE=Release` at configuration time:
+
+```bash
+cmake -B build -DCELS_HOT_RELOAD=OFF
+cmake --build build
+```
+
+This compiles `HOST_SOURCES` and `APP_SOURCES` directly into a single `my_app.exe` with **zero `.dll` files** and **zero OS dynamic library dependencies**.
+
+---
+
+### Approach 2: Traditional Static Linking (`target_link_libraries`)
+
+If you prefer traditional CMake without host/app target splitting, link directly to the `cels::cels` static library target:
+
+```cmake
+cmake_minimum_required(VERSION 3.20...4.3)
+project(my_standalone_app C)
+
+set(CMAKE_C_STANDARD 99)
+
+# Include CELS library via GitHub FetchContent
+include(FetchContent)
+FetchContent_Declare(
+    cels
+    GIT_REPOSITORY https://github.com/jackblitz/cels.git
+    GIT_TAG v0.1.0
+)
+FetchContent_MakeAvailable(cels)
+
+# Standard single executable
+add_executable(my_standalone_app src/main.c)
+target_link_libraries(my_standalone_app PRIVATE cels::cels)
+```
+
+#### Direct Embedded `CelsSession` (Zero Engine Overhead)
+
+If you only want CELS's reactive composition tree, slot table, and memory slabs embedded directly inside your own custom engine or subsystem:
+
+```c
+#include <cels.h>
+#include <stdio.h>
+
+CEL_State(MyState) { int score; };
+
+CEL_Composable(HUD, MyState*, s) {
+    MyState state = cel_watch(s);
+    printf("Player score: %d\n", state.score);
+}
+
+CEL_Composition(GameRoot, key) {
+    (void)key;
+    MyState init = { .score = 100 };
+    MyState *s = cel_lifecycle_state(init, NULL, NULL);
+    HUD(s);
+}
+
+int main(void) {
+    // 1. Initialize reactive session (allocates L1 cache-aligned slab arena)
+    CelsSession session;
+    CelsSessionInit(&session, NULL);
+
+    // 2. Attach composition root
+    CelsCompositionRef root = CEL_COMPOSITION(GameRoot);
+    CelsSessionAttachComposition(&session, root.key, root.body, root.lifecycleEval, NULL);
+
+    // 3. Initial recomposition
+    CelsSessionRecompose(&session);
+
+    // 4. In-frame state mutation and recomposition
+    MyState *state = CEL_GetState(&session, root.key, MyState);
+    if (state != NULL) {
+        cel_mutate(&session, state) {
+            this->score += 50;
+        }
+        CelsSessionRecompose(&session);
+    }
+
+    // 5. Clean teardown
+    CelsSessionDestroy(&session);
+    return 0;
+}
+```
+
+---

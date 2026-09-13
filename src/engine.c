@@ -1,6 +1,7 @@
 #include "cels/engine.h"
 #include "cels/app.h"
 #include "cels/session.h"
+#include "cels/module.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -54,7 +55,12 @@ void CelsEngineDestroy(CelsEngine *engine)
         return;
     }
 
-    if (engine->isStarted) {
+    if (engine->appModule != NULL) {
+        CelsAppModuleUnload(engine->appModule, &engine->session);
+        free(engine->appModule);
+        engine->appModule = NULL;
+        engine->isStarted = false;
+    } else if (engine->isStarted) {
         CelsEngineEnd(engine);
     }
 
@@ -258,4 +264,56 @@ CelsResult CelsEngineRunStandalone(const struct CelsAppManifest *manifest,
     CelsEngineEnd(&engine);
     CelsEngineDestroy(&engine);
     return res;
+}
+
+CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appName)
+{
+    if (engine == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+
+    char resolvedPath[CELS_PATH_MAX] = {0};
+    bool found = CelsResolveModulePath(appName, resolvedPath, sizeof(resolvedPath));
+
+    if (!found) {
+        fprintf(stderr,
+                "[CELS Engine] Application library '%s' not found on disk (expected: '%s').\n",
+                appName ? appName : "(default)", resolvedPath);
+        return CELS_ERROR_INVALID_STATE;
+    }
+
+    if (engine->appModule != NULL) {
+        CelsAppModuleUnload(engine->appModule, &engine->session);
+        free(engine->appModule);
+        engine->appModule = NULL;
+    }
+
+    engine->appModule = (CelsAppModule *)calloc(1, sizeof(CelsAppModule));
+    if (engine->appModule == NULL) {
+        return CELS_ERROR_OUT_OF_MEMORY;
+    }
+
+    if (!CelsAppModuleLoad(engine->appModule, resolvedPath, &engine->session)) {
+        fprintf(stderr, "[CELS Engine] Failed to load dynamic library '%s'.\n", resolvedPath);
+        free(engine->appModule);
+        engine->appModule = NULL;
+        return CELS_ERROR_INVALID_STATE;
+    }
+
+    engine->manifest = engine->appModule->manifest;
+    engine->isStarted = true;
+
+    /* Initial mount pass */
+    CelsSessionRecompose(&engine->session);
+
+    return CELS_OK;
+}
+
+bool CelsAppRuntimeCheck(CelsEngine *engine)
+{
+    if (engine == NULL || engine->appModule == NULL) {
+        return false;
+    }
+
+    return CelsAppModuleCheckAndReload(engine->appModule, &engine->session);
 }
