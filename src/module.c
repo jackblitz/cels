@@ -47,9 +47,10 @@ static uint64_t GetPathWriteTime(const char *path)
 static bool IsPathReadable(const char *path)
 {
 #if defined(_WIN32)
+    /* Open with sharing mode 0 (exclusive) to verify the compiler/linker has completely closed the file */
     HANDLE h = CreateFileA(path,
                            GENERIC_READ,
-                           FILE_SHARE_READ,
+                           0,
                            NULL,
                            OPEN_EXISTING,
                            FILE_ATTRIBUTE_NORMAL,
@@ -264,23 +265,18 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
         return false;
     }
 
-    PlatformFreeLibrary(app->handle);
-    app->handle = NULL;
-
     char oldLoadedPath[CELS_PATH_MAX];
     snprintf(oldLoadedPath, sizeof(oldLoadedPath), "%s", app->loadedPath);
 
-    app->reloadCount++;
+    char candidatePath[CELS_PATH_MAX];
+    uint32_t nextReload = app->reloadCount + 1;
 #if defined(_WIN32)
-    snprintf(app->loadedPath,
-             sizeof(app->loadedPath),
+    snprintf(candidatePath,
+             sizeof(candidatePath),
              "%.480s.hot_%u.tmp.dll",
              app->originalPath,
-             app->reloadCount);
-    if (!PlatformCopyFile(app->originalPath, app->loadedPath)) {
-        fprintf(stderr,
-                "[CELS App] Failed to create shadow copy '%s' during reload.\n",
-                app->loadedPath);
+             nextReload);
+    if (!PlatformCopyFile(app->originalPath, candidatePath)) {
         return false;
     }
 
@@ -291,37 +287,40 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
     char *dot = strrchr(pdbSrc, '.');
     if (dot != NULL) {
         *dot = '\0';
-        snprintf(pdbDst, sizeof(pdbDst), "%.480s.hot_%u.tmp.pdb", pdbSrc, app->reloadCount);
+        snprintf(pdbDst, sizeof(pdbDst), "%.480s.hot_%u.tmp.pdb", pdbSrc, nextReload);
         strncat(pdbSrc, ".pdb", sizeof(pdbSrc) - strlen(pdbSrc) - 1u);
         if (IsPathReadable(pdbSrc)) {
             PlatformCopyFile(pdbSrc, pdbDst);
         }
     }
 #else
-    snprintf(app->loadedPath, sizeof(app->loadedPath), "%s", app->originalPath);
+    snprintf(candidatePath, sizeof(candidatePath), "%s", app->originalPath);
 #endif
 
-    app->handle = PlatformLoadLibrary(app->loadedPath);
-    if (app->handle == NULL) {
-        fprintf(stderr,
-                "[CELS App] Failed to reload dynamic library '%s'.\n",
-                app->loadedPath);
+    void *newHandle = PlatformLoadLibrary(candidatePath);
+    if (newHandle == NULL) {
+        PlatformDeleteFile(candidatePath);
         return false;
     }
 
-    /* Delete old shadow file after loading the new one */
-    PlatformDeleteFile(oldLoadedPath);
-
     CelsAppEntryFn getManifest = (CelsAppEntryFn)PlatformGetProcAddress(
-        app->handle,
+        newHandle,
         CELS_APP_ENTRY_SYMBOL);
 
     if (getManifest == NULL) {
-        fprintf(stderr,
-                "[CELS App] Reloaded library is missing '%s'.\n",
-                CELS_APP_ENTRY_SYMBOL);
+        PlatformFreeLibrary(newHandle);
+        PlatformDeleteFile(candidatePath);
         return false;
     }
+
+    /* New library is verified and ready. Swap cleanly and unload old module. */
+    PlatformFreeLibrary(app->handle);
+    app->handle = newHandle;
+    snprintf(app->loadedPath, sizeof(app->loadedPath), "%s", candidatePath);
+    app->reloadCount = nextReload;
+
+    /* Delete previous shadow file */
+    PlatformDeleteFile(oldLoadedPath);
 
     app->manifest = getManifest();
     app->lastWriteTime = currentWriteTime;
