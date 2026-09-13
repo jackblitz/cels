@@ -1,4 +1,5 @@
 #include "cels/session.h"
+#include "cels/engine.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -32,8 +33,7 @@
  * @param size Total byte size of the slab to allocate.
  * @return Pointer to 64-byte aligned memory, or NULL on allocation failure.
  */
-static void *
-CelsAllocAlignedSlab(size_t size)
+static void *CelsAllocAlignedSlab(size_t size)
 {
 #if defined(_WIN32) || defined(_MSC_VER)
     return _aligned_malloc(size, CELS_CACHE_LINE_SIZE);
@@ -53,8 +53,7 @@ CelsAllocAlignedSlab(size_t size)
  *
  * @param ptr Pointer to aligned slab memory. NULL is safely ignored.
  */
-static void
-CelsFreeAlignedSlab(void *ptr)
+static void CelsFreeAlignedSlab(void *ptr)
 {
     if (ptr == NULL) {
         return;
@@ -75,8 +74,7 @@ static CELS_THREAD_LOCAL CelsSession *s_currentSession = NULL;
  *
  * @return Active CelsSession pointer, or NULL if no session is active.
  */
-CelsSession *
-CelsGetCurrentSession(void)
+CelsSession *CelsGetCurrentSession(void)
 {
     return s_currentSession;
 }
@@ -86,8 +84,7 @@ CelsGetCurrentSession(void)
  *
  * @param session Target session to bind to current thread context. May be NULL.
  */
-void
-CelsSetCurrentSession(CelsSession *session)
+void CelsSetCurrentSession(CelsSession *session)
 {
     s_currentSession = session;
 }
@@ -101,8 +98,7 @@ CelsSetCurrentSession(CelsSession *session)
  * @param s             Target session. Non-NULL.
  * @param targetLogical Desired logical gap start index.
  */
-static void
-MoveGroupGap(CelsSession *s, uint32_t targetLogical)
+static void MoveGroupGap(CelsSession *s, uint32_t targetLogical)
 {
     if (targetLogical == s->groupsGapStart) {
         return;
@@ -134,8 +130,7 @@ MoveGroupGap(CelsSession *s, uint32_t targetLogical)
  * @param s       Target session. Non-NULL.
  * @param groupId Unique group identifier whose resources are being released.
  */
-static void
-FireCleanupsForGroup(CelsSession *s, uint32_t groupId)
+static void FireCleanupsForGroup(CelsSession *s, uint32_t groupId)
 {
     for (uint32_t i = s->cleanupCount; i > 0; --i) {
         const uint32_t idx = i - 1;
@@ -160,8 +155,7 @@ FireCleanupsForGroup(CelsSession *s, uint32_t groupId)
  * @param s       Target session. Non-NULL.
  * @param groupId Unique group identifier whose slots should be reclaimed.
  */
-static void
-ReleaseSlotsForGroup(CelsSession *s, uint32_t groupId)
+static void ReleaseSlotsForGroup(CelsSession *s, uint32_t groupId)
 {
     for (uint32_t i = 0; i < s->slotCount;) {
         CelsSlotAllocation *const slot = &s->slots[i];
@@ -189,8 +183,7 @@ ReleaseSlotsForGroup(CelsSession *s, uint32_t groupId)
  *
  * @param s Target session. Non-NULL.
  */
-static void
-DrainInvalidationQueue(CelsSession *s)
+static void DrainInvalidationQueue(CelsSession *s)
 {
     const uint32_t totalGroups = CelsGetLogicalGroupCount(s);
 
@@ -235,8 +228,7 @@ DrainInvalidationQueue(CelsSession *s)
  * @param s      Session to initialize. Non-NULL.
  * @param config Optional session configuration. If NULL, defaults are used.
  */
-void
-CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
+void CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
 {
     assert(s != NULL);
     memset(s, 0, sizeof(*s));
@@ -292,8 +284,12 @@ CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
     s->dataGapEnd = (uint32_t)s->dataArenaSize;
     s->nextGroupId = 1;
 
+    s->magic = CELS_SESSION_MAGIC;
     s->root = config ? config->root : NULL;
+    s->engine = config ? config->engine : NULL;
     s->hasComposedOnce = false;
+    s->isHotReloadPending = false;
+    s->fallbackModuleCount = 0;
 
     s->maxDrainIterations = (config && config->maxDrainIterations > 0)
         ? config->maxDrainIterations
@@ -308,8 +304,7 @@ CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
  * @param s      Target session. Non-NULL.
  * @param rootFn Root composable callback function.
  */
-void
-CelsSessionSetRoot(CelsSession *s, CelsRootFn rootFn)
+void CelsSessionSetRoot(CelsSession *s, CelsRootFn rootFn)
 {
     assert(s != NULL);
     s->root = rootFn;
@@ -323,8 +318,7 @@ CelsSessionSetRoot(CelsSession *s, CelsRootFn rootFn)
  *
  * @param s Target session. NULL is safely ignored.
  */
-void
-CelsSessionDestroy(CelsSession *s)
+void CelsSessionDestroy(CelsSession *s)
 {
     if (s == NULL) {
         return;
@@ -337,12 +331,23 @@ CelsSessionDestroy(CelsSession *s)
         CelsPruneSubtree(s, 0);
     }
 
+    /* Teardown fallback modules only if session does not belong to a host engine */
+    if (s->engine == NULL) {
+        for (uint32_t i = s->fallbackModuleCount; i > 0; --i) {
+            if (s->fallbackModules[i - 1].onDestroy != NULL) {
+                s->fallbackModules[i - 1].onDestroy(s->fallbackModules[i - 1].instance);
+            }
+        }
+        s->fallbackModuleCount = 0;
+    }
+
     s_currentSession = (prev == s) ? NULL : prev;
 
     if (s->ownsSlab && s->slab != NULL) {
         CelsFreeAlignedSlab(s->slab);
     }
 
+    s->magic = 0;
     memset(s, 0, sizeof(*s));
 }
 
@@ -358,12 +363,9 @@ CelsSessionDestroy(CelsSession *s)
  * @param eval     Lifecycle evaluator function pointer. May be NULL.
  * @param statePtr Optional user state pointer passed to eval. May be NULL.
  */
-void
-CelsSessionAttachComposition(CelsSession *s,
-                             uint64_t key,
-                             void (*body)(CelsSession *s, uint64_t key),
-                             bool (*eval)(void *userData),
-                             void *statePtr)
+void CelsSessionAttachComposition(CelsSession *s, uint64_t key,
+                                  void (*body)(CelsSession *s, uint64_t key),
+                                  bool (*eval)(void *userData), void *statePtr)
 {
     assert(s != NULL);
     assert(body != NULL);
@@ -395,6 +397,27 @@ CelsSessionAttachComposition(CelsSession *s,
 }
 
 /**
+ * Detaches an attached composition from the session.
+ *
+ * @param s   Target session. NULL is safely ignored.
+ * @param key Unique composition identifier.
+ */
+void CelsSessionDetachComposition(CelsSession *s, uint64_t key)
+{
+    if (s == NULL) {
+        return;
+    }
+    for (uint32_t i = 0; i < s->attachedCount; ++i) {
+        if (s->attachedCompositions[i].key == key) {
+            s->attachedCompositions[i].isAttached = false;
+            s->attachedCompositions[i].body = NULL;
+            s->attachedCompositions[i].lifecycleEval = NULL;
+            return;
+        }
+    }
+}
+
+/**
  * Executes a recomposition pass over the session tree.
  *
  * Drains pending invalidations, marks affected groups and ancestors, and
@@ -404,17 +427,17 @@ CelsSessionAttachComposition(CelsSession *s,
  * @param s Target session. Non-NULL.
  * @return CELS_OK on success, or an error code on invalid state or non-convergence.
  */
-CelsResult
-CelsSessionRecompose(CelsSession *s)
+CelsResult CelsSessionRecompose(CelsSession *s)
 {
     assert(s != NULL);
     if (s->root == NULL && s->attachedCount == 0) {
         return CELS_ERROR_INVALID_STATE;
     }
 
-    if (s->hasComposedOnce && s->queueCount == 0) {
+    if (s->hasComposedOnce && s->queueCount == 0 && !s->isHotReloadPending) {
         return CELS_OK;
     }
+    s->isHotReloadPending = false;
 
     CelsSession *const prevSession = s_currentSession;
     s_currentSession = s;
@@ -487,6 +510,88 @@ CelsSessionRecompose(CelsSession *s)
 }
 
 /**
+ * Flags all mounted composition groups for re-evaluation on the next recompose pass.
+ *
+ * Marks all logical groups as CELS_FLAG_INVALIDATED (and ancestors CELS_FLAG_CONTAINS_INVALIDATED)
+ * while leaving CELS_FLAG_FRESH_MOUNT cleared, so existing slots, cel_remember memory,
+ * and entity IDs are preserved across the hot reload. Also invokes onReload on any
+ * registered modules.
+ *
+ * @param s Target session. Non-NULL.
+ */
+void CelsSessionHotReload(CelsSession *s)
+{
+    assert(s != NULL);
+    const uint32_t totalGroups = CelsGetLogicalGroupCount(s);
+    for (uint32_t i = 0; i < totalGroups; ++i) {
+        CelsSlotGroup *const g = CelsGetGroup(s, i);
+        if (g != NULL) {
+            g->flags |= CELS_FLAG_INVALIDATED;
+            if (i > 0) {
+                g->flags |= CELS_FLAG_CONTAINS_INVALIDATED;
+            }
+            g->flags &= ~CELS_FLAG_FRESH_MOUNT;
+        }
+    }
+    s->isHotReloadPending = true;
+}
+
+/**
+ * Registers an engine subsystem module (SDL, Flecs, Audio, etc.) with the session.
+ */
+void CelsSessionRegisterModule(CelsSession *s, uint64_t key, const char *name,
+                               void *instance,
+                               void (*onReload)(void *instance,
+                                                CelsSession *session),
+                               void (*onDestroy)(void *instance))
+{
+    (void)onReload;
+    assert(s != NULL);
+    assert(instance != NULL);
+
+    if (s->engine != NULL) {
+        CelsEngineRegisterModule(s->engine, key, name, instance, onDestroy);
+        return;
+    }
+
+    for (uint32_t i = 0; i < s->fallbackModuleCount; ++i) {
+        if (s->fallbackModules[i].key == key) {
+            s->fallbackModules[i].name = name;
+            s->fallbackModules[i].instance = instance;
+            s->fallbackModules[i].onDestroy = onDestroy;
+            return;
+        }
+    }
+
+    assert(s->fallbackModuleCount < CELS_MAX_MODULES && "Exceeded CELS_MAX_MODULES");
+    s->fallbackModules[s->fallbackModuleCount++] = (CelsModuleBinding){
+        .key = key,
+        .name = name,
+        .instance = instance,
+        .onDestroy = onDestroy
+    };
+}
+
+/**
+ * Retrieves a registered subsystem module pointer by its 64-bit key.
+ */
+void *CelsSessionGetModule(const CelsSession *s, uint64_t key)
+{
+    if (s == NULL) {
+        return NULL;
+    }
+    if (s->engine != NULL) {
+        return CelsEngineGetModule(s->engine, key);
+    }
+    for (uint32_t i = 0; i < s->fallbackModuleCount; ++i) {
+        if (s->fallbackModules[i].key == key) {
+            return s->fallbackModules[i].instance;
+        }
+    }
+    return NULL;
+}
+
+/**
  * Prunes a composition subtree, firing cleanups and reclaiming slot memory.
  *
  * Fires onDestroy cleanups in reverse creation order, unsubscribes reactive
@@ -495,8 +600,7 @@ CelsSessionRecompose(CelsSession *s)
  * @param s                Target session. Non-NULL.
  * @param rootLogicalIndex Logical group index of the subtree root to remove.
  */
-void
-CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex)
+void CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex)
 {
     CelsSlotGroup *const root = CelsGetGroup(s, rootLogicalIndex);
     const uint32_t groupsToRemove = 1u + root->groupSize;
@@ -547,8 +651,7 @@ CelsPruneSubtree(CelsSession *s, uint32_t rootLogicalIndex)
  * @param s   Target session. NULL is safely ignored.
  * @param key Callsite key of the group to prune.
  */
-void
-CelsPruneSubtreeByKey(CelsSession *s, uint64_t key)
+void CelsPruneSubtreeByKey(CelsSession *s, uint64_t key)
 {
     if (s == NULL) {
         return;
@@ -574,8 +677,7 @@ CelsPruneSubtreeByKey(CelsSession *s, uint64_t key)
  * @param rootKey Stable 64-bit key for the root composition.
  * @return true if the composition should be entered; false on error.
  */
-bool
-CelsEnterComposition(CelsSession *s, uint64_t rootKey)
+bool CelsEnterComposition(CelsSession *s, uint64_t rootKey)
 {
     assert(s->currentDepth == 0 && "CEL_Composition cannot be nested");
     s_currentSession = s;
@@ -644,8 +746,7 @@ CelsEnterComposition(CelsSession *s, uint64_t rootKey)
  * @param key Stable 64-bit key, or 0 for auto-synthesized key.
  * @return true if the composable body should execute; false if skipped in O(1).
  */
-bool
-CelsEnterComposable(CelsSession *s, uint64_t key)
+bool CelsEnterComposable(CelsSession *s, uint64_t key)
 {
     assert(s->currentDepth > 0 && "CEL_Composable must be nested within CEL_Composition");
     if (s->currentDepth >= CELS_MAX_DEPTH) {
@@ -786,8 +887,7 @@ CelsEnterComposable(CelsSession *s, uint64_t key)
  *
  * @param s Target session. Non-NULL.
  */
-void
-CelsExitGroup(CelsSession *s)
+void CelsExitGroup(CelsSession *s)
 {
     assert(s->currentDepth > 0 && "Unmatched CEL_Close call");
     const uint32_t depth = --s->currentDepth;
@@ -832,11 +932,8 @@ CelsExitGroup(CelsSession *s)
  * @param desc    Optional lifecycle descriptor (onCreate/onDestroy). May be NULL.
  * @return Pointer to persistent slot memory in session data arena, or NULL on overflow.
  */
-void *
-CelsResolveSlot(CelsSession *s,
-                size_t size,
-                const void *initVal,
-                const CelsLifecycleDesc *desc)
+void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal,
+                      const CelsLifecycleDesc *desc)
 {
     assert(s->currentDepth > 0);
     CelsSlotGroup *const group = CelsGetGroup(s, s->currentGroupIndex);
@@ -882,7 +979,8 @@ CelsResolveSlot(CelsSession *s,
             .groupId = (uint32_t)group->userData,
             .slotOffset = s->currentSlotOffset,
             .arenaOffset = offset,
-            .size = (uint32_t)alignedSize
+            .size = (uint16_t)alignedSize,
+            .userSize = (uint16_t)size
         };
         ++s->slotCount;
 
@@ -927,7 +1025,17 @@ CelsResolveSlot(CelsSession *s,
         CelsSlotAllocation *const slot = &s->slots[i];
         if (slot->groupId == (uint32_t)group->userData
             && slot->slotOffset == s->currentSlotOffset) {
-            assert(slot->size == alignedSize && "Remembered slot type/order changed");
+            if (slot->userSize != (uint16_t)size) {
+                fprintf(stderr,
+                        "[CELS HOT-RELOAD] Struct size changed for group 0x%016llX (was %u B, now %zu B). "
+                        "Resetting component to initial state.\n",
+                        (unsigned long long)group->key, (unsigned)slot->userSize, size);
+                FireCleanupsForGroup(s, (uint32_t)group->userData);
+                ReleaseSlotsForGroup(s, (uint32_t)group->userData);
+                group->flags |= CELS_FLAG_FRESH_MOUNT;
+                s->currentSlotOffset = 0;
+                return CelsResolveSlot(s, size, initVal, desc);
+            }
             s->currentSlotOffset += (uint32_t)alignedSize;
             return &s->dataArena[slot->arenaOffset];
         }
@@ -947,8 +1055,7 @@ CelsResolveSlot(CelsSession *s,
  * @param key Callsite key of the composition group.
  * @return Pointer to state struct, or NULL if not found or session is NULL.
  */
-void *
-CelsGetState(CelsSession *s, uint64_t key)
+void *CelsGetState(CelsSession *s, uint64_t key)
 {
     if (s == NULL) {
         return NULL;
@@ -987,8 +1094,7 @@ CelsGetState(CelsSession *s, uint64_t key)
  * @param key Callsite key of the composition group.
  * @return Pointer to state struct, or NULL if not found.
  */
-void *
-CelsFindLifecycleState(CelsSession *s, uint64_t key)
+void *CelsFindLifecycleState(CelsSession *s, uint64_t key)
 {
     return CelsGetState(s, key);
 }
@@ -1000,8 +1106,7 @@ CelsFindLifecycleState(CelsSession *s, uint64_t key)
  * @param key Callsite key of the composition group.
  * @return Pointer to state struct, or NULL if not found.
  */
-void *
-CelsFindObserver(CelsSession *s, uint64_t key)
+void *CelsFindObserver(CelsSession *s, uint64_t key)
 {
     return CelsGetState(s, key);
 }

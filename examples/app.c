@@ -3,70 +3,55 @@
 #include <stdio.h>
 
 /* ========================================================================= */
-/* Application Entry Point & Session Lifecycle                               */
+/* Application Lifecycle Hooks (Defined in Application / DLL)               */
 /* ========================================================================= */
 
 /**
- * Example application entry point demonstrating session lifecycle and reactivity.
+ * Called when the application starts.
  *
- * Initializes a CelsSession, attaches the CEL_Window composition, and executes
- * passes demonstrating initial mount, quiet check, state mutations, and teardown.
+ * Configures system/engine memory modules into the host engine and attaches
+ * the root composition by returning its CelsCompositionRef handle.
  *
- * @return 0 on success.
+ * @param engine  Target host engine (.exe). Non-NULL.
+ * @param session Target session. Non-NULL.
+ * @return Composition reference to mount as the root tree.
  */
-int
-main(void)
+static CelsCompositionRef App_OnStart(CelsEngine *engine, CelsSession *session)
 {
-    // 1. Initialize session: defaults to 32 KiB L1 data cache slab (CELS_SLAB_32K)
-    // Developers can also configure .slabSize = CELS_SLAB_48K or custom sizes
-    CelsSession session;
-    CelsSessionInit(&session, NULL);
+    (void)session;
+    printf("  [App Lifecycle] OnStart: Initializing system/engine memory in host .exe...\n");
 
-    // 2. Attach window composition with its lifecycle evaluator
-    Window_Attach(&session);
+    /* 1. Register system / engine memory module into the host engine (.exe) */
+    static PlatformModule platform = {
+        .backendName = "SDL / Vulkan",
+        .refreshRateHz = 144,
+        .dpiScale = 1.25f
+    };
+    CEL_RegisterModule(engine, PlatformModule, &platform);
 
-    // Pass 1: Initial Mount
-    // Builds tree, calls Window_OnCreated to initialize state in the slot table
-    printf("=== Pass 1: Initial Mount ===\n");
-    CelsSessionRecompose(&session);
-
-    // State Query: Retrieve live state from the session by key (no global variables!)
-    WindowState *win = CEL_GetState(&session, CEL_KEY("CEL_Window"), WindowState);
-    printf("  [CEL_GetState] Found window state: %p [%dx%d, open: %s]\n",
-           win ? win->nativeHandle : NULL,
-           win ? win->width : 0,
-           win ? win->height : 0,
-           (win && win->isOpen) ? "true" : "false");
-
-    // Quiet Check: No state changed -> O(1) instant skip
-    printf("\n=== Quiet Check (Nothing Changed) ===\n");
-    CelsSessionRecompose(&session);
-    printf("  Quiet recompose completed instantly (0 work done).\n");
-
-    // Event 1: Mutate the state retrieved from the session
-    printf("\n=== Event 1: Resize Window to 1024x768 (cel_mutate) ===\n");
-    cel_mutate(&session, win) {
-        this->width  = 1024;
-        this->height = 768;
-    }
-    CelsSessionRecompose(&session);
-
-    // Event 2: Mutate window size again
-    printf("\n=== Event 2: Resize Window to 1920x1080 ===\n");
-    cel_mutate(&session, win) {
-        this->width  = 1920;
-        this->height = 1080;
-    }
-    CelsSessionRecompose(&session);
-
-    // Event 3: Close the window -> triggers WindowLifeCycle -> cel_destroy() -> OnDestroyed
-    printf("\n=== Event 3: Close Window ===\n");
-    cel_mutate(&session, win) {
-        this->isOpen = false;
-    }
-    CelsSessionRecompose(&session);
-
-    // Cleanup session and free internal slab
-    CelsSessionDestroy(&session);
-    return 0;
+    /* 2. Attach root composition by returning it! */
+    return Window_GetComposition();
 }
+
+/**
+ * Called on application shutdown to clean up any application-level resources.
+ *
+ * @param engine  Target host engine (.exe). Non-NULL.
+ * @param session Target session. Non-NULL.
+ */
+static void App_OnEnd(CelsEngine *engine, CelsSession *session)
+{
+    (void)engine;
+    (void)session;
+    printf("  [App Lifecycle] OnEnd: Application teardown complete.\n");
+}
+
+/* ========================================================================= */
+/* Declarative Application Registration (App Module)                         */
+/* ========================================================================= */
+
+CEL_App(WindowApp,
+    .onStart = App_OnStart,
+    .onEnd = App_OnEnd,
+    .onPrintTree = Window_PrintTree
+);

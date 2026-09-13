@@ -23,8 +23,7 @@
         }                                                                      \
     } while (0)
 
-static void
-TestInitAndReset(void)
+static void TestInitAndReset(void)
 {
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
@@ -54,8 +53,7 @@ TestInitAndReset(void)
     TEST_ASSERT(CelsSlotTableSlotCount(&table) == 0);
 }
 
-static void
-TestWriterAndReaderBasic(void)
+static void TestWriterAndReaderBasic(void)
 {
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
@@ -175,8 +173,7 @@ TestWriterAndReaderBasic(void)
     TEST_ASSERT(res == CELS_OK);
 }
 
-static void
-TestSubtreeSkipInO1(void)
+static void TestSubtreeSkipInO1(void)
 {
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
@@ -236,8 +233,7 @@ TestSubtreeSkipInO1(void)
     TEST_ASSERT(res == CELS_OK);
 }
 
-static void
-TestGapMovementAndRecompositionWithoutCorruption(void)
+static void TestGapMovementAndRecompositionWithoutCorruption(void)
 {
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
@@ -309,8 +305,7 @@ TestGapMovementAndRecompositionWithoutCorruption(void)
     TEST_ASSERT(res == CELS_OK);
 }
 
-static void
-TestWriterGroupSkipRecomposition(void)
+static void TestWriterGroupSkipRecomposition(void)
 {
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;
@@ -348,8 +343,7 @@ TestWriterGroupSkipRecomposition(void)
     TEST_ASSERT(res == CELS_OK);
 }
 
-static void
-TestConcurrencyContract(void)
+static void TestConcurrencyContract(void)
 {
     ALIGNED_SLAB(4096, slab);
     CelsSlotTable table;

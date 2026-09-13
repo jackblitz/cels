@@ -16,8 +16,7 @@
  *
  * @param registry Target registry. Non-NULL.
  */
-void
-CelsStateRegistryInit(CelsStateRegistry *registry)
+void CelsStateRegistryInit(CelsStateRegistry *registry)
 {
     CELS_ASSERT(registry != NULL);
     memset(registry, 0, sizeof(*registry));
@@ -34,8 +33,8 @@ CelsStateRegistryInit(CelsStateRegistry *registry)
  * @param statePtr Memory address of the state object. Non-NULL.
  * @return Pointer to the state cell's watcher header, or NULL if capacity exceeded.
  */
-static CelsStateHeader *
-GetOrCreateStateHeader(CelsSession *session, const void *statePtr)
+static CelsStateHeader *GetOrCreateStateHeader(CelsSession *session,
+                                               const void *statePtr)
 {
     CELS_ASSERT(session != NULL);
     CELS_ASSERT(statePtr != NULL);
@@ -69,8 +68,7 @@ GetOrCreateStateHeader(CelsSession *session, const void *statePtr)
  * @param session  Target session, or NULL to use the ambient current session.
  * @param statePtr Memory address of the reactive state being read. Non-NULL.
  */
-void
-CelsStateRead(CelsSession *session, const void *statePtr)
+void CelsStateRead(CelsSession *session, const void *statePtr)
 {
     if (session == NULL) {
         session = CelsGetCurrentSession();
@@ -124,11 +122,8 @@ CelsStateRead(CelsSession *session, const void *statePtr)
  * @param oldVal   Pointer to snapshot buffer captured before mutation. Non-NULL.
  * @param size     Byte size of the state struct.
  */
-void
-CelsStateCommitMutation(CelsSession *session,
-                        const void *statePtr,
-                        const void *oldVal,
-                        size_t size)
+void CelsStateCommitMutation(CelsSession *session, const void *statePtr,
+                             const void *oldVal, size_t size)
 {
     if (session == NULL) {
         session = CelsGetCurrentSession();
@@ -176,8 +171,8 @@ CelsStateCommitMutation(CelsSession *session,
  * @param registry Target state registry. NULL is safely ignored.
  * @param groupKey Group callsite key to unsubscribe.
  */
-void
-CelsStateRegistryUnsubscribeKey(CelsStateRegistry *registry, uint64_t groupKey)
+void CelsStateRegistryUnsubscribeKey(CelsStateRegistry *registry,
+                                     uint64_t groupKey)
 {
     if (registry == NULL) {
         return;
@@ -210,10 +205,8 @@ CelsStateRegistryUnsubscribeKey(CelsStateRegistry *registry, uint64_t groupKey)
  * @param first    Inclusive starting memory address.
  * @param end      Exclusive ending memory address.
  */
-void
-CelsStateRegistryReleaseRange(CelsStateRegistry *registry,
-                              uintptr_t first,
-                              uintptr_t end)
+void CelsStateRegistryReleaseRange(CelsStateRegistry *registry, uintptr_t first,
+                                   uintptr_t end)
 {
     if (registry == NULL) {
         return;

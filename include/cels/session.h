@@ -47,6 +47,13 @@
 #define CELS_FLAG_CONTAINS_INVALIDATED (1u << 1)
 #define CELS_FLAG_FRESH_MOUNT (1u << 2)
 
+#define CELS_SESSION_MAGIC 0x53455353u /* 'SESS' */
+
+/* Forward declarations */
+struct CelsEngine;
+typedef struct CelsEngine CelsEngine;
+typedef struct CelsEngine CelsApp;
+
 /**
  * L1 Cache-aligned memory slab profiles for CelsSession.
  * Fitting the session slab entirely in L1d cache eliminates CPU cache-miss stalls.
@@ -80,6 +87,7 @@ typedef struct CelsSessionConfig {
     size_t     slabSize;    /**< Total slab size in bytes (e.g. CELS_SLAB_32K). Defaults to 32 KiB if 0. */
     void      *slab;        /**< Optional user-provided 64-byte aligned buffer (zero-alloc mode). */
     uint32_t   maxGroups;   /**< Optional max groups. If 0, auto-calculated from slabSize. */
+    struct CelsEngine *engine; /**< Optional host engine owning system modules */
 } CelsSessionConfig;
 
 /**
@@ -116,7 +124,8 @@ typedef struct CelsSlotAllocation {
     uint32_t groupId;
     uint32_t slotOffset;
     uint32_t arenaOffset;
-    uint32_t size;
+    uint16_t size;         /**< Aligned allocation size in data arena */
+    uint16_t userSize;     /**< Exact requested user type size for schema evolution check */
 } CelsSlotAllocation;
 
 #define CELS_MAX_ATTACHED_COMPOSITIONS 8u
@@ -129,13 +138,32 @@ typedef struct CelsAttachedComposition {
     bool isAttached;
 } CelsAttachedComposition;
 
+#ifndef CELS_MAX_MODULES
+#define CELS_MAX_MODULES 16u
+#endif
+
+#ifndef CELS_MODULE_BINDING_DEFINED
+#define CELS_MODULE_BINDING_DEFINED
+/**
+ * Record tracking an active engine subsystem module registered with the application or session.
+ */
+typedef struct CelsModuleBinding {
+    uint64_t key;          /**< 64-bit FNV-1a hash of module type name */
+    const char *name;      /**< Human-readable name for diagnostics */
+    void *instance;        /**< Pointer to developer's module struct */
+    void (*onDestroy)(void *instance); /**< Optional cleanup callback */
+} CelsModuleBinding;
+#endif
+
 /**
  * Primary session orchestrating composition, traversal, and reactive state.
  */
 struct CelsSession {
+    uint32_t magic;        /**< CELS_SESSION_MAGIC validation tag */
     CelsRootFn root;
     bool hasComposedOnce;
     bool isRecomposing;
+    bool isHotReloadPending;
 
     uint32_t currentDepth;
     uint32_t currentGroupIndex;
@@ -186,6 +214,11 @@ struct CelsSession {
     /* Attached Compositions */
     CelsAttachedComposition attachedCompositions[CELS_MAX_ATTACHED_COMPOSITIONS];
     uint32_t attachedCount;
+
+    /* Owning Host Engine Pointer & Fallback Module Storage */
+    struct CelsEngine *engine;
+    CelsModuleBinding fallbackModules[CELS_MAX_MODULES];
+    uint32_t fallbackModuleCount;
 };
 
 /* ========================================================================= */
@@ -197,6 +230,8 @@ void CelsSessionAttachComposition(CelsSession *s,
                                   void (*body)(CelsSession *s, uint64_t key),
                                   bool (*eval)(void *userData),
                                   void *statePtr);
+
+void CelsSessionDetachComposition(CelsSession *s, uint64_t key);
 
 /* ========================================================================= */
 /* Session Lifecycle Functions                                               */
@@ -232,6 +267,43 @@ void CelsSessionDestroy(CelsSession *session);
  * @return CELS_OK or error code.
  */
 CelsResult CelsSessionRecompose(CelsSession *session);
+
+/**
+ * Flags all mounted composition groups for re-evaluation on the next recompose pass.
+ *
+ * Used by dynamic library hot-reload to force execution of newly loaded composable
+ * bodies while preserving all slot allocations, cel_remember memory, and
+ * reactive state in the session data arena.
+ *
+ * @param session Target session. Non-NULL.
+ */
+void CelsSessionHotReload(CelsSession *session);
+
+/**
+ * Registers an engine subsystem module (SDL, Flecs, Audio, etc.) with the session.
+ *
+ * @param session   Target session. Non-NULL.
+ * @param key       Unique 64-bit identifier for the module.
+ * @param name      Human-readable module name for diagnostics.
+ * @param instance  Pointer to developer-owned module struct.
+ * @param onReload  Optional callback invoked after hot reload. May be NULL.
+ * @param onDestroy Optional callback invoked on session teardown. May be NULL.
+ */
+void CelsSessionRegisterModule(CelsSession *session,
+                              uint64_t key,
+                              const char *name,
+                              void *instance,
+                              void (*onReload)(void *instance, struct CelsSession *session),
+                              void (*onDestroy)(void *instance));
+
+/**
+ * Retrieves a registered subsystem module pointer by its 64-bit key.
+ *
+ * @param session Target session, or NULL for current ambient session.
+ * @param key     Unique 64-bit module identifier.
+ * @return Pointer to module instance, or NULL if not found.
+ */
+void *CelsSessionGetModule(const CelsSession *session, uint64_t key);
 
 /**
  * Returns the currently active ambient session for the calling thread.
@@ -282,28 +354,25 @@ void *CelsFindObserver(CelsSession *session, uint64_t key);
 /* Infallible Inline Accessors                                                */
 /* ========================================================================= */
 
-static inline uint32_t
-CelsGetLogicalGroupCount(const CelsSession *s)
+static inline uint32_t CelsGetLogicalGroupCount(const CelsSession *s)
 {
     return s->maxGroups - (s->groupsGapEnd - s->groupsGapStart);
 }
 
-static inline uint32_t
-CelsGroupLogicalToPhysical(const CelsSession *s, uint32_t logical)
+static inline uint32_t CelsGroupLogicalToPhysical(const CelsSession *s,
+                                                  uint32_t logical)
 {
     return (logical < s->groupsGapStart)
         ? logical
         : logical + (s->groupsGapEnd - s->groupsGapStart);
 }
 
-static inline CelsSlotGroup *
-CelsGetGroup(CelsSession *s, uint32_t logical)
+static inline CelsSlotGroup *CelsGetGroup(CelsSession *s, uint32_t logical)
 {
     return &s->groups[CelsGroupLogicalToPhysical(s, logical)];
 }
 
-static inline bool
-CelsIsFreshMount(CelsSession *s)
+static inline bool CelsIsFreshMount(CelsSession *s)
 {
     if (s == NULL || s->currentDepth == 0) {
         return false;
