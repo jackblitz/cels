@@ -126,12 +126,25 @@ bool CelsAppModuleLoad(CelsAppModule *app, const char *libraryPath, CelsSession 
 bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session);
 
 /**
- * Unloads the application module, invokes manifest->onEnd, and detaches compositions.
+ * Unloads the dynamic application module and releases its resources.
  *
- * @param app     Active application module handle. NULL is safely ignored.
- * @param session Target session. May be NULL.
+ * @param app     Target application module struct. Non-NULL.
+ * @param session Target session. Non-NULL.
  */
 void CelsAppModuleUnload(CelsAppModule *app, CelsSession *session);
+
+/**
+ * Resolves the filesystem path to an application dynamic library.
+ *
+ * Searches the directory containing the host executable for <appName>.dll,
+ * lib<appName>.dll, or unix shared object variants.
+ *
+ * @param appName Application target name (e.g. "engine_app"). If NULL, resolves via default target.
+ * @param outPath Output buffer for resolved path. Non-NULL.
+ * @param maxLen  Capacity of output buffer.
+ * @return true if found and readable; false otherwise (outPath still contains expected path).
+ */
+bool CelsResolveModulePath(const char *appName, char *outPath, size_t maxLen);
 
 /* Backward compatibility aliases */
 typedef CelsAppModule CelsModule;

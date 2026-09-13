@@ -34,6 +34,7 @@ extern "C" {
 /* Forward declarations */
 struct CelsEngine;
 struct CelsAppManifest;
+struct CelsAppModule;
 
 /* ========================================================================= */
 /* Engine Module Binding Record                                              */
@@ -75,6 +76,7 @@ typedef struct CelsModuleBinding {
 struct CelsEngine {
     uint32_t                      magic;        /**< CELS_ENGINE_MAGIC validation tag */
     const struct CelsAppManifest *manifest;     /**< Application manifest from DLL or static */
+    struct CelsAppModule         *appModule;    /**< Dynamic application handle in Hot-Reload mode */
     CelsModuleBinding             modules[CELS_MAX_MODULES];
     uint32_t                      moduleCount;
     CelsSession                   session;      /**< Primary reactive session */
@@ -88,6 +90,47 @@ void       CelsEngineDestroy(CelsEngine *engine);
 
 CelsResult CelsEngineStart(CelsEngine *engine);
 void       CelsEngineEnd(CelsEngine *engine);
+
+/**
+ * Resolves and loads an application module into the engine.
+ *
+ * In dynamic hot-reload mode (Debug), automatically discovers the application
+ * library (<appName>.dll / .so / .dylib) co-located with the running host executable,
+ * creates a shadow copy to bypass file locks, loads symbols, initializes session,
+ * and performs the initial composition mount.
+ *
+ * In monolithic mode (Release), statically binds the compiled-in application manifest
+ * and starts the engine.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application module target name (e.g. "engine_app"). If NULL, resolves via default target.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+#if defined(CELS_HOT_RELOAD) && (CELS_HOT_RELOAD == 0)
+static inline CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appName)
+{
+    (void)appName;
+    if (engine == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+    extern const struct CelsAppManifest *CelsGetAppManifest(void);
+    engine->manifest = CelsGetAppManifest();
+    return CelsEngineStart(engine);
+}
+
+static inline bool CelsAppRuntimeCheck(CelsEngine *engine)
+{
+    (void)engine;
+    return false;
+}
+#else
+CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appName);
+bool       CelsAppRuntimeCheck(CelsEngine *engine);
+#endif
+
+#define cels_app_runtime_check CelsAppRuntimeCheck
+#define CelsEnginePollReload CelsAppRuntimeCheck
+#define cels_engine_poll_reload CelsAppRuntimeCheck
 
 void       CelsEngineRegisterModule(CelsEngine *engine,
                                     uint64_t key,

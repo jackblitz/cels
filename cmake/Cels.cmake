@@ -227,6 +227,7 @@ function(cels_add_application)
         endif()
         target_compile_definitions(${PARSED_HOST} PRIVATE
             CELS_HOT_RELOAD=0
+            "CELS_APP_TARGET=\"${PARSED_APP}\""
             ${PARSED_DEFINES}
         )
 

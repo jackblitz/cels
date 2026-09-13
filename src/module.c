@@ -9,6 +9,11 @@
         #define WIN32_LEAN_AND_MEAN
     #endif
     #include <windows.h>
+#elif defined(__APPLE__)
+    #include <sys/stat.h>
+    #include <dlfcn.h>
+    #include <unistd.h>
+    #include <mach-o/dyld.h>
 #else
     #include <sys/stat.h>
     #include <dlfcn.h>
@@ -363,8 +368,169 @@ void CelsAppModuleUnload(CelsAppModule *app, CelsSession *session)
     PlatformFreeLibrary(app->handle);
     app->handle = NULL;
 
+#if defined(_WIN32)
+    /* Delete shadow copy and any leftover temp hot files from previous reloads */
     PlatformDeleteFile(app->loadedPath);
+    char dir[CELS_PATH_MAX] = {0};
+    snprintf(dir, sizeof(dir), "%s", app->loadedPath);
+    char *lastSlash = strrchr(dir, '\\');
+    char *lastFwd = strrchr(dir, '/');
+    if (lastFwd && (!lastSlash || lastFwd > lastSlash)) {
+        lastSlash = lastFwd;
+    }
+    if (lastSlash) {
+        *(lastSlash + 1) = '\0';
+        char pattern[CELS_PATH_MAX * 2];
+        snprintf(pattern, sizeof(pattern), "%s*.hot_*.tmp.*", dir);
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(pattern, &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                    char fpath[CELS_PATH_MAX * 2];
+                    snprintf(fpath, sizeof(fpath), "%s%s", dir, fd.cFileName);
+                    PlatformDeleteFile(fpath);
+                }
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
+        }
+    }
+#else
+    PlatformDeleteFile(app->loadedPath);
+#endif
 
     app->isLoaded = false;
     app->manifest = NULL;
+}
+
+bool CelsResolveModulePath(const char *appName, char *outPath, size_t maxLen)
+{
+    if (outPath == NULL || maxLen == 0) {
+        return false;
+    }
+    outPath[0] = '\0';
+
+    const char *name = appName;
+#if defined(CELS_APP_TARGET)
+    if (name == NULL || name[0] == '\0') {
+        name = CELS_APP_TARGET;
+    }
+#endif
+    if (name == NULL || name[0] == '\0') {
+        name = "app";
+    }
+
+    /* 1. Direct path exists */
+    if (IsPathReadable(name)) {
+        snprintf(outPath, maxLen, "%s", name);
+        return true;
+    }
+
+    /* 2. Locate directory containing current executable */
+    char exeDir[CELS_PATH_MAX] = {0};
+#if defined(_WIN32)
+    DWORD len = GetModuleFileNameA(NULL, exeDir, (DWORD)sizeof(exeDir));
+    if (len > 0 && len < sizeof(exeDir)) {
+        char *lastSlash = strrchr(exeDir, '\\');
+        char *lastFwd = strrchr(exeDir, '/');
+        if (lastFwd && (!lastSlash || lastFwd > lastSlash)) {
+            lastSlash = lastFwd;
+        }
+        if (lastSlash) {
+            *(lastSlash + 1) = '\0';
+        }
+    }
+#elif defined(__APPLE__)
+    uint32_t size = sizeof(exeDir);
+    if (_NSGetExecutablePath(exeDir, &size) == 0) {
+        char *lastSlash = strrchr(exeDir, '/');
+        if (lastSlash) {
+            *(lastSlash + 1) = '\0';
+        }
+    }
+#elif defined(__linux__)
+    ssize_t len = readlink("/proc/self/exe", exeDir, sizeof(exeDir) - 1);
+    if (len > 0) {
+        exeDir[len] = '\0';
+        char *lastSlash = strrchr(exeDir, '/');
+        if (lastSlash) {
+            *(lastSlash + 1) = '\0';
+        }
+    }
+#endif
+
+    /* 3. Probe library extensions in executable directory */
+    char candidate[CELS_PATH_MAX * 2];
+
+#if defined(_WIN32)
+    snprintf(candidate, sizeof(candidate), "%s%s.dll", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%s%s_app.dll", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%slib%s.dll", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%slib%s_app.dll", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    /* Fallback default path */
+    snprintf(outPath, maxLen, "%s%s.dll", exeDir, name);
+    return false;
+#elif defined(__APPLE__)
+    snprintf(candidate, sizeof(candidate), "%s%s.dylib", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%s%s_app.dylib", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%slib%s.dylib", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%slib%s_app.dylib", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(outPath, maxLen, "%slib%s.dylib", exeDir, name);
+    return false;
+#else
+    snprintf(candidate, sizeof(candidate), "%s%s.so", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%s%s_app.so", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%slib%s.so", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%slib%s_app.so", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(outPath, maxLen, "%slib%s.so", exeDir, name);
+    return false;
+#endif
 }
