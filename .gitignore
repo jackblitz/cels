@@ -1,21 +1,16 @@
 /build
 
 # IDE
-.idea/
+.idea/*
+!.idea/runConfigurations/
 
 /cmake-build-debug/
+/cmake-build-release/
 
 /.internaldocs/
-
-# Private Docs
-/docs/
-docs/
-docs/coding-standards-c99.md
-
 
 # Benchmark outputs
 /benchmark/
 /test/benchmark/out/*.html
 /test/benchmark/out/benchmark_v*.json
 /test/benchmark/out/test_*
-

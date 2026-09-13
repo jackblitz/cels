@@ -41,11 +41,8 @@ CelsResultToString(CelsResult result)
  * @param maxGroups  Maximum groups reserved at the base of the slab.
  * @return CELS_OK, CELS_ERROR_INVALID_ARGUMENT, or CELS_ERROR_OUT_OF_MEMORY.
  */
-CelsResult
-CelsSlotTableInit(CelsSlotTable *table,
-                  void *slabMemory,
-                  size_t slabSize,
-                  uint32_t maxGroups)
+CelsResult CelsSlotTableInit(CelsSlotTable *table, void *slabMemory,
+                             size_t slabSize, uint32_t maxGroups)
 {
     if (table == NULL || slabMemory == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
@@ -91,8 +88,7 @@ CelsSlotTableInit(CelsSlotTable *table,
  * @param table Target table. Non-NULL.
  * @return CELS_OK or CELS_ERROR_INVALID_STATE.
  */
-CelsResult
-CelsSlotTableReset(CelsSlotTable *table)
+CelsResult CelsSlotTableReset(CelsSlotTable *table)
 {
     CELS_ASSERT(table != NULL);
 
@@ -120,8 +116,7 @@ CelsSlotTableReset(CelsSlotTable *table)
  * @param table Target table. Non-NULL.
  * @return Active group count.
  */
-uint32_t
-CelsSlotTableGroupCount(const CelsSlotTable *table)
+uint32_t CelsSlotTableGroupCount(const CelsSlotTable *table)
 {
     CELS_ASSERT(table != NULL);
     return table->groupCapacity - table->groupGapLen;
@@ -133,8 +128,7 @@ CelsSlotTableGroupCount(const CelsSlotTable *table)
  * @param table Target table. Non-NULL.
  * @return Active slot word count.
  */
-uint32_t
-CelsSlotTableSlotCount(const CelsSlotTable *table)
+uint32_t CelsSlotTableSlotCount(const CelsSlotTable *table)
 {
     CELS_ASSERT(table != NULL);
     return table->slotCapacity - table->slotGapLen;
@@ -146,8 +140,7 @@ CelsSlotTableSlotCount(const CelsSlotTable *table)
  * @param table Target table. Non-NULL.
  * @return Group capacity.
  */
-uint32_t
-CelsSlotTableGroupCapacity(const CelsSlotTable *table)
+uint32_t CelsSlotTableGroupCapacity(const CelsSlotTable *table)
 {
     CELS_ASSERT(table != NULL);
     return table->groupCapacity;
@@ -159,8 +152,7 @@ CelsSlotTableGroupCapacity(const CelsSlotTable *table)
  * @param table Target table. Non-NULL.
  * @return Slot capacity.
  */
-uint32_t
-CelsSlotTableSlotCapacity(const CelsSlotTable *table)
+uint32_t CelsSlotTableSlotCapacity(const CelsSlotTable *table)
 {
     CELS_ASSERT(table != NULL);
     return table->slotCapacity;
@@ -174,10 +166,9 @@ CelsSlotTableSlotCapacity(const CelsSlotTable *table)
  * @param outPhysicalIdx Receives physical index. Non-NULL.
  * @return CELS_OK or CELS_ERROR_INDEX_OUT_OF_BOUNDS.
  */
-CelsResult
-CelsSlotTableGroupToPhysicalIdx(const CelsSlotTable *table,
-                                uint32_t logicalIndex,
-                                uint32_t *outPhysicalIdx)
+CelsResult CelsSlotTableGroupToPhysicalIdx(const CelsSlotTable *table,
+                                           uint32_t logicalIndex,
+                                           uint32_t *outPhysicalIdx)
 {
     CELS_ASSERT(table != NULL);
     CELS_ASSERT(outPhysicalIdx != NULL);
@@ -209,8 +200,8 @@ CelsSlotTableGroupToPhysicalIdx(const CelsSlotTable *table,
  * @param composable Logical group index.
  * @return Pointer to the group, or NULL if the index is out of range.
  */
-static CelsSlotGroup *
-GroupAt(const CelsSlotTable *table, CelsComposableId composable)
+static CelsSlotGroup *GroupAt(const CelsSlotTable *table,
+                              CelsComposableId composable)
 {
     CELS_ASSERT(table != NULL);
 
@@ -229,8 +220,8 @@ GroupAt(const CelsSlotTable *table, CelsComposableId composable)
  * @param composable Logical group index.
  * @return The group's CelsGroupFlags bitmask, or CELS_GROUP_FLAG_NONE if invalid.
  */
-uint16_t
-CelsSlotTableGroupFlags(const CelsSlotTable *table, CelsComposableId composable)
+uint16_t CelsSlotTableGroupFlags(const CelsSlotTable *table,
+                                 CelsComposableId composable)
 {
     if (table == NULL) {
         return (uint16_t)CELS_GROUP_FLAG_NONE;
@@ -251,8 +242,8 @@ CelsSlotTableGroupFlags(const CelsSlotTable *table, CelsComposableId composable)
  * @param composable Logical group index to invalidate.
  * @return CELS_OK, CELS_ERROR_INVALID_ARGUMENT, or CELS_ERROR_INDEX_OUT_OF_BOUNDS.
  */
-CelsResult
-CelsSlotTableGroupInvalidate(CelsSlotTable *table, CelsComposableId composable)
+CelsResult CelsSlotTableGroupInvalidate(CelsSlotTable *table,
+                                        CelsComposableId composable)
 {
     if (table == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
@@ -295,8 +286,8 @@ CelsSlotTableGroupInvalidate(CelsSlotTable *table, CelsComposableId composable)
  * @param table      Pointer to the slot table. May be NULL.
  * @param composable Logical group index to clear.
  */
-void
-CelsSlotTableGroupClearFlags(CelsSlotTable *table, CelsComposableId composable)
+void CelsSlotTableGroupClearFlags(CelsSlotTable *table,
+                                  CelsComposableId composable)
 {
     if (table == NULL) {
         return;
@@ -313,8 +304,7 @@ CelsSlotTableGroupClearFlags(CelsSlotTable *table, CelsComposableId composable)
  *
  * @param table Pointer to the slot table. May be NULL.
  */
-void
-CelsSlotTableClearAllFlags(CelsSlotTable *table)
+void CelsSlotTableClearAllFlags(CelsSlotTable *table)
 {
     if (table == NULL) {
         return;
@@ -340,10 +330,8 @@ CelsSlotTableClearAllFlags(CelsSlotTable *table)
  * @param threshold Lowest logical parent index affected by the shift.
  * @param delta     Signed offset to add to affected parent indices.
  */
-void
-CelsSlotTableGroupsShiftParents(CelsSlotTable *table,
-                                uint32_t threshold,
-                                int32_t delta)
+void CelsSlotTableGroupsShiftParents(CelsSlotTable *table, uint32_t threshold,
+                                     int32_t delta)
 {
     if (table == NULL || delta == 0) {
         return;
@@ -377,10 +365,8 @@ CelsSlotTableGroupsShiftParents(CelsSlotTable *table,
  * @param outLogicalIdx Optional destination to receive the logical group index.
  * @return Pointer to matching CelsSlotGroup in table, or NULL if not found.
  */
-CelsSlotGroup *
-CelsSlotTableFindGroup(const CelsSlotTable *table,
-                       uint64_t key,
-                       uint32_t *outLogicalIdx)
+CelsSlotGroup *CelsSlotTableFindGroup(const CelsSlotTable *table, uint64_t key,
+                                      uint32_t *outLogicalIdx)
 {
     if (table == NULL) {
         return NULL;
@@ -408,9 +394,8 @@ CelsSlotTableFindGroup(const CelsSlotTable *table,
  * @param outReader Receives the initialized reader. Non-NULL.
  * @return CELS_OK or CELS_ERROR_INVALID_STATE.
  */
-CelsResult
-CelsSlotTableReaderOpen(const CelsSlotTable *table,
-                        CelsSlotReader *outReader)
+CelsResult CelsSlotTableReaderOpen(const CelsSlotTable *table,
+                                   CelsSlotReader *outReader)
 {
     if (table == NULL || outReader == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
@@ -437,8 +422,7 @@ CelsSlotTableReaderOpen(const CelsSlotTable *table,
  * @param reader Target reader. Non-NULL.
  * @return CELS_OK or CELS_ERROR_INVALID_STATE.
  */
-CelsResult
-CelsSlotReaderClose(CelsSlotReader *reader)
+CelsResult CelsSlotReaderClose(CelsSlotReader *reader)
 {
     if (reader == NULL || reader->table == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
@@ -461,9 +445,8 @@ CelsSlotReaderClose(CelsSlotReader *reader)
  * @param outGroup Optional pointer receiving group metadata.
  * @return CELS_OK or CELS_ERROR_INDEX_OUT_OF_BOUNDS.
  */
-CelsResult
-CelsSlotReaderGroupStart(CelsSlotReader *reader,
-                         CelsSlotGroup *outGroup)
+CelsResult CelsSlotReaderGroupStart(CelsSlotReader *reader,
+                                    CelsSlotGroup *outGroup)
 {
     CELS_ASSERT(reader != NULL);
     CELS_ASSERT(reader->table != NULL);
@@ -498,8 +481,7 @@ CelsSlotReaderGroupStart(CelsSlotReader *reader,
  * @param reader Target reader. Non-NULL.
  * @return CELS_OK or CELS_ERROR_INVALID_STATE.
  */
-CelsResult
-CelsSlotReaderGroupEnd(CelsSlotReader *reader)
+CelsResult CelsSlotReaderGroupEnd(CelsSlotReader *reader)
 {
     CELS_ASSERT(reader != NULL);
     CELS_ASSERT(reader->table != NULL);
@@ -540,8 +522,7 @@ CelsSlotReaderGroupEnd(CelsSlotReader *reader)
  * @param reader Target reader. Non-NULL.
  * @return CELS_OK or CELS_ERROR_INDEX_OUT_OF_BOUNDS.
  */
-CelsResult
-CelsSlotReaderGroupSkip(CelsSlotReader *reader)
+CelsResult CelsSlotReaderGroupSkip(CelsSlotReader *reader)
 {
     CELS_ASSERT(reader != NULL);
     CELS_ASSERT(reader->table != NULL);
@@ -570,9 +551,8 @@ CelsSlotReaderGroupSkip(CelsSlotReader *reader)
  * @param outValue Receives the 64-bit slot value. Non-NULL.
  * @return CELS_OK, CELS_ERROR_INDEX_OUT_OF_BOUNDS, or CELS_ERROR_INVALID_STATE.
  */
-CelsResult
-CelsSlotReaderSlotRead(CelsSlotReader *reader,
-                       CelsSlotValue *outValue)
+CelsResult CelsSlotReaderSlotRead(CelsSlotReader *reader,
+                                  CelsSlotValue *outValue)
 {
     CELS_ASSERT(reader != NULL);
     CELS_ASSERT(reader->table != NULL);
@@ -607,10 +587,9 @@ CelsSlotReaderSlotRead(CelsSlotReader *reader,
  * @param outGroup     Receives group metadata. Non-NULL.
  * @return CELS_OK or CELS_ERROR_INDEX_OUT_OF_BOUNDS.
  */
-CelsResult
-CelsSlotReaderGroupGet(const CelsSlotReader *reader,
-                       uint32_t logicalIndex,
-                       CelsSlotGroup *outGroup)
+CelsResult CelsSlotReaderGroupGet(const CelsSlotReader *reader,
+                                  uint32_t logicalIndex,
+                                  CelsSlotGroup *outGroup)
 {
     CELS_ASSERT(reader != NULL);
     CELS_ASSERT(reader->table != NULL);
@@ -634,9 +613,8 @@ CelsSlotReaderGroupGet(const CelsSlotReader *reader,
  * @param outWriter Receives initialized writer. Non-NULL.
  * @return CELS_OK or CELS_ERROR_INVALID_STATE.
  */
-CelsResult
-CelsSlotTableWriterOpen(CelsSlotTable *table,
-                        CelsSlotWriter *outWriter)
+CelsResult CelsSlotTableWriterOpen(CelsSlotTable *table,
+                                   CelsSlotWriter *outWriter)
 {
     if (table == NULL || outWriter == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
@@ -661,8 +639,7 @@ CelsSlotTableWriterOpen(CelsSlotTable *table,
  * @param writer Target writer. Non-NULL.
  * @return CELS_OK or CELS_ERROR_INVALID_STATE if unclosed groups remain.
  */
-CelsResult
-CelsSlotWriterClose(CelsSlotWriter *writer)
+CelsResult CelsSlotWriterClose(CelsSlotWriter *writer)
 {
     if (writer == NULL || writer->table == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
@@ -684,9 +661,8 @@ CelsSlotWriterClose(CelsSlotWriter *writer)
  * @param targetLogicalIndex Target logical group index.
  * @return CELS_OK or CELS_ERROR_INDEX_OUT_OF_BOUNDS.
  */
-CelsResult
-CelsSlotTableMoveGapTo(CelsSlotTable *table,
-                       uint32_t targetLogicalIndex)
+CelsResult CelsSlotTableMoveGapTo(CelsSlotTable *table,
+                                  uint32_t targetLogicalIndex)
 {
     CELS_ASSERT(table != NULL);
 
@@ -768,9 +744,8 @@ CelsSlotTableMoveGapTo(CelsSlotTable *table,
  * @param targetLogicalIndex Target logical group index.
  * @return CELS_OK or CELS_ERROR_INDEX_OUT_OF_BOUNDS.
  */
-CelsResult
-CelsSlotWriterGapMoveTo(CelsSlotWriter *writer,
-                        uint32_t targetLogicalIndex)
+CelsResult CelsSlotWriterGapMoveTo(CelsSlotWriter *writer,
+                                   uint32_t targetLogicalIndex)
 {
     CELS_ASSERT(writer != NULL);
     CELS_ASSERT(writer->table != NULL);
@@ -798,11 +773,8 @@ CelsSlotWriterGapMoveTo(CelsSlotWriter *writer,
  * @param outGroupIndex Optional pointer receiving logical group index.
  * @return CELS_OK, CELS_ERROR_CAPACITY_EXCEEDED, or CELS_ERROR_INVALID_STATE.
  */
-CelsResult
-CelsSlotWriterGroupStart(CelsSlotWriter *writer,
-                         uint64_t key,
-                         uint64_t userData,
-                         uint32_t *outGroupIndex)
+CelsResult CelsSlotWriterGroupStart(CelsSlotWriter *writer, uint64_t key,
+                                    uint64_t userData, uint32_t *outGroupIndex)
 {
     CELS_ASSERT(writer != NULL);
     CELS_ASSERT(writer->table != NULL);
@@ -853,8 +825,7 @@ CelsSlotWriterGroupStart(CelsSlotWriter *writer,
  * @param writer Target writer. Non-NULL.
  * @return CELS_OK or CELS_ERROR_INVALID_STATE.
  */
-CelsResult
-CelsSlotWriterGroupEnd(CelsSlotWriter *writer)
+CelsResult CelsSlotWriterGroupEnd(CelsSlotWriter *writer)
 {
     CELS_ASSERT(writer != NULL);
     CELS_ASSERT(writer->table != NULL);
@@ -901,9 +872,7 @@ CelsSlotWriterGroupEnd(CelsSlotWriter *writer)
  * @param count  Number of nodes emitted.
  * @return CELS_OK or CELS_ERROR_INVALID_STATE.
  */
-CelsResult
-CelsSlotWriterNodeEmit(CelsSlotWriter *writer,
-                       uint16_t count)
+CelsResult CelsSlotWriterNodeEmit(CelsSlotWriter *writer, uint16_t count)
 {
     CELS_ASSERT(writer != NULL);
     CELS_ASSERT(writer->table != NULL);
@@ -932,10 +901,8 @@ CelsSlotWriterNodeEmit(CelsSlotWriter *writer,
  * @param outSlotIndex Optional pointer receiving logical slot index.
  * @return CELS_OK, CELS_ERROR_CAPACITY_EXCEEDED, or CELS_ERROR_INVALID_STATE.
  */
-CelsResult
-CelsSlotWriterSlotWrite(CelsSlotWriter *writer,
-                        CelsSlotValue value,
-                        uint32_t *outSlotIndex)
+CelsResult CelsSlotWriterSlotWrite(CelsSlotWriter *writer, CelsSlotValue value,
+                                   uint32_t *outSlotIndex)
 {
     CELS_ASSERT(writer != NULL);
     CELS_ASSERT(writer->table != NULL);
@@ -979,10 +946,8 @@ CelsSlotWriterSlotWrite(CelsSlotWriter *writer,
  * @param value            New 64-bit word value.
  * @return CELS_OK or CELS_ERROR_INDEX_OUT_OF_BOUNDS.
  */
-CelsResult
-CelsSlotWriterSlotSet(CelsSlotWriter *writer,
-                      uint32_t logicalSlotIndex,
-                      CelsSlotValue value)
+CelsResult CelsSlotWriterSlotSet(CelsSlotWriter *writer,
+                                 uint32_t logicalSlotIndex, CelsSlotValue value)
 {
     CELS_ASSERT(writer != NULL);
     CELS_ASSERT(writer->table != NULL);
@@ -1008,9 +973,8 @@ CelsSlotWriterSlotSet(CelsSlotWriter *writer,
  * @param outSkippedGroups Optional pointer receiving skipped group count.
  * @return CELS_OK or CELS_ERROR_INDEX_OUT_OF_BOUNDS.
  */
-CelsResult
-CelsSlotWriterGroupSkip(CelsSlotWriter *writer,
-                        uint32_t *outSkippedGroups)
+CelsResult CelsSlotWriterGroupSkip(CelsSlotWriter *writer,
+                                   uint32_t *outSkippedGroups)
 {
     CELS_ASSERT(writer != NULL);
     CELS_ASSERT(writer->table != NULL);

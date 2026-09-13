@@ -44,6 +44,7 @@
 
 #define CEL_LifecycleState(TypeName) CEL_State(TypeName)
 #define CEL_Observer(TypeName)       CEL_State(TypeName)
+#define CEL_Module(TypeName)         CEL_State(TypeName)
 #endif
 
 /**

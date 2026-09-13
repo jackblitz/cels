@@ -1,0 +1,17 @@
+# .clang-format
+Language:        Cpp
+BasedOnStyle:    LLVM
+ColumnLimit:     80
+IndentWidth:     4
+TabWidth:        4
+UseTab:          Never
+BreakBeforeBraces: Linux
+BreakAfterReturnType: None
+AlwaysBreakAfterReturnType: None
+AlignAfterOpenBracket: Align
+PointerAlignment: Right
+IndentCaseLabels: false
+SpaceAfterCStyleCast: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: WithoutElse
+SortIncludes:    false

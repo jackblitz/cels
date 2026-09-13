@@ -40,6 +40,9 @@
 #include "cels/session.h"
 #include "cels/slot_table.h"
 #include "cels/state.h"
+#include "cels/engine.h"
+#include "cels/app.h"
+#include "cels/module.h"
 #include "cels/version.h"
 
 #ifdef __cplusplus
@@ -86,6 +89,13 @@ extern "C" {
 
 #define CEL_LifecycleState(TypeName) CEL_State(TypeName)
 #define CEL_Observer(TypeName)       CEL_State(TypeName)
+#define CEL_Module(TypeName)         CEL_State(TypeName)
+#endif
+
+#ifndef CEL_Module
+#define CEL_Module(TypeName) \
+    typedef struct TypeName TypeName; \
+    struct TypeName
 #endif
 
 /* ========================================================================= */
@@ -111,6 +121,12 @@ extern "C" {
     } while (0)
 
 #define cel_destory() cel_destroy()
+
+static inline bool _cels_lifecycle_CEL_None(void *userData) {
+    (void)userData;
+    return true;
+}
+#define CEL_None CEL_None
 
 /* ========================================================================= */
 /* Composition Lifecycle Attachment (CEL_Attach)                             */
@@ -142,6 +158,10 @@ extern "C" {
 
 #define _CEL_COMPOSITION_DEF(CompName, keyName) \
     static void _cels_body_##CompName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t keyName); \
+    static inline void _cels_app_body_##CompName(CelsSession *s, uint64_t keyName) { \
+        CelsSetCurrentSession(s); \
+        _cels_body_##CompName(s, keyName); \
+    } \
     static inline void CompName(uint64_t keyName) { \
         CelsSession *s = CelsGetCurrentSession(); \
         assert(s != NULL && #CompName " called outside of an active CelsSession"); \
@@ -198,8 +218,8 @@ extern "C" {
     #endif
 #endif
 
-#define _CEL_COMPOSABLE_DEF(FnName, keyName) \
-    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t keyName); \
+#define _CEL_COMPOSABLE_DEF(FnName, ...) \
+    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key); \
     static inline void _cels_call_##FnName(CelsSession *s, uint64_t key) { \
         CelsSession *sess = s ? s : CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
@@ -215,9 +235,9 @@ extern "C" {
         _cels_call_##FnName(s, key); \
     } \
     static inline void FnName(void) { \
-        _cels_call_##FnName(CelsGetCurrentSession(), 0); \
+        _cels_call_##FnName(CelsGetCurrentSession(), CelsHashKey(#FnName)); \
     } \
-    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t keyName)
+    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key)
 
 #define _CEL_COMPOSABLE_3(FnName, ArgType, ArgName) \
     static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key, ArgType ArgName); \
@@ -236,7 +256,7 @@ extern "C" {
         _cels_call_##FnName(s, key, ArgName); \
     } \
     static inline void FnName(ArgType ArgName) { \
-        _cels_call_##FnName(CelsGetCurrentSession(), 0, ArgName); \
+        _cels_call_##FnName(CelsGetCurrentSession(), CelsHashKey(#FnName), ArgName); \
     } \
     static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key, ArgType ArgName)
 
@@ -259,10 +279,10 @@ extern "C" {
 
 #define CEL_Composable(...) _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_COMPOSABLE_3, _CEL_COMPOSABLE_2, _CEL_COMPOSABLE_1)(__VA_ARGS__)
 
-#define CEL_Composeable(FnName, keyName)      _CEL_COMPOSABLE_DEF(FnName, keyName)
-#define CEL_DefineComposable(FnName, keyName) _CEL_COMPOSABLE_DEF(FnName, keyName)
-#define CEL_ComposableFn(FnName, keyName)     _CEL_COMPOSABLE_DEF(FnName, keyName)
-#define CEL_Composable_Def(FnName, keyName)   _CEL_COMPOSABLE_DEF(FnName, keyName)
+#define CEL_Composeable(...)      _CEL_COMPOSABLE_DEF(__VA_ARGS__)
+#define CEL_DefineComposable(...) _CEL_COMPOSABLE_DEF(__VA_ARGS__)
+#define CEL_ComposableFn(...)     _CEL_COMPOSABLE_DEF(__VA_ARGS__)
+#define CEL_Composable_Def(...)   _CEL_COMPOSABLE_DEF(__VA_ARGS__)
 
 #define CEL_BOX(key) _CEL_COMPOSABLE_1(key)
 #define _CEL_COMPOSE_1(Component) Component()

@@ -56,7 +56,7 @@ static void PrintNode(const CelsSession *s, uint32_t logicalIdx, const char *pre
 
     printf("%s%s[%s] (0x%08llX) | descendants: %u | slots: %u B | parent: %u\n",
            prefix,
-           isLast ? "└── " : "├── ",
+           isLast ? "\\-- " : "|-- ",
            GetKeyName((uint32_t)g->key),
            (unsigned long long)g->key,
            g->groupSize,
@@ -64,7 +64,7 @@ static void PrintNode(const CelsSession *s, uint32_t logicalIdx, const char *pre
            g->parentIndex);
 
     char nextPrefix[256];
-    snprintf(nextPrefix, sizeof(nextPrefix), "%s%s", prefix, isLast ? "    " : "│   ");
+    snprintf(nextPrefix, sizeof(nextPrefix), "%s%s", prefix, isLast ? "    " : "|   ");
 
     uint32_t childLogical = logicalIdx + 1;
     uint32_t endLogical = logicalIdx + 1 + g->groupSize;

@@ -49,8 +49,7 @@
 #define CELS_CACHE_LINE_SIZE 64u
 #define CELS_SLOT_WRITER_MAX_DEPTH 64u
 
-static inline uint64_t
-CelsHashKey(const char *str)
+static inline uint64_t CelsHashKey(const char *str)
 {
     uint64_t hash = 14695981039346656037ULL;
     while (*str) {
@@ -60,8 +59,7 @@ CelsHashKey(const char *str)
     return hash;
 }
 
-static inline uint64_t
-CelsKeyIndex(uint64_t baseKey, uint64_t index)
+static inline uint64_t CelsKeyIndex(uint64_t baseKey, uint64_t index)
 {
     return baseKey ^ (index * 0x517cc1b727220a95ULL);
 }

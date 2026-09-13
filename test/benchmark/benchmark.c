@@ -52,14 +52,14 @@ static void PrintNode(const CelsSession *s, uint32_t logicalIdx, const char *pre
 
     printf("%s%s[%s] (0x%08llX) | slots: %u B | descendants: %u\n",
            prefix,
-           isLast ? "└── " : "├── ",
+           isLast ? "\\-- " : "|-- ",
            GetKeyName((uint32_t)g->key),
            (unsigned long long)g->key,
            g->dataSize,
            g->groupSize);
 
     char nextPrefix[256];
-    snprintf(nextPrefix, sizeof(nextPrefix), "%s%s", prefix, isLast ? "    " : "│   ");
+    snprintf(nextPrefix, sizeof(nextPrefix), "%s%s", prefix, isLast ? "    " : "|   ");
 
     uint32_t childLogical = logicalIdx + 1;
     uint32_t endLogical = logicalIdx + 1 + g->groupSize;
@@ -76,17 +76,17 @@ static void PrintNode(const CelsSession *s, uint32_t logicalIdx, const char *pre
 
 static void PrintCompositionTree(const CelsSession *s, const char *title) {
     uint32_t totalGroups = CelsGetLogicalGroupCount(s);
-    printf("\n  ╭─── %s (Active Nodes: %u, Arena: %u B) ───╮\n",
+    printf("\n  +-- %s (Active Nodes: %u, Arena: %u B) -------------------+\n",
            title, totalGroups, s->dataGapStart);
 
     if (totalGroups == 0) {
-        printf("  │   [Empty Tree / All Compositions Despawned]\n");
-        printf("  ╰───────────────────────────────────────────────────╯\n\n");
+        printf("  |   [Empty Tree / All Compositions Despawned]\n");
+        printf("  +-----------------------------------------------------------+\n\n");
         return;
     }
 
     const CelsSlotGroup *root = GetGroup(s, 0);
-    printf("  │ [%s] (0x%08llX) | descendants: %u | slots: %u B\n",
+    printf("  | [%s] (0x%08llX) | descendants: %u | slots: %u B\n",
            GetKeyName((uint32_t)root->key), (unsigned long long)root->key, root->groupSize, root->dataSize);
 
     uint32_t childLogical = 1;
@@ -97,10 +97,10 @@ static void PrintCompositionTree(const CelsSession *s, const char *title) {
         uint32_t nextChild = childLogical + 1 + cg->groupSize;
         bool isLast = (nextChild >= endLogical);
 
-        PrintNode(s, childLogical, "  │ ", isLast);
+        PrintNode(s, childLogical, "  | ", isLast);
         childLogical = nextChild;
     }
-    printf("  ╰───────────────────────────────────────────────────╯\n\n");
+    printf("  +-----------------------------------------------------------+\n\n");
 }
 
 /* ========================================================================= */
