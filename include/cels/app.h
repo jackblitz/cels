@@ -84,6 +84,7 @@ typedef struct CelsCompositionRef {
 typedef struct CelsAppManifest {
     uint32_t version;                               /**< Manifest version (defaults to 1) */
     const char *name;                               /**< Application identifier / display name */
+    bool continuousCompose;                         /**< If true, recomposes continuously (game mode); if false, event-driven (app mode) */
     void (*setSession)(CelsSession *s);             /**< Internal session synchronization across DLL boundary */
     CelsCompositionRef (*onStart)(CelsEngine *engine, CelsSession *session); /**< Setup & returns root composition */
     void (*onEnd)(CelsEngine *engine, CelsSession *session);   /**< Teardown callback on shutdown */
@@ -102,6 +103,10 @@ CELS_APP_EXPORT const CelsAppManifest *CelsGetAppManifest(void);
 /* Declarative App Registration Macro (CEL_App)                              */
 /* ========================================================================= */
 
+#ifndef NUCLEUS_DEFAULT_CONTINUOUS_COMPOSE
+    #define NUCLEUS_DEFAULT_CONTINUOUS_COMPOSE false
+#endif
+
 #define CEL_App(AppName, ...) \
     static void _cels_app_set_session_##AppName(CelsSession *s) { \
         CelsSetCurrentSession(s); \
@@ -109,6 +114,7 @@ CELS_APP_EXPORT const CelsAppManifest *CelsGetAppManifest(void);
     static const CelsAppManifest _cels_app_manifest_##AppName = { \
         .version = 1, \
         .name = #AppName, \
+        .continuousCompose = NUCLEUS_DEFAULT_CONTINUOUS_COMPOSE, \
         .setSession = _cels_app_set_session_##AppName, \
         __VA_ARGS__ \
     }; \
