@@ -12,13 +12,13 @@
 
 #define CELS_VERSION_MAJOR 0
 #define CELS_VERSION_MINOR 1
-#define CELS_VERSION_PATCH 1
+#define CELS_VERSION_PATCH 2
 #define CELS_VERSION_BUILD 0
 
 /**
  * Packed 32-bit integer version code:
  * Format: 0xMMmmPPbb (Major, Minor, Patch, Build)
- * Example: 0.1.1 (build 0) -> 0x00010100
+ * Example: 0.1.2 (build 0) -> 0x00010200
  */
 #define CELS_VERSION_CODE \
     (((uint32_t)CELS_VERSION_MAJOR << 24) | \
@@ -26,7 +26,7 @@
      ((uint32_t)CELS_VERSION_PATCH << 8)  | \
      ((uint32_t)CELS_VERSION_BUILD))
 
-#define CELS_VERSION_STRING "0.1.1"
+#define CELS_VERSION_STRING "0.1.2"
 
 /**
  * Returns the human-readable version string (e.g. "0.1.0").

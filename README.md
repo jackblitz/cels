@@ -3,7 +3,7 @@
   <p align="center"><strong>C99 macros that mean what they say.</strong></p>
   <p align="center">A declarative and explicit language to stop hallucinations from killing your vibe.</p>
   <p align="center">
-    <img src="https://img.shields.io/badge/version-v0.1.1-blue" alt="version">
+    <img src="https://img.shields.io/badge/version-v0.1.2-blue" alt="version">
     <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="license">
     <img src="https://img.shields.io/badge/C99-orange?logo=c" alt="C99">
   </p>
@@ -250,7 +250,7 @@ include(FetchContent)
 FetchContent_Declare(
     cels
     GIT_REPOSITORY https://github.com/jackblitz/cels.git
-    GIT_TAG v0.1.1
+    GIT_TAG v0.1.2
 )
 FetchContent_MakeAvailable(cels)
 
@@ -290,7 +290,7 @@ include(FetchContent)
 FetchContent_Declare(
     cels
     GIT_REPOSITORY https://github.com/jackblitz/cels.git
-    GIT_TAG v0.1.1
+    GIT_TAG v0.1.2
 )
 FetchContent_MakeAvailable(cels)
 

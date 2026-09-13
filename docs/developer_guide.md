@@ -19,7 +19,7 @@ include(FetchContent)
 FetchContent_Declare(
     cels
     GIT_REPOSITORY https://github.com/jackblitz/cels.git
-    GIT_TAG v0.1.1 # Or specific commit / branch
+    GIT_TAG v0.1.2 # Or specific commit / branch
 )
 FetchContent_MakeAvailable(cels)
 ```
@@ -31,7 +31,7 @@ Download an official release archive automatically:
 include(FetchContent)
 FetchContent_Declare(
     cels
-    URL https://github.com/jackblitz/cels/archive/refs/tags/v0.1.1.tar.gz
+    URL https://github.com/jackblitz/cels/archive/refs/tags/v0.1.2.tar.gz
 )
 FetchContent_MakeAvailable(cels)
 ```
