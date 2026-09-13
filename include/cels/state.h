@@ -29,9 +29,17 @@
 
 #include "cels/slot_table.h"
 
-#define CELS_MAX_STATES 256u
-#define CELS_MAX_WATCHERS 8u
-#define CELS_MAX_QUEUE 256u
+#ifndef CELS_MAX_STATES
+#define CELS_MAX_STATES 2048u
+#endif
+
+#ifndef CELS_MAX_WATCHERS
+#define CELS_MAX_WATCHERS 16u
+#endif
+
+#ifndef CELS_MAX_QUEUE
+#define CELS_MAX_QUEUE 2048u
+#endif
 
 /* ========================================================================= */
 /* State Definitions                                                         */

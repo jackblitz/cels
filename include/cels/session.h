@@ -28,18 +28,32 @@
 #include "cels/slot_table.h"
 #include "cels/state.h"
 
-#define CELS_MAX_DEPTH 32u
-#define CELS_MAX_GROUPS 256u
+#ifndef CELS_MAX_DEPTH
+#define CELS_MAX_DEPTH 64u
+#endif
+
+#ifndef CELS_MAX_GROUPS
+#define CELS_MAX_GROUPS 4096u
+#endif
+
+#ifndef CELS_DATA_ARENA_SIZE
 #define CELS_DATA_ARENA_SIZE 32768u
-#define CELS_MAX_CLEANUPS 128u
+#endif
+
+#ifndef CELS_MAX_CLEANUPS
+#define CELS_MAX_CLEANUPS 4096u
+#endif
+
+#ifndef CELS_MAX_DRAIN_ITERATIONS
 #define CELS_MAX_DRAIN_ITERATIONS 8u
+#endif
 
 #define CELS_SLOT_ALIGNMENT 8u
 #define CELS_ALIGN_UP(size) \
     (((size) + (CELS_SLOT_ALIGNMENT - 1u)) & ~(CELS_SLOT_ALIGNMENT - 1u))
 
 #ifndef CELS_MAX_SLOTS
-#define CELS_MAX_SLOTS 256u
+#define CELS_MAX_SLOTS 4096u
 #endif
 
 #define CELS_FLAG_NONE 0u
@@ -55,17 +69,26 @@ typedef struct CelsEngine CelsEngine;
 typedef struct CelsEngine CelsApp;
 
 /**
- * L1 Cache-aligned memory slab profiles for CelsSession.
- * Fitting the session slab entirely in L1d cache eliminates CPU cache-miss stalls.
+ * Memory slab profiles for CelsSession.
+ * Fitting small session slabs entirely in L1d cache (16-64KB) eliminates CPU cache stalls.
+ * For larger game worlds with hundreds or thousands of entities, scale up to 128K - 4M.
  */
 typedef enum CelsSlabProfile {
-    CELS_SLAB_16K = 16u * 1024u, /**< 16 KiB: Embedded & low-power cores */
-    CELS_SLAB_32K = 32u * 1024u, /**< 32 KiB: Standard L1d (Zen 1-3, Intel E-cores, ARM) [DEFAULT] */
-    CELS_SLAB_48K = 48u * 1024u, /**< 48 KiB: Modern high-perf L1d (Intel P-cores, Zen 4/5) */
-    CELS_SLAB_64K = 64u * 1024u, /**< 64 KiB: Extended L1d (Apple Silicon, complex trees) */
+    CELS_SLAB_16K  = 16u * 1024u,   /**< 16 KiB: Embedded & low-power cores (~128 groups) */
+    CELS_SLAB_32K  = 32u * 1024u,   /**< 32 KiB: Standard L1d (Zen 1-3, Intel E-cores, ARM) [DEFAULT] (~256 groups) */
+    CELS_SLAB_48K  = 48u * 1024u,   /**< 48 KiB: Modern high-perf L1d (Intel P-cores, Zen 4/5) (~384 groups) */
+    CELS_SLAB_64K  = 64u * 1024u,   /**< 64 KiB: Extended L1d (Apple Silicon, complex trees) (~512 groups) */
+    CELS_SLAB_128K = 128u * 1024u,  /**< 128 KiB: Mid-scale scenes (~1,024 groups) */
+    CELS_SLAB_256K = 256u * 1024u,  /**< 256 KiB: High-scale scenes (~2,048 groups) */
+    CELS_SLAB_512K = 512u * 1024u,  /**< 512 KiB: Large worlds (~4,096 groups) */
+    CELS_SLAB_1M   = 1024u * 1024u, /**< 1 MiB: Massive scenes (~8,192 groups) */
+    CELS_SLAB_2M   = 2048u * 1024u, /**< 2 MiB: Mega scale (~16,384 groups) */
+    CELS_SLAB_4M   = 4096u * 1024u, /**< 4 MiB: Ultra scale (~32,768 groups) */
 } CelsSlabProfile;
 
-#define CELS_DEFAULT_SLAB_SIZE CELS_SLAB_32K
+#ifndef CELS_DEFAULT_SLAB_SIZE
+#define CELS_DEFAULT_SLAB_SIZE CELS_SLAB_512K
+#endif
 
 /**
  * Macro helper to declare a 64-byte aligned slab buffer for zero-alloc mode.
@@ -380,3 +403,24 @@ static inline bool CelsIsFreshMount(CelsSession *s)
     return (CelsGetGroup(s, s->currentGroupIndex)->flags
             & CELS_FLAG_FRESH_MOUNT) != 0;
 }
+
+static inline size_t CelsGetSlabSize(const CelsSession *s)
+{
+    return s ? s->slabSize : 0;
+}
+
+static inline uint32_t CelsGetMaxGroups(const CelsSession *s)
+{
+    return s ? s->maxGroups : 0;
+}
+
+static inline uint32_t CelsGetCleanupCount(const CelsSession *s)
+{
+    return s ? s->cleanupCount : 0;
+}
+
+static inline uint32_t CelsGetMaxCleanups(void)
+{
+    return CELS_MAX_CLEANUPS;
+}
+

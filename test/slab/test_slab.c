@@ -12,43 +12,70 @@ static void TestDefaultSlab(void) {
     CelsSessionInit(&session, NULL);
 
     assert(session.slab != NULL);
-    assert(session.slabSize == CELS_SLAB_32K);
-    assert(session.maxGroups == 256);
-    assert(session.maxSlots == 256);
+    assert(session.slabSize == CELS_DEFAULT_SLAB_SIZE);
+    assert(session.slabSize == CELS_SLAB_512K);
+    assert(session.maxGroups == 4096);
+    assert(session.maxSlots == 4096);
     assert(session.ownsSlab == true);
     assert(((uintptr_t)session.slab % CELS_CACHE_LINE_SIZE) == 0);
 
     /* Verify size of groups, slots, and arena */
-    assert(session.dataArenaSize == (CELS_SLAB_32K - 256 * sizeof(CelsSlotGroup) - 256 * sizeof(CelsSlotAllocation)));
+    assert(session.dataArenaSize == (CELS_SLAB_512K - 4096 * sizeof(CelsSlotGroup) - 4096 * sizeof(CelsSlotAllocation)));
 
     CelsSessionDestroy(&session);
     assert(session.slab == NULL);
 }
 
 static void TestL1Profiles(void) {
-    CelsSession s16;
-    CelsSessionInit(&s16, &(CelsSessionConfig){ .slabSize = CELS_SLAB_16K });
-    assert(s16.slabSize == CELS_SLAB_16K);
-    assert(s16.maxGroups == 128);
-    assert(s16.maxSlots == 128);
-    assert(((uintptr_t)s16.slab % CELS_CACHE_LINE_SIZE) == 0);
-    CelsSessionDestroy(&s16);
+    CelsSession s;
 
-    CelsSession s48;
-    CelsSessionInit(&s48, &(CelsSessionConfig){ .slabSize = CELS_SLAB_48K });
-    assert(s48.slabSize == CELS_SLAB_48K);
-    assert(s48.maxGroups == 384);
-    assert(s48.maxSlots == 384);
-    assert(((uintptr_t)s48.slab % CELS_CACHE_LINE_SIZE) == 0);
-    CelsSessionDestroy(&s48);
+    CelsSessionInit(&s, &(CelsSessionConfig){ .slabSize = CELS_SLAB_16K });
+    assert(s.slabSize == CELS_SLAB_16K);
+    assert(s.maxGroups == 128);
+    assert(s.maxSlots == 128);
+    assert(((uintptr_t)s.slab % CELS_CACHE_LINE_SIZE) == 0);
+    CelsSessionDestroy(&s);
 
-    CelsSession s64;
-    CelsSessionInit(&s64, &(CelsSessionConfig){ .slabSize = CELS_SLAB_64K });
-    assert(s64.slabSize == CELS_SLAB_64K);
-    assert(s64.maxGroups == 512);
-    assert(s64.maxSlots == 512);
-    assert(((uintptr_t)s64.slab % CELS_CACHE_LINE_SIZE) == 0);
-    CelsSessionDestroy(&s64);
+    CelsSessionInit(&s, &(CelsSessionConfig){ .slabSize = CELS_SLAB_32K });
+    assert(s.slabSize == CELS_SLAB_32K);
+    assert(s.maxGroups == 256);
+    assert(s.maxSlots == 256);
+    assert(((uintptr_t)s.slab % CELS_CACHE_LINE_SIZE) == 0);
+    CelsSessionDestroy(&s);
+
+    CelsSessionInit(&s, &(CelsSessionConfig){ .slabSize = CELS_SLAB_48K });
+    assert(s.slabSize == CELS_SLAB_48K);
+    assert(s.maxGroups == 384);
+    assert(s.maxSlots == 384);
+    assert(((uintptr_t)s.slab % CELS_CACHE_LINE_SIZE) == 0);
+    CelsSessionDestroy(&s);
+
+    CelsSessionInit(&s, &(CelsSessionConfig){ .slabSize = CELS_SLAB_64K });
+    assert(s.slabSize == CELS_SLAB_64K);
+    assert(s.maxGroups == 512);
+    assert(s.maxSlots == 512);
+    assert(((uintptr_t)s.slab % CELS_CACHE_LINE_SIZE) == 0);
+    CelsSessionDestroy(&s);
+
+    CelsSessionInit(&s, &(CelsSessionConfig){ .slabSize = CELS_SLAB_128K });
+    assert(s.slabSize == CELS_SLAB_128K);
+    assert(s.maxGroups == 1024);
+    assert(s.maxSlots == 1024);
+    assert(CelsGetSlabSize(&s) == CELS_SLAB_128K);
+    assert(CelsGetMaxGroups(&s) == 1024);
+    CelsSessionDestroy(&s);
+
+    CelsSessionInit(&s, &(CelsSessionConfig){ .slabSize = CELS_SLAB_256K });
+    assert(s.slabSize == CELS_SLAB_256K);
+    assert(s.maxGroups == 2048);
+    assert(s.maxSlots == 2048);
+    CelsSessionDestroy(&s);
+
+    CelsSessionInit(&s, &(CelsSessionConfig){ .slabSize = CELS_SLAB_1M });
+    assert(s.slabSize == CELS_SLAB_1M);
+    assert(s.maxGroups == 8192);
+    assert(s.maxSlots == 8192);
+    CelsSessionDestroy(&s);
 }
 
 static void TestZeroAllocUserSlab(void) {

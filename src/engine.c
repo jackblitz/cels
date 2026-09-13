@@ -44,6 +44,12 @@ void CelsEngineInit(CelsEngine *engine, const struct CelsAppManifest *manifest,
     engine->shouldQuit = false;
 
     CelsSessionConfig sc = config ? *config : (CelsSessionConfig){0};
+    if (sc.slabSize == 0 && manifest != NULL && manifest->slabSize > 0) {
+        sc.slabSize = manifest->slabSize;
+        if (sc.maxGroups == 0 && manifest->maxGroups > 0) {
+            sc.maxGroups = manifest->maxGroups;
+        }
+    }
     sc.engine = engine;
     CelsSessionInit(&engine->session, &sc);
     engine->session.engine = engine;

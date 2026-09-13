@@ -85,6 +85,8 @@ typedef struct CelsAppManifest {
     uint32_t version;                               /**< Manifest version (defaults to 1) */
     const char *name;                               /**< Application identifier / display name */
     bool continuousCompose;                         /**< If true, recomposes continuously (game mode); if false, event-driven (app mode) */
+    size_t slabSize;                                /**< Optional requested slab size (e.g. CELS_SLAB_256K). Defaults to 0 (uses engine default) */
+    uint32_t maxGroups;                             /**< Optional requested max groups. If 0, auto-calculated from slabSize */
     void (*setSession)(CelsSession *s);             /**< Internal session synchronization across DLL boundary */
     CelsCompositionRef (*onStart)(CelsEngine *engine, CelsSession *session); /**< Setup & returns root composition */
     void (*onEnd)(CelsEngine *engine, CelsSession *session);   /**< Teardown callback on shutdown */

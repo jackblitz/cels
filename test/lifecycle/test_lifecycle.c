@@ -126,7 +126,7 @@ static void TestFatalMutationAndDestroy(void) {
     assert(CelsSessionRecompose(&session) == CELS_OK);
     assert(g_renderCount == 1);
     assert(g_texturesForgotten == 1);
-    uint32_t activeGroups = CELS_MAX_GROUPS - (session.groupsGapEnd - session.groupsGapStart);
+    uint32_t activeGroups = session.maxGroups - (session.groupsGapEnd - session.groupsGapStart);
     assert(activeGroups == 0);
 
     CelsSessionDestroy(&session);
@@ -184,7 +184,7 @@ static void TestFullLifecycleProgression(void) {
     assert(res3 == CELS_OK);
     assert(g_renderCount == 2);
     assert(g_texturesForgotten == 1);
-    uint32_t activeGroups = CELS_MAX_GROUPS - (session.groupsGapEnd - session.groupsGapStart);
+    uint32_t activeGroups = session.maxGroups - (session.groupsGapEnd - session.groupsGapStart);
     assert(activeGroups == 0);
 
     /* Step 4: Subsequent Quiet Recompose */

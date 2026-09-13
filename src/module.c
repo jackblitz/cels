@@ -49,14 +49,23 @@ static bool IsPathReadable(const char *path)
 #if defined(_WIN32)
     /* Open with sharing mode 0 (exclusive) to verify the compiler/linker has completely closed the file */
     HANDLE h = CreateFileA(path,
-                           GENERIC_READ,
+                           GENERIC_READ | GENERIC_WRITE,
                            0,
                            NULL,
                            OPEN_EXISTING,
                            FILE_ATTRIBUTE_NORMAL,
                            NULL);
     if (h == INVALID_HANDLE_VALUE) {
-        return false;
+        h = CreateFileA(path,
+                        GENERIC_READ,
+                        0,
+                        NULL,
+                        OPEN_EXISTING,
+                        FILE_ATTRIBUTE_NORMAL,
+                        NULL);
+        if (h == INVALID_HANDLE_VALUE) {
+            return false;
+        }
     }
     CloseHandle(h);
     return true;
@@ -65,10 +74,80 @@ static bool IsPathReadable(const char *path)
 #endif
 }
 
+static bool IsValidPEImage(const char *path)
+{
+#if defined(_WIN32)
+    HANDLE h = CreateFileA(path,
+                           GENERIC_READ,
+                           FILE_SHARE_READ,
+                           NULL,
+                           OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL,
+                           NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    DWORD sizeLow = GetFileSize(h, NULL);
+    if (sizeLow < 4096) {
+        CloseHandle(h);
+        return false;
+    }
+
+    IMAGE_DOS_HEADER dosHeader;
+    DWORD bytesRead = 0;
+    if (!ReadFile(h, &dosHeader, sizeof(dosHeader), &bytesRead, NULL) || bytesRead != sizeof(dosHeader)) {
+        CloseHandle(h);
+        return false;
+    }
+
+    if (dosHeader.e_magic != IMAGE_DOS_SIGNATURE) {
+        CloseHandle(h);
+        return false;
+    }
+
+    if (dosHeader.e_lfanew <= 0 || (DWORD)dosHeader.e_lfanew >= sizeLow - sizeof(IMAGE_NT_HEADERS)) {
+        CloseHandle(h);
+        return false;
+    }
+
+    if (SetFilePointer(h, dosHeader.e_lfanew, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER) {
+        CloseHandle(h);
+        return false;
+    }
+
+    IMAGE_NT_HEADERS ntHeaders;
+    if (!ReadFile(h, &ntHeaders, sizeof(ntHeaders), &bytesRead, NULL) || bytesRead != sizeof(ntHeaders)) {
+        CloseHandle(h);
+        return false;
+    }
+
+    if (ntHeaders.Signature != IMAGE_NT_SIGNATURE) {
+        CloseHandle(h);
+        return false;
+    }
+
+    if (ntHeaders.FileHeader.NumberOfSections == 0 || ntHeaders.OptionalHeader.SizeOfImage == 0) {
+        CloseHandle(h);
+        return false;
+    }
+
+    CloseHandle(h);
+    return true;
+#else
+    (void)path;
+    return true;
+#endif
+}
+
 static void *PlatformLoadLibrary(const char *path)
 {
 #if defined(_WIN32)
-    return (void *)LoadLibraryA(path);
+    DWORD prevMode = 0;
+    SetThreadErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX, &prevMode);
+    HMODULE mod = LoadLibraryA(path);
+    SetThreadErrorMode(prevMode, NULL);
+    return (void *)mod;
 #else
     return dlopen(path, RTLD_NOW | RTLD_LOCAL);
 #endif
@@ -231,6 +310,24 @@ bool CelsAppModuleLoad(CelsAppModule *app, const char *libraryPath,
 
     app->manifest = getManifest();
     if (app->manifest != NULL) {
+        /* Reconfigure session slab if manifest declares a specific slab size before initial composition
+           and the host is currently using the default slab size (CLI overrides take precedence) */
+        if (app->manifest->slabSize > 0 && !session->hasComposedOnce && session->slabSize == CELS_DEFAULT_SLAB_SIZE) {
+            if (session->slabSize != app->manifest->slabSize ||
+                (app->manifest->maxGroups > 0 && session->maxGroups != app->manifest->maxGroups)) {
+                CelsSessionConfig newCfg = {
+                    .slabSize = app->manifest->slabSize,
+                    .maxGroups = app->manifest->maxGroups,
+                    .engine = session->engine,
+                    .maxDrainIterations = session->maxDrainIterations
+                };
+                CelsEngine *eng = session->engine;
+                CelsSessionDestroy(session);
+                CelsSessionInit(session, &newCfg);
+                session->engine = eng;
+            }
+        }
+
         /* Synchronize ambient session across dynamic library boundary */
         if (app->manifest->setSession != NULL) {
             app->manifest->setSession(session);
@@ -261,8 +358,8 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
         return false;
     }
 
-    /* Wait if the compiler/linker is currently writing to the file */
-    if (!IsPathReadable(app->originalPath)) {
+    /* Wait if the compiler/linker is currently writing to the file or PE is incomplete */
+    if (!IsPathReadable(app->originalPath) || !IsValidPEImage(app->originalPath)) {
         return false;
     }
 
@@ -279,6 +376,12 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
              (unsigned long)GetCurrentProcessId(),
              nextReload);
     if (!PlatformCopyFile(app->originalPath, candidatePath)) {
+        return false;
+    }
+
+    /* Verify that the shadow copy itself is fully intact before loading */
+    if (!IsValidPEImage(candidatePath)) {
+        PlatformDeleteFile(candidatePath);
         return false;
     }
 

@@ -48,7 +48,7 @@ static inline const CelsSlotGroup* GetGroup(const CelsSession *s, uint32_t logic
 }
 
 static inline uint32_t GetActiveCount(const CelsSession *s) {
-    return CELS_MAX_GROUPS - (s->groupsGapEnd - s->groupsGapStart);
+    return s->maxGroups - (s->groupsGapEnd - s->groupsGapStart);
 }
 
 static void PrintNode(const CelsSession *s, uint32_t logicalIdx, const char *prefix, bool isLast) {
