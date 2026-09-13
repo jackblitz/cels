@@ -1,15 +1,15 @@
 {
   "cels_version": {
-    "string": "0.1.0",
-    "code": 65537,
+    "string": "0.1.1",
+    "code": 65792,
     "major": 0,
     "minor": 1,
-    "patch": 0,
-    "build": 1
+    "patch": 1,
+    "build": 0
   },
   "metadata": {
-    "timestamp": 1789257941,
-    "iso_date": "2026-09-13T00:05:41Z",
+    "timestamp": 1789274696,
+    "iso_date": "2026-09-13T04:44:56Z",
     "os": "Windows",
     "compiler": "GCC 15.2.0",
     "arch": "x86_64"

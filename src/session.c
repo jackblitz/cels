@@ -1036,6 +1036,15 @@ void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal,
                 s->currentSlotOffset = 0;
                 return CelsResolveSlot(s, size, initVal, desc);
             }
+            if (desc != NULL && desc->onDestroy != NULL) {
+                for (uint32_t c = 0; c < s->cleanupCount; ++c) {
+                    if (s->cleanups[c].groupId == (uint32_t)group->userData
+                        && s->cleanups[c].instance == (void*)&s->dataArena[slot->arenaOffset]) {
+                        s->cleanups[c].onDestroy = desc->onDestroy;
+                        break;
+                    }
+                }
+            }
             s->currentSlotOffset += (uint32_t)alignedSize;
             return &s->dataArena[slot->arenaOffset];
         }

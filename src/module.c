@@ -177,8 +177,9 @@ bool CelsAppModuleLoad(CelsAppModule *app, const char *libraryPath,
     /* Copy to shadow file on Windows to bypass OS DLL locking */
     snprintf(app->loadedPath,
              sizeof(app->loadedPath),
-             "%.480s.hot_%u.tmp.dll",
+             "%.440s.hot_%lu_%u.tmp.dll",
              libraryPath,
+             (unsigned long)GetCurrentProcessId(),
              app->reloadCount);
     if (!PlatformCopyFile(libraryPath, app->loadedPath)) {
         fprintf(stderr,
@@ -194,7 +195,7 @@ bool CelsAppModuleLoad(CelsAppModule *app, const char *libraryPath,
     char *dot = strrchr(pdbSrc, '.');
     if (dot != NULL) {
         *dot = '\0';
-        snprintf(pdbDst, sizeof(pdbDst), "%.480s.hot_%u.tmp.pdb", pdbSrc, app->reloadCount);
+        snprintf(pdbDst, sizeof(pdbDst), "%.440s.hot_%lu_%u.tmp.pdb", pdbSrc, (unsigned long)GetCurrentProcessId(), app->reloadCount);
         strncat(pdbSrc, ".pdb", sizeof(pdbSrc) - strlen(pdbSrc) - 1u);
         if (IsPathReadable(pdbSrc)) {
             PlatformCopyFile(pdbSrc, pdbDst);
@@ -273,8 +274,9 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
 #if defined(_WIN32)
     snprintf(candidatePath,
              sizeof(candidatePath),
-             "%.480s.hot_%u.tmp.dll",
+             "%.440s.hot_%lu_%u.tmp.dll",
              app->originalPath,
+             (unsigned long)GetCurrentProcessId(),
              nextReload);
     if (!PlatformCopyFile(app->originalPath, candidatePath)) {
         return false;
@@ -287,7 +289,7 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
     char *dot = strrchr(pdbSrc, '.');
     if (dot != NULL) {
         *dot = '\0';
-        snprintf(pdbDst, sizeof(pdbDst), "%.480s.hot_%u.tmp.pdb", pdbSrc, nextReload);
+        snprintf(pdbDst, sizeof(pdbDst), "%.440s.hot_%lu_%u.tmp.pdb", pdbSrc, (unsigned long)GetCurrentProcessId(), nextReload);
         strncat(pdbSrc, ".pdb", sizeof(pdbSrc) - strlen(pdbSrc) - 1u);
         if (IsPathReadable(pdbSrc)) {
             PlatformCopyFile(pdbSrc, pdbDst);
@@ -313,14 +315,11 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
         return false;
     }
 
-    /* New library is verified and ready. Swap cleanly and unload old module. */
-    PlatformFreeLibrary(app->handle);
+    /* New library is verified and ready. Swap cleanly. */
+    void *oldHandle = app->handle;
     app->handle = newHandle;
     snprintf(app->loadedPath, sizeof(app->loadedPath), "%s", candidatePath);
     app->reloadCount = nextReload;
-
-    /* Delete previous shadow file */
-    PlatformDeleteFile(oldLoadedPath);
 
     app->manifest = getManifest();
     app->lastWriteTime = currentWriteTime;
@@ -344,6 +343,12 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
     /* Force recomposition re-evaluation of newly loaded code while preserving slots */
     CelsSessionHotReload(session);
     CelsSessionRecompose(session);
+
+    /* Safely release old library and cleanup shadow file AFTER recomposition has completed */
+    if (oldHandle != NULL) {
+        PlatformFreeLibrary(oldHandle);
+    }
+    PlatformDeleteFile(oldLoadedPath);
 
     return true;
 }
@@ -380,7 +385,7 @@ void CelsAppModuleUnload(CelsAppModule *app, CelsSession *session)
     if (lastSlash) {
         *(lastSlash + 1) = '\0';
         char pattern[CELS_PATH_MAX * 2];
-        snprintf(pattern, sizeof(pattern), "%s*.hot_*.tmp.*", dir);
+        snprintf(pattern, sizeof(pattern), "%s*.hot_%lu_*.tmp.*", dir, (unsigned long)GetCurrentProcessId());
         WIN32_FIND_DATAA fd;
         HANDLE h = FindFirstFileA(pattern, &fd);
         if (h != INVALID_HANDLE_VALUE) {
