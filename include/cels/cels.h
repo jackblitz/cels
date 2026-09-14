@@ -40,6 +40,7 @@
 #include "cels/session.h"
 #include "cels/slot_table.h"
 #include "cels/state.h"
+#include "cels/log.h"
 #include "cels/engine.h"
 #include "cels/app.h"
 #include "cels/module.h"
@@ -392,9 +393,10 @@ static inline bool _cels_lifecycle_CEL_None(void *userData) {
 #define cel_watch(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_WATCH_2, _CEL_WATCH_1)(__VA_ARGS__)
 
 #define _cel_mutate_2(session, state_ptr) \
-    for (__typeof__(*(state_ptr)) _cel_old_ = *(state_ptr), *this = (state_ptr); \
-         this != NULL; \
-         CelsStateCommitMutation((session), this, &_cel_old_, sizeof(*this)), this = NULL)
+    for (int _cel_err = ((session)->currentDepth > 0 ? (assert(!(session)->currentDepth && "cel_mutate cannot be called inside a Composition. Use a System instead."), 1) : 0); _cel_err == 0; _cel_err = 1) \
+        for (__typeof__(*(state_ptr)) _cel_old_ = *(state_ptr), *this = (state_ptr); \
+             this != NULL; \
+             CelsStateCommitMutation((session), this, &_cel_old_, sizeof(*this)), this = NULL)
 
 #define _cel_mutate_1(state_ptr) \
     _cel_mutate_2(CelsGetCurrentSession(), (state_ptr))

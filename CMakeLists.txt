@@ -48,6 +48,7 @@ add_library(cels_core STATIC
     src/state.c
     src/engine.c
     src/module.c
+    src/log.c
 )
 target_include_directories(cels_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>

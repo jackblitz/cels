@@ -11,6 +11,7 @@
 
 #include "cels/slot_table.h"
 #include "cels/state.h"
+#include "cels/log.h"
 
 #ifndef CELS_THREAD_LOCAL
     #if defined(_MSC_VER)
@@ -384,7 +385,11 @@ void CelsSessionAttachComposition(CelsSession *s, uint64_t key,
         fprintf(stderr,
                 "[CELS ERROR] Out of session memory: Exceeded CELS_MAX_ATTACHED_COMPOSITIONS (%u).\n",
                 CELS_MAX_ATTACHED_COMPOSITIONS);
-        assert(s->attachedCount < CELS_MAX_ATTACHED_COMPOSITIONS && "Exceeded CELS_MAX_ATTACHED_COMPOSITIONS");
+        // assert(s->attachedCount < CELS_MAX_ATTACHED_COMPOSITIONS && "Exceeded CELS_MAX_ATTACHED_COMPOSITIONS");
+        if (s->attachedCount >= CELS_MAX_ATTACHED_COMPOSITIONS) {
+            fprintf(stderr, "[CELS ERROR] Exceeded CELS_MAX_ATTACHED_COMPOSITIONS\n");
+            return;
+        }
         return;
     }
     s->attachedCompositions[s->attachedCount++] = (CelsAttachedComposition){
@@ -753,12 +758,15 @@ bool CelsEnterComposable(CelsSession *s, uint64_t key)
         fprintf(stderr,
                 "[CELS ERROR] Out of session memory: Exceeded maximum composition nesting depth (%u / %u).\n",
                 s->currentDepth, CELS_MAX_DEPTH);
-        assert(s->currentDepth < CELS_MAX_DEPTH && "Exceeded CELS_MAX_DEPTH");
+        // assert(s->currentDepth < CELS_MAX_DEPTH && "Exceeded CELS_MAX_DEPTH");
+        s->activeStack[s->currentDepth] = 0;
+        s->currentDepth++;
         return false;
     }
 
     const uint32_t depth = s->currentDepth++;
     s->slotOffsetStack[depth - 1] = s->currentSlotOffset;
+    s->activeStack[depth] = 0;
 
     const uint32_t totalGroups = CelsGetLogicalGroupCount(s);
     const uint32_t cursor = s->logicalCursor;
@@ -830,12 +838,17 @@ bool CelsEnterComposable(CelsSession *s, uint64_t key)
     }
 
     if (totalGroups >= s->maxGroups) {
-        fprintf(stderr,
-                "[CELS ERROR] Out of session memory: Cannot allocate composable group (key: 0x%016llX).\n"
-                "             Active groups: %u / %u (slab budget: %zu B).\n"
-                "             Consider increasing slabSize (e.g. CELS_SLAB_48K or CELS_SLAB_64K).\n",
-                (unsigned long long)key, totalGroups, s->maxGroups, s->slabSize);
-        assert(totalGroups < s->maxGroups && "CELS_ERROR_GROUP_OVERFLOW");
+        static bool printed = false;
+        if (!printed) {
+            cel_print_log(ERROR,
+                    "[CELS ERROR] Out of session memory: Cannot allocate composable group (key: 0x%016llX).\n"
+                    "             Active groups: %u / %u (slab budget: %zu B).\n"
+                    "             Consider increasing slabSize (e.g. CELS_SLAB_48K or CELS_SLAB_64K).\n"
+                    "             (Further identical allocation errors will be suppressed)",
+                    (unsigned long long)key, totalGroups, s->maxGroups, s->slabSize);
+            printed = true;
+        }
+        s->activeStack[depth] = 0;
         return false;
     }
     assert(s->nextGroupId != 0 && "CELS group identity overflow");
@@ -942,32 +955,49 @@ void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal,
 
     if (group->flags & CELS_FLAG_FRESH_MOUNT) {
         if (s->slotCount >= s->maxSlots) {
-            fprintf(stderr,
-                    "[CELS ERROR] Out of session memory: Slot allocation limit reached (%u / %u slots in %zu-byte slab).\n"
-                    "             Consider increasing slabSize (e.g. CELS_SLAB_48K or CELS_SLAB_64K).\n",
-                    s->slotCount, s->maxSlots, s->slabSize);
-            assert(s->slotCount < s->maxSlots && "CELS_ERROR_SLOT_ARENA_OVERFLOW");
+            static bool printed = false;
+            if (!printed) {
+                cel_print_log(ERROR,
+                        "[CELS ERROR] Out of session memory: Slot allocation limit reached (%u / %u slots in %zu-byte slab).\n"
+                        "             Consider increasing slabSize (e.g. CELS_SLAB_48K or CELS_SLAB_64K).\n"
+                        "             (Further identical allocation errors will be suppressed)",
+                        s->slotCount, s->maxSlots, s->slabSize);
+                printed = true;
+            }
             return NULL;
         }
         uint32_t offset = 0;
         uint32_t insertion = 0;
 
-        while (insertion < s->slotCount) {
-            CelsSlotAllocation *const next = &s->slots[insertion];
-            if (offset + alignedSize <= next->arenaOffset) {
-                break;
+        if (s->slotCount > 0) {
+            CelsSlotAllocation *const last = &s->slots[s->slotCount - 1];
+            if (last->arenaOffset + last->size == s->dataGapStart) {
+                offset = s->dataGapStart;
+                insertion = s->slotCount;
             }
-            offset = next->arenaOffset + next->size;
-            ++insertion;
+        }
+
+        if (insertion == 0 && s->slotCount > 0) {
+            while (insertion < s->slotCount) {
+                CelsSlotAllocation *const next = &s->slots[insertion];
+                if (offset + alignedSize <= next->arenaOffset) {
+                    break;
+                }
+                offset = next->arenaOffset + next->size;
+                ++insertion;
+            }
         }
 
         if (offset + alignedSize > s->dataArenaSize) {
-            fprintf(stderr,
-                    "[CELS ERROR] Out of session memory: Slot data arena overflow (requested: %zu B, used: %u B, arena capacity: %zu B in %zu-byte slab).\n"
-                    "             Consider increasing slabSize (e.g. CELS_SLAB_48K or CELS_SLAB_64K).\n",
-                    alignedSize, s->dataGapStart, s->dataArenaSize, s->slabSize);
-            assert(offset + alignedSize <= s->dataArenaSize
-                   && "CELS_ERROR_SLOT_ARENA_OVERFLOW");
+            static bool printed = false;
+            if (!printed) {
+                cel_print_log(ERROR,
+                        "[CELS ERROR] Out of session memory: Slot data arena overflow (requested: %zu B, used: %u B, arena capacity: %zu B in %zu-byte slab).\n"
+                        "             Consider increasing slabSize (e.g. CELS_SLAB_48K or CELS_SLAB_64K).\n"
+                        "             (Further identical allocation errors will be suppressed)",
+                        alignedSize, s->dataGapStart, s->dataArenaSize, s->slabSize);
+                printed = true;
+            }
             return NULL;
         }
 
@@ -1002,8 +1032,7 @@ void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal,
                 fprintf(stderr,
                         "[CELS ERROR] Out of session memory: Cleanup hook capacity exceeded (%u / %u).\n",
                         s->cleanupCount, CELS_MAX_CLEANUPS);
-                assert(s->cleanupCount < CELS_MAX_CLEANUPS
-                       && "CELS_ERROR_CLEANUP_OVERFLOW");
+                // assert(s->cleanupCount < CELS_MAX_CLEANUPS && "CELS_ERROR_CLEANUP_OVERFLOW");
                 return NULL;
             }
             s->cleanups[s->cleanupCount++] = (CelsCleanupHook){
@@ -1021,10 +1050,20 @@ void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal,
         return (void *)slotPtr;
     }
 
+    static uint32_t s_slotHint = 0;
+    uint32_t start = s_slotHint;
+    if (start >= s->slotCount) start = 0;
+
     for (uint32_t i = 0; i < s->slotCount; ++i) {
-        CelsSlotAllocation *const slot = &s->slots[i];
+        uint32_t idx = start + i;
+        if (idx >= s->slotCount) idx -= s->slotCount;
+        
+        CelsSlotAllocation *const slot = &s->slots[idx];
         if (slot->groupId == (uint32_t)group->userData
             && slot->slotOffset == s->currentSlotOffset) {
+            
+            s_slotHint = idx + 1;
+            
             if (slot->userSize != (uint16_t)size) {
                 fprintf(stderr,
                         "[CELS HOT-RELOAD] Struct size changed for group 0x%016llX (was %u B, now %zu B). "

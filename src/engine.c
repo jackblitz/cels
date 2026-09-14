@@ -70,15 +70,18 @@ void CelsEngineDestroy(CelsEngine *engine)
         CelsEngineEnd(engine);
     }
 
-    /* Teardown engine subsystem modules */
+    /* Slot cleanup can release entities, GPU resources, and other objects
+     * belonging to registered modules. Keep those modules alive and resolvable
+     * until every session lifecycle callback has finished. */
+    CelsSessionDestroy(&engine->session);
+
+    /* Teardown engine subsystem modules after their session-owned resources. */
     for (uint32_t i = engine->moduleCount; i > 0; --i) {
         if (engine->modules[i - 1].onDestroy != NULL) {
             engine->modules[i - 1].onDestroy(engine->modules[i - 1].instance);
         }
     }
     engine->moduleCount = 0;
-
-    CelsSessionDestroy(&engine->session);
 
     if (s_currentEngine == engine) {
         s_currentEngine = NULL;
