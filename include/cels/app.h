@@ -45,14 +45,14 @@ extern "C" {
 typedef struct CelsCompositionRef {
     uint64_t key;
     void (*body)(CelsSession *session, uint64_t key);
-    bool (*lifecycleEval)(void *userData);
+    bool (*lifecycleEval)(CelsSession *session);
 } CelsCompositionRef;
 
 #define _CEL_COMPOSITION_REF_2(CompName, Lifecycle) \
     ((CelsCompositionRef){ \
         .key = CelsHashKey(#CompName), \
         .body = _cels_app_body_##CompName, \
-        .lifecycleEval = _cels_lifecycle_##Lifecycle \
+        .lifecycleEval = (bool(*)(CelsSession*))(Lifecycle) \
     })
 
 #define _CEL_COMPOSITION_REF_1(CompName) \

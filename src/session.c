@@ -366,7 +366,7 @@ void CelsSessionDestroy(CelsSession *s)
  */
 void CelsSessionAttachComposition(CelsSession *s, uint64_t key,
                                   void (*body)(CelsSession *s, uint64_t key),
-                                  bool (*eval)(void *userData), void *statePtr)
+                                  bool (*eval)(CelsSession *s))
 {
     assert(s != NULL);
     assert(body != NULL);
@@ -375,7 +375,6 @@ void CelsSessionAttachComposition(CelsSession *s, uint64_t key,
         if (s->attachedCompositions[i].key == key) {
             s->attachedCompositions[i].body = body;
             s->attachedCompositions[i].lifecycleEval = eval;
-            s->attachedCompositions[i].statePtr = statePtr;
             s->attachedCompositions[i].isAttached = true;
             return;
         }
@@ -396,9 +395,33 @@ void CelsSessionAttachComposition(CelsSession *s, uint64_t key,
         .key = key,
         .body = body,
         .lifecycleEval = eval,
-        .statePtr = statePtr,
         .isAttached = true
     };
+}
+
+void CelsSessionRegisterLifecycle(CelsSession *s, void *instance, void (*onCreate)(void *, CelsSession *), void (*onDestroy)(void *, CelsSession *))
+{
+    if (s == NULL || instance == NULL || s->currentDepth == 0) return;
+
+    CelsSlotGroup *const group = CelsGetGroup(s, s->currentGroupIndex);
+    
+    if (s->cleanupCount >= CELS_MAX_CLEANUPS) {
+        fprintf(stderr,
+                "[CELS ERROR] Out of session memory: Cleanup hook capacity exceeded (%u / %u).\n",
+                s->cleanupCount, CELS_MAX_CLEANUPS);
+        return;
+    }
+    
+    s->cleanups[s->cleanupCount++] = (CelsCleanupHook){
+        .groupKey = group->key,
+        .groupId = (uint32_t)group->userData,
+        .instance = instance,
+        .onDestroy = onDestroy
+    };
+    
+    if (onCreate != NULL) {
+        onCreate(instance, s);
+    }
 }
 
 /**
@@ -473,13 +496,9 @@ CelsResult CelsSessionRecompose(CelsSession *s)
                 continue;
             }
 
-            if (comp->statePtr == NULL) {
-                comp->statePtr = CelsGetState(s, comp->key);
-            }
-
             bool alive = true;
             if (comp->lifecycleEval != NULL) {
-                alive = comp->lifecycleEval(comp->statePtr);
+                alive = comp->lifecycleEval(s);
             }
 
             if (alive) {
@@ -487,12 +506,8 @@ CelsResult CelsSessionRecompose(CelsSession *s)
                     comp->body(s, comp->key);
                 }
                 CelsExitGroup(s);
-                if (comp->statePtr == NULL) {
-                    comp->statePtr = CelsGetState(s, comp->key);
-                }
             } else {
                 CelsPruneSubtreeByKey(s, comp->key);
-                comp->statePtr = NULL;
             }
         }
 

@@ -156,8 +156,7 @@ typedef struct CelsSlotAllocation {
 typedef struct CelsAttachedComposition {
     uint64_t key;
     void (*body)(CelsSession *s, uint64_t key);
-    bool (*lifecycleEval)(void *userData);
-    void *statePtr;
+    bool (*lifecycleEval)(CelsSession *s);
     bool isAttached;
 } CelsAttachedComposition;
 
@@ -251,10 +250,11 @@ struct CelsSession {
 void CelsSessionAttachComposition(CelsSession *s,
                                   uint64_t key,
                                   void (*body)(CelsSession *s, uint64_t key),
-                                  bool (*eval)(void *userData),
-                                  void *statePtr);
+                                  bool (*eval)(CelsSession *s));
 
 void CelsSessionDetachComposition(CelsSession *s, uint64_t key);
+
+void CelsSessionRegisterLifecycle(CelsSession *s, void *instance, void (*onCreate)(void *instance, CelsSession *s), void (*onDestroy)(void *instance, CelsSession *s));
 
 /* ========================================================================= */
 /* Session Lifecycle Functions                                               */

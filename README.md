@@ -46,6 +46,44 @@ Think React's or Jetpack Compose's component and slot-table model, engineered fo
 
 ---
 
+## Architecture Overview
+
+CELS operates on a strictly one-way data flow model, leveraging a pre-allocated L1 cache-aligned memory slab to achieve zero runtime heap allocations. 
+
+```mermaid
+flowchart TD
+    subgraph App[Application Code]
+        Mutate[State Mutation\ncel_mutate]
+        Watch[State Dependency\ncel_watch]
+        Comp[Composables\nCEL_Composable]
+    end
+
+    subgraph CELS[CELS Engine]
+        Registry[State Registry\nDependency Tracking]
+        Queue[Invalidation Queue]
+        Recompose[Recomposition Engine]
+        
+        subgraph Memory[L1 Cache Slab]
+            Gap[Dual Gap Buffer\nSlot Groups]
+            Table[Slot Allocation Table]
+            Arena[Data Arena\nLocal Memory]
+        end
+    end
+
+    Mutate -->|Memcmp Diff| Registry
+    Registry -->|Queues Watchers| Queue
+    Queue -->|Flags Invalidated| Recompose
+    Recompose -->|Re-evaluates| Comp
+    Comp -->|Reads State| Watch
+    Watch -->|Registers Dependency| Registry
+    
+    Comp -->|cel_remember| Memory
+    Comp -->|cel_lifecycle_state| Memory
+    Recompose -->|Structural Updates| Memory
+```
+
+---
+
 ## Code Example
 
 You declare intent. The framework does the work.
@@ -121,6 +159,56 @@ CEL_App(WindowApp,
 ```
 
 ---
+
+## Understanding State, Attach, and Mutate
+
+CELS decouples state management, component tree evaluation, and reactivity into three clean operations.
+
+### 1. Declaring and Watching State (`cel_remember` & `cel_lifecycle_watch`)
+Inside a composition, allocate memory using `cel_remember`. This persists across frames. If you need native resource hooks (like destroying a Vulkan handle), use `cel_lifecycle_watch`.
+
+```c
+CEL_Composition(MainWindow, key) {
+    // Allocates memory directly inside the composition tree
+    WindowState *win = cel_remember(WindowState, .isOpen = true, .width = 800);
+    
+    // (Optional) Register native cleanup hooks
+    cel_lifecycle_watch(win, OnWindowOpen, OnWindowClose);
+}
+```
+
+### 2. Evaluating and Attaching (`CEL_Evaluate` & `CEL_Attach`)
+Evaluators tell the engine if a composition should continue running or destroy itself. Write an evaluator that fetches exactly the state it needs using `CEL_GetState`.
+
+```c
+CEL_Evaluate(WindowGuard) {
+    // Explicitly ask the session for the MainWindow's state
+    WindowState *win = CEL_GetState(s, CEL_KEY("MainWindow"), WindowState);
+    if (win && !win->isOpen) {
+        return false; // Tells the engine to prune the MainWindow tree!
+    }
+    return true;
+}
+```
+Attach them together at the engine/session root:
+```c
+CEL_Attach(&session, MainWindow, WindowGuard);
+```
+
+### 3. Mutating State (`cel_mutate`)
+Never mutate state directly inside a running composition (it violates reactive rules). Mutate it between frames or in event handlers. `cel_mutate` captures memory snapshots and queues invalidation cascades automatically.
+
+```c
+// Safely query the session for the state from anywhere
+WindowState *win = CEL_GetState(&session, CEL_KEY("MainWindow"), WindowState);
+
+// Trigger a reactive mutation
+cel_mutate(&session, win) {
+    this->width = 1920;
+    this->height = 1080;
+}
+```
+
 
 ## Three-Tier API
 
@@ -328,7 +416,7 @@ int main(void) {
 
     // 2. Attach composition root
     CelsCompositionRef root = CEL_COMPOSITION(GameRoot);
-    CelsSessionAttachComposition(&session, root.key, root.body, root.lifecycleEval, NULL);
+    CelsSessionAttachComposition(&session, root.key, root.body, root.lifecycleEval);
 
     // 3. Initial recomposition
     CelsSessionRecompose(&session);
@@ -349,3 +437,4 @@ int main(void) {
 ```
 
 ---
+

@@ -90,54 +90,30 @@ CEL_Composable(CEL_WindowContent, WindowState*, win) {
  * and passes the persistent pointer down the composition tree.
  */
 CEL_Composition(CEL_Window, key) {
-    // 1. Initialize only the fields you want; omitted fields default to 0/NULL/false:
-    WindowState init = {
+    WindowState *win = cel_remember(WindowState, 
         .isOpen = true,
         .width  = 800,
         .height = 600
-    };
+    );
 
-    // 2. Type is deduced directly from 'init'
-    WindowState *win = cel_lifecycle_state(init, Window_OnCreated, Window_OnDestroyed);
-
-    // 3. Pass the state through the composition tree to child composables:
+    cel_lifecycle_watch(win, Window_OnCreated, Window_OnDestroyed);
     CEL_WindowContent(win);
 }
 
-/**
- * Lifecycle evaluator observing WindowState.
- *
- * When state.isOpen becomes false, triggers cel_destroy() to flag the
- * composition for pruning, invoking Window_OnDestroyed.
- */
-CEL_LifeCycle(WindowLifeCycle, WindowState) {
-    if (it != NULL) {
-        // Watch the state managed by the composition
-        WindowState state = cel_watch(it);
-        if (!state.isOpen) {
-            printf("  [WindowLifeCycle] Window close requested -> calling cel_destroy()\n");
-            cel_destroy();
-        }
+CEL_Evaluate(WindowLifeCycle) {
+    WindowState *state = CEL_GetState(s, CEL_KEY("CEL_Window"), WindowState);
+    if (state != NULL && !state->isOpen) {
+        printf("  [WindowLifeCycle] Window close requested -> pruning tree\n");
+        return false;
     }
+    return true;
 }
 
-/* ========================================================================= */
-/* 4. Public Attachment Interface                                            */
-/* ========================================================================= */
-
-/**
- * Attaches CEL_Window and WindowLifeCycle to the session.
- *
- * @param session Target session. Non-NULL.
- */
 void Window_Attach(CelsSession *session)
 {
     CEL_Attach(session, CEL_Window, WindowLifeCycle);
 }
 
-/**
- * Returns a composition reference handle for CEL_Window.
- */
 CelsCompositionRef Window_GetComposition(void)
 {
     return CEL_COMPOSITION(CEL_Window, WindowLifeCycle);

@@ -120,7 +120,7 @@ Every mounted composable or composition node corresponds to one `CelsSlotGroup`.
 typedef struct CelsSlotGroup {
     uint64_t key;          // 8 bytes: Stable 64-bit callsite hash
     uint64_t userData;     // 8 bytes: Opaque unique group ID (nextGroupId++)
-    uint32_t parentIndex;  // 4 bytes: Logical index of parent group (0 for root)
+    uint32_t parentIndex;  // 4 bytes: Logical index of parent group (UINT32_MAX if root)
     uint32_t slotIndex;    // 4 bytes: Arena offset for group data (dataOffset)
     uint16_t slotCount;    // 2 bytes: Size of group data in bytes (dataSize)
     uint16_t groupSize;    // 2 bytes: Transitive count of child groups in subtree
@@ -136,7 +136,8 @@ typedef struct CelsSlotAllocation {
     uint32_t groupId;      // Owning group identity (matches group->userData)
     uint32_t slotOffset;   // Offset relative to the group's remembered slots
     uint32_t arenaOffset;  // Absolute byte offset into s->dataArena
-    uint32_t size;         // Aligned byte size of the allocated slot
+    uint16_t size;         // Aligned byte size of the allocated slot
+    uint16_t userSize;     // Exact requested user type size for schema evolution check
 } CelsSlotAllocation;
 ```
 
@@ -344,7 +345,7 @@ WindowState *win = CEL_GetState(&session, CEL_KEY("MainWindow"), WindowState);
 ```c
 CelsSessionConfig config = {
     .root = NULL,                        // Optional root function
-    .slabSize = CELS_SLAB_32K,           // Total slab bytes (default: 32 KiB)
+    .slabSize = CELS_SLAB_32K,           // Total slab bytes (default: 512 KiB)
     .slab = NULL,                        // NULL = allocate aligned; non-NULL = user buffer
     .maxGroups = 256,                    // Max groups (auto-calculated from slabSize if 0)
     .maxDrainIterations = 8              // Max recomposition cascading loops
@@ -359,7 +360,7 @@ When carving the slab:
 - Slot allocation table: $N \times 16\text{ bytes}$
 - Data arena: $\text{slabSize} - (N \times 48\text{ bytes})$
 
-For a default **32 KiB slab** with 256 groups:
+For a **32 KiB slab** with 256 groups:
 - Groups buffer: $256 \times 32 = 8{,}192\text{ bytes}$
 - Slot records: $256 \times 16 = 4{,}096\text{ bytes}$
 - Data arena: $32{,}768 - 12{,}288 = 20{,}480\text{ bytes}$ for persistent state!
@@ -368,11 +369,11 @@ For a default **32 KiB slab** with 256 groups:
 
 | Constant | Default | Description |
 |---|---|---|
-| `CELS_MAX_DEPTH` | 32 | Maximum nesting depth of composables |
-| `CELS_MAX_CLEANUPS` | 128 | Maximum concurrent active lifecycle cleanup hooks |
-| `CELS_MAX_STATES` | 256 | Maximum distinct reactive state pointers in registry |
-| `CELS_MAX_WATCHERS` | 8 | Maximum subscriber composables per reactive state pointer |
-| `CELS_MAX_QUEUE` | 256 | Maximum pending invalidations in queue |
+| `CELS_MAX_DEPTH` | 64 | Maximum nesting depth of composables |
+| `CELS_MAX_CLEANUPS` | 4096 | Maximum concurrent active lifecycle cleanup hooks |
+| `CELS_MAX_STATES` | 2048 | Maximum distinct reactive state pointers in registry |
+| `CELS_MAX_WATCHERS` | 16 | Maximum subscriber composables per reactive state pointer |
+| `CELS_MAX_QUEUE` | 2048 | Maximum pending invalidations in queue |
 | `CELS_MAX_ATTACHED_COMPOSITIONS` | 8 | Maximum top-level attached compositions |
 
 ---

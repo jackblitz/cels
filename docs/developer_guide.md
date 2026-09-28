@@ -1,6 +1,9 @@
-# Developer Guide: Integrating CELS with CMake
+# CELS Developer Guide: Integration & Build Workflows
 
-This guide explains how to add CELS to your C99 project using CMake and configure your applications using the official **`cels_add_application(...)`** helper function.
+Welcome to CELS! This guide is designed to help you quickly integrate CELS into your C99 project using CMake, configure your applications for both development and production, and master the lightning-fast hot-reloading workflows.
+
+> [!TIP]
+> **Looking for architecture details?** Before diving into integration, you might want to check out the [Architecture Guide](./architecture-guide.md) to understand the internal memory model, one-way data flow, and L1 cache slab mechanics.
 
 ---
 
@@ -123,7 +126,9 @@ cels_add_application(
 
 ## 4. Developer Hot-Reloading Workflows (Debug Mode)
 
-In Debug mode, the host engine (`my_host.exe`) runs continuously while watching the application library (`my_app.dll`). When the library changes on disk, CELS uses an automatic shadow-copy mechanism to swap the library with **zero Windows DLL file locking**, preserving existing state (`WindowState`, remembered counters) in **<50ms**.
+The true superpower of CELS is how it transforms your development loop. Instead of restarting your application and navigating back to the screen you were working on, you can keep the engine running while you iterate on your UI and application logic.
+
+In Debug mode, the host engine (`my_host.exe`) runs continuously while watching the application library (`my_app.dll`). When the library changes on disk, CELS uses an automatic shadow-copy mechanism to seamlessly hot-swap the library. This bypasses typical Windows DLL file-locking issues, allowing you to instantly preview changes in **<50ms** while fully preserving existing state (like `WindowState` or remembered counters).
 
 ### 5 Ways to Rebuild Your Application During Development
 

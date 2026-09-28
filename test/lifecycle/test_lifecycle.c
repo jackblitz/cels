@@ -213,3 +213,4 @@ static const TestSuite s_lifecycleSuite = {
 const TestSuite *GetLifecycleTestSuite(void) {
     return &s_lifecycleSuite;
 }
+

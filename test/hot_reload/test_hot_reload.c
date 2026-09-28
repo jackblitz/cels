@@ -336,3 +336,4 @@ GetHotReloadTestSuite(void)
 {
     return &s_hotReloadSuite;
 }
+
