@@ -1,9 +1,9 @@
 <p align="center">
   <h1 align="center">CELS</h1>
   <p align="center"><strong>C99 macros that mean what they say.</strong></p>
-  <p align="center">A declarative and explicit language to stop hallucinations from killing your vibe.</p>
+  <p align="center">Composition, Evaluation, Lifecycle, and State — A reactive composition engine for pure C99.</p>
   <p align="center">
-    <img src="https://img.shields.io/badge/version-v0.1.2-blue" alt="version">
+    <img src="https://img.shields.io/badge/version-v0.2.0-blue" alt="version">
     <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="license">
     <img src="https://img.shields.io/badge/C99-orange?logo=c" alt="C99">
   </p>
@@ -11,426 +11,198 @@
 
 Describe **what** should exist. CELS handles creation, destruction, state changes, and reconciliation automatically.
 
-CELS reads like a DSL, compiles as pure C99, and runs anywhere. Define reactive states, compose hierarchical component trees, declare when nodes despawn with `CEL_LifeCycle`, and let fine-grained recomposition process your updates. No classes, no vtables, no runtime heap allocations. Just four concepts and a single `#include`.
+CELS reads like a modern declarative DSL, compiles as pure C99, and runs anywhere. Define reactive states, compose hierarchical component trees, declare when root compositions despawn with `CEL_Evaluation` and `CEL_Evaluate`, and let fine-grained recomposition process your updates. No classes, no vtables, no runtime heap allocations. Just four concepts and a single `#include <cels/cels.h>`.
 
-- **C** omposition -- declare what components exist and how they're hierarchically structured
-- **E** valuation -- react to state changes with fine-grained recomposition and $O(1)$ subtree skipping
-- **L** ifecycle -- automate creation, unmounting, and cascading cleanup; release native handles in `cel_lifecycle_state` callbacks
-- **S** tate -- manage reactive data in cache-aligned memory slabs with snapshot diffing and persistent local memory (`cel_remember`)
+- **C — Composition**: Declare what components exist and how they are hierarchically structured.
+- **E — Evaluation**: React to state changes by re-running only the functions that depend on that state, skipping unchanged subtrees in $O(1)$ time. Root compositions govern their active presence via `CEL_Evaluation` and `CEL_Evaluate`.
+- **L — Lifecycle**: Automate creation, teardown, and cascading cleanup on components; observe when a component is first called (`mount`) and when it leaves the tree (`unmount`) via `CEL_Lifecycle`.
+- **S — State**: Manage reactive data in cache-aligned memory slabs owned by the `CEL_Session`, with snapshot diffing, keyed reactive observation (`cel_watch`), state mutation (`cel_mutate`), and persistent state memory (`cel_remember`, `cel_remember_state`).
 
 ```
  State (CEL_State)               defines DATA
- Compositions (CEL_Composition)  defines STRUCTURE    (what exists)
- Reactivity (cel_watch/mutate)   detects CHANGE       (when things happen)
- Lifecycles (CEL_LifeCycle)      controls LIFETIME    (when things live and die)
- Composables (CEL_Composable)    evaluates RENDERING  (how nodes update)
+ Compositions (CEL_Composition)  defines ROOT BOUNDARY (entry points & presence)
+ Reactivity (cel_watch/mutate)   detects CHANGE        (fine-grained dependency)
+ Lifecycles (CEL_Lifecycle)      controls LIFETIME     (mount / unmount hooks)
+ Composables (CEL_Composable)    evaluates RENDERING   (stateless C functions)
 ```
 
 Data flows in one direction:
 
 ```
-cel_mutate updates ──> cel_watch detects ──> Recomposition reacts (O(1) skip for unchanged)
+cel_mutate updates (backBuffer) ──> Frame publish ──> cel_watch detects (frontBuffer) ──> Recomposition (O(1) skip for unchanged)
 ```
 
 ---
 
-## What Makes CELS Different
+## The Core Mental Model: How CELS Executes Code
 
-Unlike traditional GUI and state frameworks that require manual dirty-flag bookkeeping, callback spaghetti, and event cascades, CELS introduces **declarative compositions**. You describe **what** should exist, and the engine reconciles the tree automatically.
+In traditional imperative C code, you manually create an object, update it when things change, and manually free it when done:
 
-Think React's or Jetpack Compose's component and slot-table model, engineered for native systems in **pure C99** with:
-- **Zero Runtime Heap Allocations**: All component structural groups, remembered variables, and reactive slots live inside an L1 cache-aligned dual gap-buffer slab.
-- **$O(1)$ Subtree Skipping**: If a parent state changes but a child's watched dependencies remain untouched, CELS skips entire subtrees in constant time.
-- **Dynamic Hot-Reloading in Development**: Run your host engine while editing application code live in CLion or your favorite IDE. Rebuilds swap in `<50ms` with **zero Windows DLL file locks** and full state retention.
-- **Single Monolithic Binary in Production**: Switch to Release mode to compile host and app into a single standalone `.exe` with **zero `.dll` dependencies**.
-
----
-
-## Architecture Overview
-
-CELS operates on a strictly one-way data flow model, leveraging a pre-allocated L1 cache-aligned memory slab to achieve zero runtime heap allocations. 
-
-```mermaid
-flowchart TD
-    subgraph App[Application Code]
-        Mutate[State Mutation\ncel_mutate]
-        Watch[State Dependency\ncel_watch]
-        Comp[Composables\nCEL_Composable]
-    end
-
-    subgraph CELS[CELS Engine]
-        Registry[State Registry\nDependency Tracking]
-        Queue[Invalidation Queue]
-        Recompose[Recomposition Engine]
-        
-        subgraph Memory[L1 Cache Slab]
-            Gap[Dual Gap Buffer\nSlot Groups]
-            Table[Slot Allocation Table]
-            Arena[Data Arena\nLocal Memory]
-        end
-    end
-
-    Mutate -->|Memcmp Diff| Registry
-    Registry -->|Queues Watchers| Queue
-    Queue -->|Flags Invalidated| Recompose
-    Recompose -->|Re-evaluates| Comp
-    Comp -->|Reads State| Watch
-    Watch -->|Registers Dependency| Registry
-    
-    Comp -->|cel_remember| Memory
-    Comp -->|cel_lifecycle_state| Memory
-    Recompose -->|Structural Updates| Memory
+```c
+/* Traditional imperative approach: manual management */
+Panel *panel = PanelCreate();
+PanelSetScroll(panel, 10);
+/* Later: */
+PanelDestroy(panel);
 ```
+
+CELS works differently. Instead of manually creating and destroying objects, you write C functions that describe **what should exist right now**.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        CEL_Session (Owner)                             │
+│  - Cache-Aligned Memory Slab (Holds all CEL_State data)                │
+│  - Slot Table (Tracks active groups, calls, and persistent slots)      │
+│  - Reactive Invalidation Graph (Maps CEL_Id -> Dependent Functions)    │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│             CEL_Composition (Root Boundary)                            │
+│  - Attached to CEL_Session with an explicit CEL_ID("...")              │
+│  - Evaluated via a boolean condition: CEL_Evaluate(Predicate, ctx)     │
+│  - Sets active session context for the duration of execution           │
+│  - Determines if the entire tree branch stays active or detaches       │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ Calls sub-tree functions
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                     CEL_Composable (Sub-Tree Components)               │
+│  - Plain C functions called inside a Composition                       │
+│  - Operates directly on the active session with zero session passing   │
+│  - Presence governed by regular C control flow (if / else)             │
+│  - Automatically cleaned up if skipped during recomposition            │
+│  - Uses cel_lifecycle to know when it mounts and unmounts              │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+### Compositions vs. Composables
+
+CELS divides your code into two structural tiers:
+
+1. **`CEL_Composition` (The Root Boundary)**:
+   - Attached to a session with a unique 64-bit identifier: `CEL_ID("NAME")`.
+   - Evaluated by a boolean condition using `CEL_Evaluate`: if the predicate returns true, the composition stays alive; if false, CELS detaches the composition and frees its resources.
+   - Sets the active session context for all child composables.
+2. **`CEL_Composable` (Child Components)**:
+   - Stateless C functions executed inside a composition.
+   - Operates on the active session context with zero pointer passing.
+   - Governed by standard C control flow (`if` / `else`).
+   - If a branch evaluates to false during recomposition, CELS detects that the composable was skipped and automatically fires `unmount` hooks.
 
 ---
 
 ## Code Example
 
-You declare intent. The framework does the work.
-
 ```c
-#include <cels.h>
+#include <cels/cels.h>
 #include <stdio.h>
 
-/* 1. Define reactive state */
+/* 1. Declare cache-aligned reactive state */
 CEL_State(WindowState) {
     int width;
     int height;
     bool isOpen;
+    bool showInspector;
 };
 
-/* 2. Lifecycle callbacks for native resources */
-static void OnWindowOpen(WindowState *w, CelsSession *s) {
-    (void)s;
-    printf("[Lifecycle] Window opened: %dx%d\n", w->width, w->height);
-}
-static void OnWindowClose(WindowState *w, CelsSession *s) {
-    (void)w; (void)s;
-    printf("[Lifecycle] Window closed\n");
-}
+/* 2. Reusable child component lifecycle hooks (Pattern 2: mount / unmount blocks) */
+typedef struct InspectorResource {
+    void *gpuBufferHandle;
+} InspectorResource;
 
-/* 3. Reusable composable components */
-CEL_Composable(StatusBadge, void) {
-    printf("    [Badge] Window is active & visible!\n");
-}
-
-CEL_Composable(WindowContent, WindowState*, win) {
-    // Persistent local memory across recompositions
-    int *renders = cel_remember(int, 0);
-    (*renders)++;
-
-    // Reactive subscription: automatically re-evaluates when mutated
-    WindowState state = cel_watch(win);
-    printf("  [Content] Window: %dx%d | Local Renders: %d\n", 
-           state.width, state.height, *renders);
-
-    if (state.isOpen) {
-        StatusBadge();
+CEL_Lifecycle(InspectorLifecycle, InspectorResource *res) {
+    mount {
+        res->gpuBufferHandle = (void*)0x55AA;
+        printf("  [InspectorLifecycle] MOUNT: Native GPU buffer acquired (%p)\n", res->gpuBufferHandle);
+    }
+    unmount {
+        printf("  [InspectorLifecycle] UNMOUNT: Native GPU buffer released (%p)\n", res->gpuBufferHandle);
+        res->gpuBufferHandle = NULL;
     }
 }
 
-/* 4. Composition root and lifecycle condition */
-CEL_Composition(MainWindow, key) {
-    (void)key;
-    WindowState init = { .width = 800, .height = 600, .isOpen = true };
-    WindowState *win = cel_lifecycle_state(init, OnWindowOpen, OnWindowClose);
+/* 3. Reusable child composables */
+CEL_Composable(StatusBadge) {
+    printf("    [Badge] Window is active & visible!\n");
+}
+
+CEL_Composable(InspectorPanel) {
+    InspectorResource *res = cel_remember(InspectorResource, 0);
+    cel_lifecycle(InspectorLifecycle, res);
+    printf("    [InspectorPanel] Native GPU Buffer: %p | Active\n", res->gpuBufferHandle);
+}
+
+CEL_Composable(WindowContent, WindowState *win) {
+    // Persistent local slot memory across recompositions
+    int *renders = cel_remember(int, 0);
+    (*renders)++;
+
+    // Reactive subscription: automatically re-evaluates when mutated (Type first to match cel_remember)
+    const WindowState *state = cel_watch(WindowState, CEL_ID("MainWindow"));
+    printf("  [Content] Window: %dx%d (open: %s, inspector: %s) | Local Renders: %d\n",
+           state ? state->width : win->width,
+           state ? state->height : win->height,
+           (state ? state->isOpen : win->isOpen) ? "true" : "false",
+           (state ? state->showInspector : win->showInspector) ? "visible" : "hidden",
+           *renders);
+
+    if (state == NULL || state->isOpen) {
+        StatusBadge();
+    }
+    if (state && state->showInspector) {
+        InspectorPanel(); // Mounts and unmounts dynamically via InspectorLifecycle
+    }
+}
+
+/* 4. Root composition and evaluation predicate */
+CEL_Evaluation(WindowEval, void*, ctx) {
+    (void)ctx;
+    const WindowState *win = cel_get_state(CEL_ID("MainWindow"), WindowState);
+    return (win == NULL || win->isOpen);
+}
+
+CEL_Composition(MainWindow, void *userData) {
+    (void)userData;
+    WindowState *win = cel_remember_state(CEL_ID("MainWindow"), WindowState, ((WindowState){
+        .width = 800,
+        .height = 600,
+        .isOpen = true,
+        .showInspector = false
+    }));
 
     WindowContent(win);
 }
 
-CEL_LifeCycle(WindowGuard, WindowState) {
-    if (it != NULL) {
-        WindowState state = cel_watch(it);
-        if (!state.isOpen) {
-            cel_destroy(); // Automatically prunes and cleans up the subtree
-        }
-    }
-}
-
-/* 5. Application entry point */
-static CelsCompositionRef App_OnStart(CelsEngine *engine, CelsSession *session) {
-    (void)engine; (void)session;
-    return CEL_COMPOSITION(MainWindow, WindowGuard);
-}
-
-CEL_App(WindowApp,
-    .onStart = App_OnStart
-);
-```
-
----
-
-## Understanding State, Attach, and Mutate
-
-CELS decouples state management, component tree evaluation, and reactivity into three clean operations.
-
-### 1. Declaring and Watching State (`cel_remember` & `cel_lifecycle_watch`)
-Inside a composition, allocate memory using `cel_remember`. This persists across frames. If you need native resource hooks (like destroying a Vulkan handle), use `cel_lifecycle_watch`.
-
-```c
-CEL_Composition(MainWindow, key) {
-    // Allocates memory directly inside the composition tree
-    WindowState *win = cel_remember(WindowState, .isOpen = true, .width = 800);
-    
-    // (Optional) Register native cleanup hooks
-    cel_lifecycle_watch(win, OnWindowOpen, OnWindowClose);
-}
-```
-
-### 2. Evaluating and Attaching (`CEL_Evaluate` & `CEL_Attach`)
-Evaluators tell the engine if a composition should continue running or destroy itself. Write an evaluator that fetches exactly the state it needs using `CEL_GetState`.
-
-```c
-CEL_Evaluate(WindowGuard) {
-    // Explicitly ask the session for the MainWindow's state
-    WindowState *win = CEL_GetState(s, CEL_KEY("MainWindow"), WindowState);
-    if (win && !win->isOpen) {
-        return false; // Tells the engine to prune the MainWindow tree!
-    }
-    return true;
-}
-```
-Attach them together at the engine/session root:
-```c
-CEL_Attach(&session, MainWindow, WindowGuard);
-```
-
-### 3. Mutating State (`cel_mutate`)
-Never mutate state directly inside a running composition (it violates reactive rules). Mutate it between frames or in event handlers. `cel_mutate` captures memory snapshots and queues invalidation cascades automatically.
-
-```c
-// Safely query the session for the state from anywhere
-WindowState *win = CEL_GetState(&session, CEL_KEY("MainWindow"), WindowState);
-
-// Trigger a reactive mutation
-cel_mutate(&session, win) {
-    this->width = 1920;
-    this->height = 1080;
-}
-```
-
-
-## Three-Tier API
-
-The API follows a strict three-tier prefix convention:
-
-| Tier | Prefix | Role | Examples |
-|---|---|---|---|
-| **Structure** | `CEL_` | Declarative definitions, types, and attachments | `CEL_State`, `CEL_Composition`, `CEL_Composable`, `CEL_LifeCycle`, `CEL_Attach`, `CEL_App` |
-| **Plumbing** | `cels_` / `Cels` | Engine lifecycle, session management, and CMake helpers | `CelsSessionInit`, `CelsSessionRecompose`, `CelsEngineStart`, `cels_add_application` |
-| **Runtime** | `cel_` | In-composable reactive operations & memory | `cel_watch`, `cel_mutate`, `cel_remember`, `cel_lifecycle_state`, `cel_destroy`, `cel_init` |
-
----
-
-## Quick Start with CMake
-
-Integrate CELS into your CMake project via `FetchContent`:
-
-```cmake
-cmake_minimum_required(VERSION 3.20...4.3)
-project(my_app C)
-
-include(FetchContent)
-FetchContent_Declare(
-    cels
-    GIT_REPOSITORY https://github.com/jackblitz/cels.git
-    GIT_TAG v0.2.0
-)
-FetchContent_MakeAvailable(cels)
-
-# Declare host executable and application module in one call
-cels_add_application(
-    HOST my_host
-    APP my_app
-    HOST_SOURCES src/host.c
-    APP_SOURCES src/app.c src/ui.c
-    # MODE AUTO: Debug -> Hot-Reload (.exe + .dll), Release -> Single Binary (.exe)
-)
-```
-
-Build and run:
-
-```bash
-cmake -B build && cmake --build build && ./build/my_host
-```
-
-`cels_add_application` automatically creates:
-- **`my_host`**: Your host engine executable.
-- **`my_app`**: Your reloadable application logic target.
-- **`my_app_rebuild`**: An IDE runner target allowing you to click the green **Play** button (<kbd>Shift</kbd>+<kbd>F10</kbd>) in CLion / IDEs to rebuild and hot-reload in `<50ms`.
-- **`rebuild_my_app.bat` / `.sh`**: Ready-to-run terminal rebuild scripts in the build directory.
-
----
-
-## Host Engine Architecture & Integration
-
-CELS supports two deployment workflows using the **exact same C99 engine loop**:
-1. **Dynamic Hot-Reloading in Development (`Debug`)**: Rebuilds swap in `<50ms` with zero Windows DLL file locks and full state retention in L1 cache slabs.
-2. **Single-Binary Monolithic in Production (`Release`)**: Host and app compile into a single standalone `.exe` with zero `.dll` dependencies and maximum compiler inlining.
-
-### Unified Engine Main Loop
-
-Developers control their own hardware subsystems, input polling, and frame loop without any OS headers (`windows.h`), path utilities, or external rebuild scripts:
-
-```c
-#include <cels.h>
-
-int main(int argc, char **argv)
-{
-    (void)argc; (void)argv;
-
-    // 1. Initialize host engine
-    CelsEngine engine;
-    CelsEngineInit(&engine, NULL, NULL);
-
-    // 2. Register persistent engine subsystems (survives dynamic reloads)
-    static PlatformSubsystem platform = { .renderer = "Vulkan", .targetFps = 60 };
-    CEL_RegisterModule(&engine, PlatformSubsystem, &platform);
-
-    // 3. Mount application (auto-discovers DLL in Debug, static bind in Release)
-    if (CelsEngineLoadApp(&engine, "my_app") != CELS_OK) {
-        CelsEngineDestroy(&engine);
-        return 1;
-    }
-
-    // 4. Main Game / Engine Loop
-    while (!engine.shouldQuit) {
-        // Automatically detects on-disk rebuilds in Debug; inlines to false in Release
-        if (CelsAppRuntimeCheck(&engine)) {
-            printf("[Engine] Application code hot-swapped!\n");
-        }
-
-        Engine_PollEvents();
-        Engine_Update();
-
-        // Recompose declarative UI & reactive state
-        CelsSessionRecompose(&engine.session);
-
-        Engine_Render();
-    }
-
-    // 5. Clean teardown
-    CelsEngineDestroy(&engine);
-    return 0;
-}
-```
-
-| Deployment Mode | Build Type | CMake Mode | Runtime Behavior |
-|---|---|---|---|
-| **Hot-Reload** | `Debug` | `MODE HOT_RELOAD` (default) | `CelsEngineLoadApp` creates shadow copy `.hot_*.tmp.dll`. `CelsAppRuntimeCheck` polls timestamps and hot-swaps code live in `<50ms`. |
-| **Monolithic** | `Release` | `MODE SINGLE_BINARY` | Compiles into a single `.exe`. `CelsEngineLoadApp` binds statically. `CelsAppRuntimeCheck` is a zero-cost inline returning `false`. |
-
----
-
-## Non-Hot-Reloading Setup (Single-Binary & Static Linking)
-
-If your project does not need dynamic DLL hot-reloading (e.g., embedded systems, production distribution, or traditional static binaries), you can disable hot-reloading entirely and compile everything into a single `.exe`.
-
-### Approach 1: Single-Binary via `cels_add_application` (Recommended)
-
-Pass the `SINGLE_BINARY` (or `MONOLITHIC`) flag directly in your `CMakeLists.txt`:
-
-```cmake
-cmake_minimum_required(VERSION 3.20...4.3)
-project(my_app C)
-
-include(FetchContent)
-FetchContent_Declare(
-    cels
-    GIT_REPOSITORY https://github.com/jackblitz/cels.git
-    GIT_TAG v0.1.2
-)
-FetchContent_MakeAvailable(cels)
-
-# Forces a single monolithic executable in ALL build configurations (Debug & Release)
-cels_add_application(
-    HOST my_app
-    APP my_app_logic
-    HOST_SOURCES src/host.c
-    APP_SOURCES src/app.c
-    SINGLE_BINARY
-)
-```
-
-Alternatively, leave `MODE AUTO` and pass `-DCELS_HOT_RELOAD=OFF` or `-DCMAKE_BUILD_TYPE=Release` at configuration time:
-
-```bash
-cmake -B build -DCELS_HOT_RELOAD=OFF
-cmake --build build
-```
-
-This compiles `HOST_SOURCES` and `APP_SOURCES` directly into a single `my_app.exe` with **zero `.dll` files** and **zero OS dynamic library dependencies**.
-
----
-
-### Approach 2: Traditional Static Linking (`target_link_libraries`)
-
-If you prefer traditional CMake without host/app target splitting, link directly to the `cels::cels` static library target:
-
-```cmake
-cmake_minimum_required(VERSION 3.20...4.3)
-project(my_standalone_app C)
-
-set(CMAKE_C_STANDARD 99)
-
-# Include CELS library via GitHub FetchContent
-include(FetchContent)
-FetchContent_Declare(
-    cels
-    GIT_REPOSITORY https://github.com/jackblitz/cels.git
-    GIT_TAG v0.1.2
-)
-FetchContent_MakeAvailable(cels)
-
-# Standard single executable
-add_executable(my_standalone_app src/main.c)
-target_link_libraries(my_standalone_app PRIVATE cels::cels)
-```
-
-#### Direct Embedded `CelsSession` (Zero Engine Overhead)
-
-If you only want CELS's reactive composition tree, slot table, and memory slabs embedded directly inside your own custom engine or subsystem:
-
-```c
-#include <cels.h>
-#include <stdio.h>
-
-CEL_State(MyState) { int score; };
-
-CEL_Composable(HUD, MyState*, s) {
-    MyState state = cel_watch(s);
-    printf("Player score: %d\n", state.score);
-}
-
-CEL_Composition(GameRoot, key) {
-    (void)key;
-    MyState init = { .score = 100 };
-    MyState *s = cel_lifecycle_state(init, NULL, NULL);
-    HUD(s);
-}
-
+/* 5. Main Loop & Execution */
 int main(void) {
-    // 1. Initialize reactive session (allocates L1 cache-aligned slab arena)
-    CelsSession session;
+    CEL_Session session;
     CelsSessionInit(&session, NULL);
 
-    // 2. Attach composition root
-    CelsCompositionRef root = CEL_COMPOSITION(GameRoot);
-    CelsSessionAttachComposition(&session, root.key, root.body, root.lifecycleEval);
+    // Attach root composition with evaluation predicate (no lifecycle needed on root)
+    cel_attach(&session, CEL_ID("MainWindow"), MainWindow, NULL, WindowEval);
 
-    // 3. Initial recomposition
+    // Initial mount pass
     CelsSessionRecompose(&session);
 
-    // 4. In-frame state mutation and recomposition
-    MyState *state = CEL_GetState(&session, root.key, MyState);
-    if (state != NULL) {
-        cel_mutate(&session, state) {
-            this->score += 50;
-        }
-        CelsSessionRecompose(&session);
+    // Mutate state between frames: toggle child component with lifecycle
+    cel_mutate(&session, CEL_ID("MainWindow"), WindowState) {
+        this->showInspector = true;
     }
+    CelsSessionRecompose(&session); // Mounts InspectorPanel and acquires GPU buffer
 
-    // 5. Clean teardown
+    // Mutate state again: toggle off
+    cel_mutate(&session, CEL_ID("MainWindow"), WindowState) {
+        this->showInspector = false;
+    }
+    CelsSessionRecompose(&session); // Unmounts InspectorPanel and frees GPU buffer
+
+    // Close window to trigger evaluation teardown
+    cel_mutate(&session, CEL_ID("MainWindow"), WindowState) {
+        this->isOpen = false;
+    }
+    CelsSessionRecompose(&session); // Detaches MainWindow subtree via WindowEval
+
     CelsSessionDestroy(&session);
     return 0;
 }
@@ -438,3 +210,286 @@ int main(void) {
 
 ---
 
+## Four Core Concepts
+
+### 1. State: Creation, Storage, Observation, and Mutation
+
+All state in CELS is owned and tracked by the `CEL_Session`.
+
+- **64-bit Identifiers (`CEL_ID`)**: Hashes strings at compile time using 64-bit FNV-1a:
+  ```c
+  CEL_Id id = CEL_ID("PlayerState");
+  ```
+- **Addressable State (`cel_remember_state`)**: Allocates or retrieves named reactive state in the session slab:
+  ```c
+  cel_remember_state(CEL_ID("Theme"), ThemeState, ((ThemeState){ .isDark = true }));
+  ```
+- **Positional Local Memory (`cel_remember`)**: Stable, pinned slot-table memory preserved across frames:
+  ```c
+  int *renderCount = cel_remember(int, 0);
+  (*renderCount)++;
+  ```
+- **Reactive Observation (`cel_watch`)**: Registers the calling composable group as a subscriber (Type first):
+  ```c
+  const ThemeState *theme = cel_watch(ThemeState, CEL_ID("Theme"));
+  ```
+- **Thread-Safe Mutation (`cel_mutate`)**: Double-buffered block or value mutation. Banned inside composables during evaluation:
+  ```c
+  cel_mutate(session, CEL_ID("Theme"), ThemeState) {
+      this->isDark = false;
+  }
+  ```
+
+#### Double-Buffered Thread Safety & Lock-Free Reads
+
+CELS guarantees zero torn reads using double-buffered state snapshots:
+- **`frontBuffer`**: Read-only snapshot accessible lock-free from any reader thread via `cel_watch` or `cel_get_state`.
+- **`backBuffer`**: Isolated write target returned by `cel_mutate`. Writers never mutate memory concurrently read by compositions.
+- **Publish at Frame Boundary**: Back buffers are atomically published to front buffers at the start of `CelsSessionRecompose`.
+
+### 2. Evaluation: Fine-Grained Recomposition & $O(1)$ Subtree Skipping
+
+When state is mutated, CELS does not re-run the entire tree. It consults its dependency graph and re-evaluates only the composables watching that state. Unchanged subtrees are skipped in $O(1)$ time by advancing the logical cursor past the skipped group.
+
+Root compositions govern their active presence via `CEL_Evaluate`:
+```c
+CEL_Evaluation(AuthGuard, void*, ctx) {
+    const UserSession *user = cel_get_state(CEL_ID("User"), UserSession);
+    return user && user->isLoggedIn;
+}
+
+cel_attach(session, CEL_ID("Dashboard"), DashboardView, NULL, AuthGuard);
+```
+
+Compositions can also be attached permanently without a predicate:
+```c
+cel_attach(session, CEL_ID("MainView"), MainView);
+```
+
+### 3. Lifecycle: Pure Mount and Unmount Hooks
+
+Native resource allocation (Vulkan pipelines, file descriptors, audio voices) uses `CEL_Lifecycle`:
+```c
+CEL_Lifecycle(TextureLifecycle, Texture *tex) {
+    mount {
+        tex->handle = GpuCreateTexture(tex->path);
+    }
+    unmount {
+        GpuDestroyTexture(tex->handle);
+        tex->handle = 0;
+    }
+}
+```
+Inside a composable:
+```c
+Texture *tex = cel_remember(Texture, .path = "hero.png");
+cel_lifecycle(TextureLifecycle, tex);
+```
+Parameterless lifecycles are also supported:
+```c
+CEL_Lifecycle(AudioStreamLifecycle) {
+    mount { AudioPlayBgm(); }
+    unmount { AudioStopBgm(); }
+}
+// Inside composable:
+cel_lifecycle(AudioStreamLifecycle);
+```
+
+### 4. Multi-Session Architecture
+
+Sessions in CELS are completely isolated instances. You can run multiple concurrent sessions for different subsystems:
+```c
+CEL_Session *uiSession   = CelSessionCreate(CEL_ID("UI"), NULL);
+CEL_Session *gameSession = CelSessionCreate(CEL_ID("Game"), NULL);
+
+// Lookup anywhere:
+CEL_Session *s = cel_session(CEL_ID("UI"));
+CEL_Session *curr = cel_active_session();
+
+CelSessionDestroy(uiSession);
+CelSessionDestroy(gameSession);
+```
+
+---
+
+## Memory Slab Partitioning
+
+All session memory lives in a contiguous 64-byte L1 cache-aligned slab. Zero runtime calls to `malloc()` or `free()`.
+
+```
+┌────────────────┬─────────────────────┬─────────────────────────────────┬──────────────────────┐
+│  Groups Gap    │  Slot Allocation    │  Composable Slots               │  Session CEL_State   │
+│  Buffer        │  Table              │  (grows UP from dataGapStart)   │  (grows DOWN from    │
+│  (CelsSlotGroup│  (CelsSlotAllocation│                                 │   dataGapEnd)        │
+└────────────────┴─────────────────────┴─────────────────────────────────┴──────────────────────┘
+```
+
+Configurable slab profiles:
+- `CELS_SLAB_16K` (16 KB)
+- `CELS_SLAB_32K` (32 KB)
+- `CELS_SLAB_48K` (48 KB)
+- `CELS_SLAB_64K` (64 KB) -- Default
+- `CELS_SLAB_128K` .. `CELS_SLAB_1M`
+
+```c
+CEL_SLAB(mySlab, CELS_SLAB_32K);
+CelsSessionConfig config = { .slab = mySlab, .slabSize = sizeof(mySlab) };
+CelsSessionInit(&session, &config);
+```
+
+---
+
+## Host & Application Architecture: Effortless Hot Reloading
+
+Writing a host engine with dynamic hot reloading is effortless. The CELS library handles module path discovery, Windows shadow-copying (to avoid OS DLL file locks), symbol loading, state retention, and hot-swap recomposition automatically. **No external scripts or batch files required.**
+
+### 1. Simple CMake Setup (`CMakeLists.txt`)
+
+Declare your host executable and application target in a single call:
+
+```cmake
+cmake_minimum_required(VERSION 3.20...4.3)
+project(my_project C)
+
+include(FetchContent)
+FetchContent_Declare(cels GIT_REPOSITORY https://github.com/jackblitz/cels.git GIT_TAG v0.2.0)
+FetchContent_MakeAvailable(cels)
+
+# In Debug: builds my_host (.exe) and my_app (.dll) with hot-reloading
+# In Release: compiles everything into a single standalone monolithic .exe
+cels_add_application(
+    HOST my_host
+    APP my_app
+    HOST_SOURCES src/host.c
+    APP_SOURCES  src/app.c src/ui.c
+)
+```
+
+### 2. Simple Host Engine (`src/host.c`)
+
+The host executable initializes the engine, loads the application, and runs the tick loop:
+
+```c
+#include <cels/cels.h>
+#include <cels/engine.h>
+#include <stdio.h>
+
+int main(int argc, char **argv) {
+    (void)argc; (void)argv;
+
+    // 1. Initialize host engine and auto-load application
+    CelsEngine engine;
+    if (CelsEngineInit(&engine, NULL) != CELS_OK) {
+        fprintf(stderr, "[Host] Failed to initialize engine\n");
+        return 1;
+    }
+
+    // 2. Main host loop
+    while (!engine.shouldQuit) {
+        // Automatically checks if app was rebuilt on disk and hot-swaps live in <50ms
+        CelsAppRuntimeCheck(&engine);
+
+        // Recompose all active sessions
+        CelsEngineRecompose(&engine);
+
+        // Frame pacing
+        SleepMs(16);
+    }
+
+    // 3. Clean teardown
+    CelsEngineEnd(&engine);
+    CelsEngineDestroy(&engine);
+    return 0;
+}
+```
+
+### 3. Simple Application Module (`src/app.c`)
+
+Your application logic returns its root composition on start:
+
+```c
+#include <cels/cels.h>
+
+CEL_Composable(Header) { ... }
+CEL_Composition(MainWindow, void *userData) {
+    Header();
+}
+
+static CelsCompositionRef App_OnStart(CelsEngine *engine, CelsSession *session) {
+    (void)engine; (void)session;
+    return CEL_COMPOSITION(MainWindow);
+}
+
+CEL_App(MyApp,
+    .onStart = App_OnStart
+);
+```
+
+### 4. Organizing Composables: Headers (.h) vs. Source Files (.c)
+
+CELS gives you complete freedom to structure components cleanly across files:
+
+- **Header-Only Composables (`.h`)**:
+  Use `CEL_Composable(Name)` directly in `.h` files. Because it expands to `static inline`, it can be included across multiple files with zero linker collisions:
+  ```c
+  // status_badge.h
+  #pragma once
+  #include <cels/cels.h>
+  
+  CEL_Composable(StatusBadge) {
+      printf("[Badge] Rendered\n");
+  }
+  ```
+
+- **Separated Composables (`.h` + `.c`)**:
+  For larger components or when hiding implementation details:
+  ```c
+  // window_content.h
+  #pragma once
+  #include <cels/cels.h>
+  #include "window.h"
+
+  CEL_ComposableDecl(WindowContent, WindowState *win);
+  ```
+  ```c
+  // window_content.c
+  #include "window_content.h"
+
+  CEL_ComposableDef(WindowContent, WindowState*, win) {
+      // Component logic here
+  }
+  ```
+
+When you edit `src/app.c` or any composable `.c` file, simply build target `my_app` (`cmake --build build --target my_app`). CELS detects the new library and hot-swaps it live while preserving all slot memory and state!
+
+---
+
+## Three-Tier API Reference
+
+| Tier | Prefix | Role | Examples |
+|---|---|---|---|
+| **Structure** | `CEL_` | Declarative definitions, types, and attachments | `CEL_State`, `CEL_Composition`, `CEL_Composable`, `CEL_ComposableDecl`, `CEL_ComposableDef`, `CEL_Lifecycle`, `CEL_Evaluation`, `CEL_Evaluate`, `CEL_ID`, `CEL_Module` |
+| **Plumbing** | `cels_` / `Cels` | Engine lifecycle, session management, and recomposition | `CelSessionCreate`, `CelSessionDestroy`, `CelsSessionInit`, `CelsSessionRecompose`, `CelsEngineInit` |
+| **Runtime** | `cel_` | In-composable reactive operations & memory | `cel_watch`, `cel_mutate`, `cel_remember`, `cel_remember_state`, `cel_lifecycle`, `cel_attach`, `cel_session`, `cel_active_session` |
+
+---
+
+## Building and Testing
+
+```bash
+# Configure and build
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+
+# Run the 8-feature test suite (39 tests)
+./build/debug/windows/test_cli.exe
+
+# Run the performance benchmark
+./build/debug/windows/benchmark.exe --quick
+```
+
+---
+
+## License
+
+Apache License 2.0. Copyright (c) 2026 Jack Blitz.

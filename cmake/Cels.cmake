@@ -168,44 +168,10 @@ function(cels_add_application)
             )
         endif()
 
-        # Target 3: Rebuild Runner Executable (${PARSED_APP}_rebuild)
-        # Enables CLion and IDE users to select this target and click the green 'Play' button
-        set(RUNNER_SRC "${CMAKE_CURRENT_BINARY_DIR}/${PARSED_APP}_rebuild_runner.c")
-        file(WRITE "${RUNNER_SRC}"
-"#include <stdio.h>\n"
-"#include <stdlib.h>\n"
-"int main(void) {\n"
-"    printf(\"\\n======================================================================\\n\");\n"
-"    printf(\"  [CELS] Rebuilding application library '${PARSED_APP}'...\\n\");\n"
-"    printf(\"======================================================================\\n\");\n"
-"#if defined(_WIN32)\n"
-"    int res = system(\"\\\"\\\"${CMAKE_COMMAND}\\\" --build \\\"${CMAKE_BINARY_DIR}\\\" --target ${PARSED_APP}\\\"\");\n"
-"#else\n"
-"    int res = system(\"\\\"${CMAKE_COMMAND}\\\" --build \\\"${CMAKE_BINARY_DIR}\\\" --target ${PARSED_APP}\");\n"
-"#endif\n"
-"    if (res == 0) {\n"
-"        printf(\"\\n[CELS] Rebuild successful! If '${PARSED_HOST}' is running, it will reload in <50ms.\\n\\n\");\n"
-"    } else {\n"
-"        printf(\"\\n[CELS] Rebuild failed with exit code %d.\\n\\n\", res);\n"
-"    }\n"
-"    return res;\n"
-"}\n"
-        )
-        add_executable(${PARSED_APP}_rebuild "${RUNNER_SRC}")
-        set_target_properties(${PARSED_APP}_rebuild PROPERTIES EXCLUDE_FROM_ALL TRUE)
-        if(RESOLVED_OUTPUT_DIR)
-            set_target_properties(${PARSED_APP}_rebuild PROPERTIES
-                RUNTIME_OUTPUT_DIRECTORY "${RESOLVED_OUTPUT_DIR}"
-            )
+        # Optional rebuild target: Rebuilds the application library without creating an executable
+        if(NOT TARGET ${PARSED_APP}_rebuild)
+            add_custom_target(${PARSED_APP}_rebuild DEPENDS ${PARSED_APP})
         endif()
-
-        # Generate convenience scripts in build directory for terminal users
-        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rebuild_${PARSED_APP}.bat"
-"@echo off\r\n\"${CMAKE_COMMAND}\" --build \"${CMAKE_BINARY_DIR}\" --target ${PARSED_APP}\r\n"
-        )
-        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/rebuild_${PARSED_APP}.sh"
-"#!/bin/sh\n\"${CMAKE_COMMAND}\" --build \"${CMAKE_BINARY_DIR}\" --target ${PARSED_APP}\n"
-        )
 
     else()
         message(STATUS "cels_add_application: Configuring '${PARSED_HOST}' in SINGLE-BINARY mode (monolithic standalone .exe)")

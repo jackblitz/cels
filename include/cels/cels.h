@@ -2,33 +2,17 @@
 
 /**
  * @file cels.h
- * @brief Public API and Declarative DSL Macros for the CELS Composition Engine.
+ * @brief Public API and Declarative DSL Macros for CELS.
  *
- * CELS (Composition, Evaluation, Lifecycle, State) is a high-performance, cache-aligned
- * declarative composition engine for C99, implementing a hierarchical
- * slot table and lifecycle observer model.
+ * CELS (Composition, Evaluation, Lifecycle, State) is a high-performance,
+ * cache-aligned declarative composition engine for C99.
  *
- * Typical usage:
- * @code
- *     CEL_State(WindowState) {
- *         bool isOpen;
- *         int width;
- *         int height;
- *     };
- *
- *     CEL_Composable(MyComponent, WindowState*, win) {
- *         int *renderCount = cel_remember(int, 0);
- *         (*renderCount)++;
- *         WindowState state = cel_watch(win);
- *         // render widget...
- *     }
- *
- *     CEL_Composition(RootWindow, key) {
- *         WindowState init = { .isOpen = true, .width = 800, .height = 600 };
- *         WindowState *win = cel_lifecycle_state(init, OnCreated, OnDestroyed);
- *         MyComponent(win);
- *     }
- * @endcode
+ * Four Core Concepts:
+ * - C: Composition (CEL_Composition, CEL_Composable, cel_attach)
+ * - E: Evaluation  (Fine-grained recomposition, CEL_Evaluate)
+ * - L: Lifecycle   (Pure mount & unmount topology tracking: CEL_Lifecycle, cel_lifecycle)
+ * - S: State       (Double-buffered cache-aligned state: cel_remember, cel_remember_state,
+ *                   cel_watch, cel_get_state, cel_mutate)
  */
 
 #include <assert.h>
@@ -37,9 +21,9 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "cels/session.h"
 #include "cels/slot_table.h"
 #include "cels/state.h"
+#include "cels/session.h"
 #include "cels/log.h"
 #include "cels/engine.h"
 #include "cels/app.h"
@@ -51,46 +35,22 @@ extern "C" {
 #endif
 
 /* ========================================================================= */
-/* Key Utilities (64-bit FNV-1a Hash)                                        */
+/* Macro Helpers for Arity Dispatch                                          */
 /* ========================================================================= */
 
-
-
-#define CEL_KEY(str) CelsHashKey(str)
-#define CEL_KeyIndex(baseKey, index) CelsKeyIndex((uint64_t)(baseKey), (uint64_t)(index))
-#define CEL_AUTO_KEY() (CelsHashKey(__FILE__) ^ ((uint64_t)__LINE__ * 0x517cc1b727220a95ULL))
-
-/* ========================================================================= */
-/* Macro Helpers for Overloading & Arity Dispatch                            */
-/* ========================================================================= */
-
-#define _CEL_ARG_2(_0, _1, _2, ...) _2
 #define _CEL_GET_MACRO_2(_1, _2, NAME, ...) NAME
 #define _CEL_GET_MACRO_3(_1, _2, _3, NAME, ...) NAME
 #define _CEL_GET_MACRO_4(_1, _2, _3, _4, NAME, ...) NAME
-#define _CEL_GET_MACRO_COMP(_1, _2, _3, _4, NAME, ...) NAME
-#define _CEL_FIRST(a, ...) a
-
-#define _CEL_IS_s_s ~, 1
-#define _CEL_IS_s_session ~, 1
-#define _CEL_CAT(a, b) a##b
-#define _CEL_CHECK_S(token) _CEL_CAT(_CEL_IS_s_, token)
-#define _CEL_SECOND(a, b, ...) b
-#define _CEL_TEST(x) _CEL_SECOND(x, 0)
-#define _CEL_IS_SESSION_ARG(token) _CEL_TEST(_CEL_CHECK_S(token))
+#define _CEL_GET_MACRO_6(_1, _2, _3, _4, _5, _6, NAME, ...) NAME
 
 /* ========================================================================= */
-/* State Definitions                                                         */
+/* Reactive State Declaration (CEL_State)                                    */
 /* ========================================================================= */
 
 #ifndef CEL_State
 #define CEL_State(TypeName) \
     typedef struct TypeName TypeName; \
     struct TypeName
-
-#define CEL_LifecycleState(TypeName) CEL_State(TypeName)
-#define CEL_Observer(TypeName)       CEL_State(TypeName)
-#define CEL_Module(TypeName)         CEL_State(TypeName)
 #endif
 
 #ifndef CEL_Module
@@ -100,94 +60,47 @@ extern "C" {
 #endif
 
 /* ========================================================================= */
-/* Top-Level Lifecycle Definitions                                           */
+/* Root Composition Declaration (CEL_Composition)                            */
 /* ========================================================================= */
 
-#define CEL_Evaluate(Name) static bool Name(CelsSession *s)
+#define _CEL_COMPOSITION_1(CompName) \
+    void CompName(void *userData)
 
-/* ========================================================================= */
-/* Composition Lifecycle Attachment (CEL_Attach)                             */
-/* ========================================================================= */
-
-#define _CEL_ATTACH_2(Comp, Lifecycle) \
-    CelsSessionAttachComposition(CelsGetCurrentSession(), CelsHashKey(#Comp), _cels_body_##Comp, (bool(*)(CelsSession*))(Lifecycle))
-
-#define _CEL_ATTACH_3(sess, Comp, Lifecycle) \
-    CelsSessionAttachComposition((CelsSession*)(sess), CelsHashKey(#Comp), _cels_body_##Comp, (bool(*)(CelsSession*))(Lifecycle))
-
-#define CEL_Attach(...) \
-    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_ATTACH_3, _CEL_ATTACH_2)(__VA_ARGS__)
-
-/* ========================================================================= */
-/* Declarative Composition Root & Scopes                                     */
-/* ========================================================================= */
-
-#define _CEL_COMPOSITION_1(rootKey) \
-    do { \
-        if (CelsEnterComposition(CelsGetCurrentSession(), (rootKey)))
-
-#define _CEL_COMPOSITION_LEGACY_BLOCK(session, rootKey) \
-    do { \
-        if (CelsEnterComposition((session), (rootKey)))
-
-#define _CEL_COMPOSITION_DEF(CompName, keyName) \
-    static void _cels_body_##CompName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t keyName); \
-    static inline void _cels_app_body_##CompName(CelsSession *s, uint64_t keyName) { \
-        CelsSetCurrentSession(s); \
-        _cels_body_##CompName(s, keyName); \
-    } \
-    static inline void CompName(uint64_t keyName) { \
-        CelsSession *s = CelsGetCurrentSession(); \
-        assert(s != NULL && #CompName " called outside of an active CelsSession"); \
-        if (CelsEnterComposition(s, keyName)) { \
-            _cels_body_##CompName(s, keyName); \
-        } \
-        CelsExitGroup(s); \
-    } \
-    static inline void CompName##_s(CelsSession *s, uint64_t keyName) { \
-        assert(s != NULL && #CompName "_s called with NULL session"); \
-        if (CelsEnterComposition(s, keyName)) { \
-            _cels_body_##CompName(s, keyName); \
-        } \
-        CelsExitGroup(s); \
-    } \
-    static void _cels_body_##CompName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t keyName)
-
-#define _CEL_DISPATCH_COMPOSITION_2(is_sess, a, b) _CEL_DISPATCH_COMPOSITION_IMPL_##is_sess(a, b)
-#define _CEL_DISPATCH_COMPOSITION(is_sess, a, b) _CEL_DISPATCH_COMPOSITION_2(is_sess, a, b)
-#define _CEL_DISPATCH_COMPOSITION_IMPL_1(a, b) _CEL_COMPOSITION_LEGACY_BLOCK(a, b)
-#define _CEL_DISPATCH_COMPOSITION_IMPL_0(a, b) _CEL_COMPOSITION_DEF(a, b)
-
-#define _CEL_COMPOSITION_2(a, b) _CEL_DISPATCH_COMPOSITION(_CEL_IS_SESSION_ARG(a), a, b)
-
-static inline bool _cels_lifecycle_CEL_None(CelsSession *s) {
-    (void)s;
-    return true;
-}
-#define CEL_None _cels_lifecycle_CEL_None
-
-#define _CEL_COMPOSITION_4(Type, key, var, Lifecycle) \
-    for (Type *it = (var), *_cels_outer = (Type*)0; \
-         !_cels_outer; \
-         _cels_outer = (Type*)1) \
-        for (uint64_t _cels_k = (key); _cels_k != 0; _cels_k = 0) \
-            for (int _cels_ent = CelsEnterComposition(CelsGetCurrentSession(), _cels_k), \
-                     _cels_alive = (_cels_ent ? (Lifecycle)(CelsGetCurrentSession()) : 0), \
-                     _cels_run = _cels_alive, \
-                     _cels_done = 0; \
-                 !_cels_done; \
-                 _cels_done = 1, (CelsExitGroup(CelsGetCurrentSession()), \
-                                  (!_cels_alive ? CelsPruneSubtreeByKey(CelsGetCurrentSession(), _cels_k) : (void)0))) \
-                for ( ; _cels_run; _cels_run = 0)
-
-#define _CEL_COMPOSITION_3(Type, var, Lifecycle) \
-    _CEL_COMPOSITION_4(Type, CelsKeyIndex(CelsHashKey(#Type), (uint64_t)(uintptr_t)(var)), var, Lifecycle)
+#define _CEL_COMPOSITION_2(CompName, Arg) \
+    void CompName(Arg)
 
 #define CEL_Composition(...) \
-    _CEL_GET_MACRO_COMP(__VA_ARGS__, _CEL_COMPOSITION_4, _CEL_COMPOSITION_3, _CEL_COMPOSITION_2, _CEL_COMPOSITION_1)(__VA_ARGS__)
+    _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_COMPOSITION_2, _CEL_COMPOSITION_1)(__VA_ARGS__)
 
 /* ========================================================================= */
-/* Composable Nodes & Invocations                                            */
+/* Composition Evaluation Predicate (CEL_Evaluate)                           */
+/* ========================================================================= */
+
+#define CEL_Evaluate(Predicate, ctx) ((Predicate) ? (Predicate)((ctx)) : true)
+#define CEL_EvaluateFn(Name, ctxType, ctxName) static bool Name(ctxType ctxName)
+#define CEL_Evaluation(Name, ctxType, ctxName) static bool Name(ctxType ctxName)
+
+/* ========================================================================= */
+/* Root Composition Attachment (cel_attach)                                  */
+/* ========================================================================= */
+
+#define _CEL_ATTACH_3(s, id, comp) \
+    CelsSessionAttachComposition((s), (id), (void(*)(void*))(comp), NULL, NULL, NULL)
+
+#define _CEL_ATTACH_4(s, id, comp, userData) \
+    CelsSessionAttachComposition((s), (id), (void(*)(void*))(comp), (void*)(userData), NULL, NULL)
+
+#define _CEL_ATTACH_5(s, id, comp, userData, eval) \
+    CelsSessionAttachComposition((s), (id), (void(*)(void*))(comp), (void*)(userData), (bool(*)(void*))(eval), NULL)
+
+#define _CEL_ATTACH_6(s, id, comp, userData, eval, evalCtx) \
+    CelsSessionAttachComposition((s), (id), (void(*)(void*))(comp), (void*)(userData), (bool(*)(void*))(eval), (void*)(evalCtx))
+
+#define cel_attach(...) \
+    _CEL_GET_MACRO_6(__VA_ARGS__, _CEL_ATTACH_6, _CEL_ATTACH_5, _CEL_ATTACH_4, _CEL_ATTACH_3, _UNUSED, _UNUSED)(__VA_ARGS__)
+
+/* ========================================================================= */
+/* Child Composables (CEL_Composable)                                        */
 /* ========================================================================= */
 
 #ifndef CELS_UNUSED
@@ -198,215 +111,314 @@ static inline bool _cels_lifecycle_CEL_None(CelsSession *s) {
     #endif
 #endif
 
-#define _CEL_COMPOSABLE_DEF(FnName, ...) \
-    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key); \
-    static inline void _cels_call_##FnName(CelsSession *s, uint64_t key) { \
-        CelsSession *sess = s ? s : CelsGetCurrentSession(); \
-        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        if (CelsEnterComposable(sess, key)) { \
-            _cels_body_##FnName(sess, key); \
-        } \
-        CelsExitGroup(sess); \
-    } \
-    static inline void FnName##_key(uint64_t key) { \
-        _cels_call_##FnName(CelsGetCurrentSession(), key); \
-    } \
-    static inline void FnName##_s(CelsSession *s, uint64_t key) { \
-        _cels_call_##FnName(s, key); \
-    } \
+#define _CEL_COMPOSABLE_VOID(FnName, ...) \
+    static void _cels_body_##FnName(void); \
     static inline void FnName(void) { \
-        _cels_call_##FnName(CelsGetCurrentSession(), CelsHashKey(#FnName)); \
-    } \
-    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key)
-
-#define _CEL_COMPOSABLE_3(FnName, ArgType, ArgName) \
-    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key, ArgType ArgName); \
-    static inline void _cels_call_##FnName(CelsSession *s, uint64_t key, ArgType ArgName) { \
-        CelsSession *sess = s ? s : CelsGetCurrentSession(); \
+        CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        if (CelsEnterComposable(sess, key)) { \
-            _cels_body_##FnName(sess, key, ArgName); \
+        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            _cels_body_##FnName(); \
         } \
         CelsExitGroup(sess); \
     } \
-    static inline void FnName##_key(uint64_t key, ArgType ArgName) { \
-        _cels_call_##FnName(CelsGetCurrentSession(), key, ArgName); \
-    } \
-    static inline void FnName##_s(CelsSession *s, uint64_t key, ArgType ArgName) { \
-        _cels_call_##FnName(s, key, ArgName); \
-    } \
-    static inline void FnName(ArgType ArgName) { \
-        _cels_call_##FnName(CelsGetCurrentSession(), CelsHashKey(#FnName), ArgName); \
-    } \
-    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key, ArgType ArgName)
+    static void _cels_body_##FnName(void)
 
-#define _CEL_COMPOSABLE_LEGACY_BLOCK(session, key) \
-    do { \
-        if (CelsEnterComposable((session), (key)))
-
-#define _CEL_DISPATCH_COMPOSABLE_2(is_sess, a, b) _CEL_DISPATCH_COMPOSABLE_IMPL_##is_sess(a, b)
-#define _CEL_DISPATCH_COMPOSABLE(is_sess, a, b) _CEL_DISPATCH_COMPOSABLE_2(is_sess, a, b)
-#define _CEL_DISPATCH_COMPOSABLE_IMPL_1(a, b) _CEL_COMPOSABLE_LEGACY_BLOCK(a, b)
-#define _CEL_DISPATCH_COMPOSABLE_IMPL_0(a, b) _CEL_COMPOSABLE_DEF(a, b)
-
-#define _CEL_COMPOSABLE_2(a, b) _CEL_DISPATCH_COMPOSABLE(_CEL_IS_SESSION_ARG(a), a, b)
-
-#define _CEL_COMPOSABLE_1(key) \
-    for (int _cels_run = (CelsEnterComposable(CelsGetCurrentSession(), (key)) ? 1 : 0), _cels_done = 0; \
-         !_cels_done; \
-         _cels_done = 1, CelsExitGroup(CelsGetCurrentSession())) \
-        for ( ; _cels_run; _cels_run = 0)
-
-
-#define _CEL_COMPOSABLE_5(FnName, Type1, Arg1, Type2, Arg2) \
-    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key, Type1 Arg1, Type2 Arg2); \
-    static inline void _cels_call_##FnName(CelsSession *s, uint64_t key, Type1 Arg1, Type2 Arg2) { \
-        CelsSession *sess = s ? s : CelsGetCurrentSession(); \
+#define _CEL_COMPOSABLE_1_ARG(FnName, Type1, Arg1) \
+    static void _cels_body_##FnName(Type1 Arg1); \
+    static inline void FnName(Type1 Arg1) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        if (CelsEnterComposable(sess, key)) { \
-            _cels_body_##FnName(sess, key, Arg1, Arg2); \
+        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            _cels_body_##FnName(Arg1); \
         } \
         CelsExitGroup(sess); \
     } \
-    static inline void FnName##_key(uint64_t key, Type1 Arg1, Type2 Arg2) { \
-        _cels_call_##FnName(CelsGetCurrentSession(), key, Arg1, Arg2); \
-    } \
-    static inline void FnName##_s(CelsSession *s, uint64_t key, Type1 Arg1, Type2 Arg2) { \
-        _cels_call_##FnName(s, key, Arg1, Arg2); \
-    } \
+    static void _cels_body_##FnName(Type1 Arg1)
+
+#define _CEL_COMPOSABLE_2_ARGS(FnName, Type1, Arg1, Type2, Arg2) \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2); \
     static inline void FnName(Type1 Arg1, Type2 Arg2) { \
-        _cels_call_##FnName(CelsGetCurrentSession(), CelsHashKey(#FnName), Arg1, Arg2); \
-    } \
-    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key, Type1 Arg1, Type2 Arg2)
-
-#define _CEL_COMPOSABLE_7(FnName, Type1, Arg1, Type2, Arg2, Type3, Arg3) \
-    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key, Type1 Arg1, Type2 Arg2, Type3 Arg3); \
-    static inline void _cels_call_##FnName(CelsSession *s, uint64_t key, Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
-        CelsSession *sess = s ? s : CelsGetCurrentSession(); \
+        CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        if (CelsEnterComposable(sess, key)) { \
-            _cels_body_##FnName(sess, key, Arg1, Arg2, Arg3); \
+        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            _cels_body_##FnName(Arg1, Arg2); \
         } \
         CelsExitGroup(sess); \
     } \
-    static inline void FnName##_key(uint64_t key, Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
-        _cels_call_##FnName(CelsGetCurrentSession(), key, Arg1, Arg2, Arg3); \
-    } \
-    static inline void FnName##_s(CelsSession *s, uint64_t key, Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
-        _cels_call_##FnName(s, key, Arg1, Arg2, Arg3); \
-    } \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2)
+
+#define _CEL_COMPOSABLE_3_ARGS(FnName, Type1, Arg1, Type2, Arg2, Type3, Arg3) \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3); \
     static inline void FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
-        _cels_call_##FnName(CelsGetCurrentSession(), CelsHashKey(#FnName), Arg1, Arg2, Arg3); \
-    } \
-    static void _cels_body_##FnName(CELS_UNUSED CelsSession *s, CELS_UNUSED uint64_t _cels_key, Type1 Arg1, Type2 Arg2, Type3 Arg3)
-
-#define _CEL_GET_MACRO_7(_1, _2, _3, _4, _5, _6, _7, NAME, ...) NAME
-
-#define CEL_Composable(...) _CEL_GET_MACRO_7(__VA_ARGS__, _CEL_COMPOSABLE_7, _UNUSED, _CEL_COMPOSABLE_5, _UNUSED, _CEL_COMPOSABLE_3, _CEL_COMPOSABLE_2, _CEL_COMPOSABLE_1)(__VA_ARGS__)
-
-#define CEL_Composeable(...)      _CEL_COMPOSABLE_DEF(__VA_ARGS__)
-#define CEL_DefineComposable(...) _CEL_COMPOSABLE_DEF(__VA_ARGS__)
-#define CEL_ComposableFn(...)     _CEL_COMPOSABLE_DEF(__VA_ARGS__)
-#define CEL_Composable_Def(...)   _CEL_COMPOSABLE_DEF(__VA_ARGS__)
-
-#define CEL_Scope(key) _CEL_COMPOSABLE_1(key)
-#define _CEL_COMPOSE_1(Component) Component()
-#define _CEL_COMPOSE_2(Component, arg) Component(arg)
-#define CEL_Compose(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_COMPOSE_2, _CEL_COMPOSE_1)(__VA_ARGS__)
-
-#define _CEL_CLOSE_0() CelsExitGroup(CelsGetCurrentSession())
-#define _CEL_CLOSE_1(session) CelsExitGroup((session))
-#define _CEL_CLOSE_CHOOSER(...) _CEL_ARG_2(__VA_ARGS__, _CEL_CLOSE_1, _CEL_CLOSE_0)
-
-#define CEL_Close(...) \
-        _CEL_CLOSE_CHOOSER(dummy, ##__VA_ARGS__, _CEL_CLOSE_1, _CEL_CLOSE_0)(__VA_ARGS__); \
-    } while (0)
-
-#define cel_close(...) CEL_Close(__VA_ARGS__)
-
-/* ========================================================================= */
-/* Lifecycle State (cel_lifecycle_state) & Observers                         */
-/* ========================================================================= */
-
-#define cel_lifecycle_watch(ptr, on_create, on_destroy) \
-    do { \
-        if (CelsIsFreshMount(CelsGetCurrentSession())) { \
-            CelsSessionRegisterLifecycle(CelsGetCurrentSession(), (ptr), (void(*)(void*, CelsSession*))(on_create), (void(*)(void*, CelsSession*))(on_destroy)); \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            _cels_body_##FnName(Arg1, Arg2, Arg3); \
         } \
-    } while (0)
-#define cel_remember_observer(session, Type, on_c, on_d) \
-    ((Type*)CelsResolveSlot((session), sizeof(Type), NULL, &(CelsLifecycleDesc){ \
-        .size      = sizeof(Type), \
-        .onCreate  = (void(*)(void*, CelsSession*))(on_c), \
-        .onDestroy = (void(*)(void*, CelsSession*))(on_d) \
-    }))
-#define _CEL_OBSERVER_4(session, Type, on_c, on_d) \
-    ((Type*)CelsResolveSlot((session), sizeof(Type), NULL, &(CelsLifecycleDesc){ \
-        .size      = sizeof(Type), \
-        .onCreate  = (void(*)(void*, CelsSession*))(on_c), \
-        .onDestroy = (void(*)(void*, CelsSession*))(on_d) \
-    }))
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3)
 
-#define _CEL_OBSERVER_3(Type, on_c, on_d) \
-    _CEL_OBSERVER_4(CelsGetCurrentSession(), Type, on_c, on_d)
+#define _CEL_COMPOSABLE_4_ARGS(FnName, Type1, Arg1, Type2, Arg2, Type3, Arg3, Type4, Arg4) \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4); \
+    static inline void FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            _cels_body_##FnName(Arg1, Arg2, Arg3, Arg4); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4)
 
-#define cel_observer(...) \
-    _CEL_GET_MACRO_4(__VA_ARGS__, _CEL_OBSERVER_4, _CEL_OBSERVER_3)(__VA_ARGS__)
+#define _CEL_GET_COMPOSABLE_MACRO(_1, _2, _3, _4, _5, _6, _7, _8, _9, NAME, ...) NAME
 
-#define _CEL_GET_STATE_3(session, key, Type) \
-    ((Type*)CelsGetState((session), (key)))
+#define CEL_Composable(...) \
+    _CEL_GET_COMPOSABLE_MACRO(__VA_ARGS__, _CEL_COMPOSABLE_4_ARGS, _UNUSED, _CEL_COMPOSABLE_3_ARGS, _UNUSED, _CEL_COMPOSABLE_2_ARGS, _UNUSED, _CEL_COMPOSABLE_1_ARG, _CEL_COMPOSABLE_VOID, _CEL_COMPOSABLE_VOID)(__VA_ARGS__)
 
-#define _CEL_GET_STATE_2(key, Type) \
-    ((Type*)CelsGetState(CelsGetCurrentSession(), (key)))
+/* ========================================================================= */
+/* Non-inline Composable Export & Declaration for multi-file translation units*/
+/* ========================================================================= */
 
-#define CEL_GetState(...) \
+#define CEL_ComposableDecl(FnName, ...) void FnName(__VA_ARGS__)
+
+#define _CEL_COMPOSABLE_EXPORT_VOID(FnName, ...) \
+    static void _cels_body_##FnName(void); \
+    void FnName(void) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            _cels_body_##FnName(); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(void)
+
+#define _CEL_COMPOSABLE_EXPORT_1_ARG(FnName, Type1, Arg1) \
+    static void _cels_body_##FnName(Type1 Arg1); \
+    void FnName(Type1 Arg1) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            _cels_body_##FnName(Arg1); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(Type1 Arg1)
+
+#define _CEL_COMPOSABLE_EXPORT_2_ARGS(FnName, Type1, Arg1, Type2, Arg2) \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2); \
+    void FnName(Type1 Arg1, Type2 Arg2) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            _cels_body_##FnName(Arg1, Arg2); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2)
+
+#define _CEL_COMPOSABLE_EXPORT_3_ARGS(FnName, Type1, Arg1, Type2, Arg2, Type3, Arg3) \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3); \
+    void FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            _cels_body_##FnName(Arg1, Arg2, Arg3); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3)
+
+#define _CEL_COMPOSABLE_EXPORT_4_ARGS(FnName, Type1, Arg1, Type2, Arg2, Type3, Arg3, Type4, Arg4) \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4); \
+    void FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            _cels_body_##FnName(Arg1, Arg2, Arg3, Arg4); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4)
+
+#define CEL_ComposableExport(...) \
+    _CEL_GET_COMPOSABLE_MACRO(__VA_ARGS__, _CEL_COMPOSABLE_EXPORT_4_ARGS, _UNUSED, _CEL_COMPOSABLE_EXPORT_3_ARGS, _UNUSED, _CEL_COMPOSABLE_EXPORT_2_ARGS, _UNUSED, _CEL_COMPOSABLE_EXPORT_1_ARG, _CEL_COMPOSABLE_EXPORT_VOID, _CEL_COMPOSABLE_EXPORT_VOID)(__VA_ARGS__)
+
+#define CEL_ComposableDef CEL_ComposableExport
+
+/* ========================================================================= */
+/* Pure Lifecycles (CEL_Lifecycle & cel_lifecycle)                           */
+/* ========================================================================= */
+
+#define CEL_LIFECYCLE_PHASE_MOUNT   1
+#define CEL_LIFECYCLE_PHASE_UNMOUNT 2
+
+#define mount   if (_cels_lifecycle_phase == CEL_LIFECYCLE_PHASE_MOUNT)
+#define unmount if (_cels_lifecycle_phase == CEL_LIFECYCLE_PHASE_UNMOUNT)
+
+/**
+ * Declares a reusable lifecycle with typed parameter storage.
+ *
+ * Example:
+ * @code
+ *     CEL_Lifecycle(NativeResourceLifecycle, ResourceHandle *handle)
+ *     {
+ *         mount {
+ *             NativeAcquire(handle);
+ *         }
+ *         unmount {
+ *             NativeRelease(handle);
+ *         }
+ *     }
+ * @endcode
+ */
+#define _CEL_LIFECYCLE_1(Name) \
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase); \
+    static void _cels_lifecycle_clean_##Name(void *instance, CelsSession *session) { \
+        (void)instance; (void)session; \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_UNMOUNT); \
+    } \
+    static inline void _cels_lifecycle_attach_##Name(CelsSession *session, void *param) { \
+        (void)param; \
+        if (session == NULL || session->currentDepth == 0) return; \
+        if (CelsIsFreshMount(session)) { \
+            _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_MOUNT); \
+            CelsSessionRegisterLifecycle(session, (void*)1, NULL, _cels_lifecycle_clean_##Name); \
+        } else { \
+            CelsSessionUpdateLifecycle(session, (void*)1, _cels_lifecycle_clean_##Name); \
+        } \
+    } \
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase)
+
+#define _CEL_LIFECYCLE_2(Name, ParamDecl) \
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, ParamDecl); \
+    static void _cels_lifecycle_clean_##Name(void *instance, CelsSession *session) { \
+        (void)session; \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_UNMOUNT, instance); \
+    } \
+    static inline void _cels_lifecycle_attach_##Name(CelsSession *session, void *param) { \
+        if (session == NULL || session->currentDepth == 0) return; \
+        if (CelsIsFreshMount(session)) { \
+            _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_MOUNT, param); \
+            CelsSessionRegisterLifecycle(session, param, NULL, _cels_lifecycle_clean_##Name); \
+        } else { \
+            CelsSessionUpdateLifecycle(session, param, _cels_lifecycle_clean_##Name); \
+        } \
+    } \
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, ParamDecl)
+
+#define _CEL_LIFECYCLE_3(Name, ParamType, ParamName) \
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, ParamType ParamName); \
+    static void _cels_lifecycle_clean_##Name(void *instance, CelsSession *session) { \
+        (void)session; \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_UNMOUNT, (ParamType)(uintptr_t)instance); \
+    } \
+    static inline void _cels_lifecycle_attach_##Name(CelsSession *session, ParamType param) { \
+        if (session == NULL || session->currentDepth == 0) return; \
+        if (CelsIsFreshMount(session)) { \
+            _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_MOUNT, param); \
+            CelsSessionRegisterLifecycle(session, (void*)(uintptr_t)param, NULL, _cels_lifecycle_clean_##Name); \
+        } else { \
+            CelsSessionUpdateLifecycle(session, (void*)(uintptr_t)param, _cels_lifecycle_clean_##Name); \
+        } \
+    } \
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, ParamType ParamName)
+
+#define CEL_Lifecycle(...) \
+    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_LIFECYCLE_3, _CEL_LIFECYCLE_2, _CEL_LIFECYCLE_1)(__VA_ARGS__)
+
+#define _CEL_LIFECYCLE_INVOKE_2(Name, handle) \
+    _cels_lifecycle_attach_##Name(CelsGetCurrentSession(), (void*)(handle))
+
+#define _CEL_LIFECYCLE_INVOKE_1(Name) \
+    _cels_lifecycle_attach_##Name(CelsGetCurrentSession(), NULL)
+
+#define cel_lifecycle(...) \
+    _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_LIFECYCLE_INVOKE_2, _CEL_LIFECYCLE_INVOKE_1)(__VA_ARGS__)
+
+#define CEL_Attach cel_attach
+#define CEL_GetState cel_get_state
+#define CEL_None NULL
+
+/* ========================================================================= */
+/* Addressable Persistent State (cel_remember_state)                         */
+/* ========================================================================= */
+
+#define cel_remember_state(id, Type, defaultVal) \
+    ((Type*)CelsSessionRememberState(CelsGetCurrentSession(), (id), sizeof(Type), &(defaultVal)))
+
+#define cel_session_remember_state(session, id, Type, defaultVal) \
+    ((Type*)CelsSessionRememberState((session), (id), sizeof(Type), &(defaultVal)))
+
+/* ========================================================================= */
+/* Private Local Memory (cel_remember)                                       */
+/* ========================================================================= */
+
+#define cel_remember(Type, ...) \
+    ((Type*)CelsResolveSlot(CelsGetCurrentSession(), sizeof(Type), &(Type){ __VA_ARGS__ }))
+
+/* ========================================================================= */
+/* Reactive Observation & State Reading (cel_watch & cel_get_state)          */
+/* ========================================================================= */
+
+#define _CEL_WATCH_1(Type) \
+    ((const Type*)CelsStateWatch(CelsGetCurrentSession(), CelsHashKey(#Type), sizeof(Type)))
+
+#define _CEL_WATCH_2(Type, id) \
+    ((const Type*)CelsStateWatch(CelsGetCurrentSession(), (id), sizeof(Type)))
+
+#define _CEL_WATCH_3(session, Type, id) \
+    ((const Type*)CelsStateWatch((session), (id), sizeof(Type)))
+
+#define cel_watch(...) \
+    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_WATCH_3, _CEL_WATCH_2, _CEL_WATCH_1)(__VA_ARGS__)
+
+#define _CEL_GET_STATE_2(id, Type) \
+    ((const Type*)CelsStateGet(CelsGetCurrentSession(), (id), sizeof(Type)))
+
+#define _CEL_GET_STATE_3(session, id, Type) \
+    ((const Type*)CelsStateGet((session), (id), sizeof(Type)))
+
+#define cel_get_state(...) \
     _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_GET_STATE_3, _CEL_GET_STATE_2)(__VA_ARGS__)
 
-/* Backwards compatibility aliases */
-#define CEL_FindLifecycleState(...) CEL_GetState(__VA_ARGS__)
-#define CEL_FindObserver(...)       CEL_GetState(__VA_ARGS__)
-#define CEL_FindState(...)          CEL_GetState(__VA_ARGS__)
-
 /* ========================================================================= */
-/* Persistent Component Memory (cel_remember)                                */
+/* State Mutation (cel_mutate)                                               */
+/* Block syntax: cel_mutate(session, id, Type) { this->field = val; }        */
+/* Value syntax: cel_mutate(session, id, Type, modifiedVal)                 */
 /* ========================================================================= */
 
-#define _cel_remember_sess(session, Type, ...) \
-    ((Type*)CelsResolveSlot((session), sizeof(Type), &(Type){ __VA_ARGS__ }, NULL))
+#define _CEL_MUTATE_2(id, Type) \
+    for (Type *this = (Type*)CelsStateMutate(CelsGetCurrentSession(), (id), sizeof(Type)); \
+         this != NULL; \
+         this = NULL)
 
-#define _cel_remember_curr(Type, ...) \
-    ((Type*)CelsResolveSlot(CelsGetCurrentSession(), sizeof(Type), &(Type){ __VA_ARGS__ }, NULL))
+#define _CEL_MUTATE_3(session, id, Type) \
+    for (Type *this = (Type*)CelsStateMutate((session), (id), sizeof(Type)); \
+         this != NULL; \
+         this = NULL)
 
-#define _CEL_REMEMBER_DISPATCH_1(a, Type, ...) _cel_remember_sess(a, Type, __VA_ARGS__)
-#define _CEL_REMEMBER_DISPATCH_0(Type, ...)    _cel_remember_curr(Type, __VA_ARGS__)
-#define _CEL_REMEMBER_DISPATCH_2(is_s, ...)    _CEL_REMEMBER_DISPATCH_##is_s(__VA_ARGS__)
-#define _CEL_REMEMBER_DISPATCH(is_s, ...)      _CEL_REMEMBER_DISPATCH_2(is_s, __VA_ARGS__)
+#define _CEL_MUTATE_4(session, id, Type, val) \
+    do { \
+        Type *_cels_dst = (Type*)CelsStateMutate((session), (id), sizeof(Type)); \
+        if (_cels_dst != NULL) { \
+            *_cels_dst = (val); \
+        } \
+    } while (0)
 
-#define cel_remember(...) \
-    _CEL_REMEMBER_DISPATCH(_CEL_IS_SESSION_ARG(_CEL_FIRST(__VA_ARGS__)), __VA_ARGS__)
+#define cel_mutate(...) \
+    _CEL_GET_MACRO_4(__VA_ARGS__, _CEL_MUTATE_4, _CEL_MUTATE_3, _CEL_MUTATE_2)(__VA_ARGS__)
+
+#define cel_mutate_ptr(session, id, Type) \
+    ((Type*)CelsStateMutate((session), (id), sizeof(Type)))
 
 /* ========================================================================= */
-/* Reactive State Operations: cel_watch & cel_mutate                         */
+/* Engine Loop Termination (cel_quit)                                        */
 /* ========================================================================= */
 
-#define _CEL_WATCH_1(state_ptr) (CelsStateRead(CelsGetCurrentSession(), (state_ptr)), *(state_ptr))
-#define _CEL_WATCH_2(session, state_ptr) (CelsStateRead((session), (state_ptr)), *(state_ptr))
-#define cel_watch(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_WATCH_2, _CEL_WATCH_1)(__VA_ARGS__)
-
-#define _cel_mutate_2(session, state_ptr) \
-    for (int _cel_err = ((session)->currentDepth > 0 ? (assert(!(session)->currentDepth && "cel_mutate cannot be called inside a Composition. Use a System instead."), 1) : 0); _cel_err == 0; _cel_err = 1) \
-        for (__typeof__(*(state_ptr)) _cel_old_ = *(state_ptr), *this = (state_ptr); \
-             this != NULL; \
-             CelsStateCommitMutation((session), this, &_cel_old_, sizeof(*this)), this = NULL)
-
-#define _cel_mutate_1(state_ptr) \
-    _cel_mutate_2(CelsGetCurrentSession(), (state_ptr))
-
-#define cel_mutate(...) _CEL_GET_MACRO_2(__VA_ARGS__, _cel_mutate_2, _cel_mutate_1)(__VA_ARGS__)
-
-#define cel_init if (CelsIsFreshMount(CelsGetCurrentSession()))
-#define cel_spawn cel_init
-#define cel_once  cel_init
+#define cel_engine_quit() CelsEngineQuit(NULL)
+#define cel_quit()        CelsEngineQuit(NULL)
 
 /* ========================================================================= */
 /* Flecs ECS Integration (Optional)                                          */
@@ -442,14 +454,10 @@ static inline ecs_entity_t _cels_resolve_entity(
     (void)key;
     bool isMount = CelsIsFreshMount(s);
 
-    CelsLifecycleDesc desc = {0};
-    desc.size = sizeof(CelsEntitySlot);
-    desc.onDestroy = _cels_entity_cleanup;
     CelsEntitySlot *slot = (CelsEntitySlot*)CelsResolveSlot(
         s, 
         sizeof(CelsEntitySlot), 
-        NULL, 
-        &desc
+        NULL
     );
 
     if (isMount && slot) {
@@ -458,6 +466,7 @@ static inline ecs_entity_t _cels_resolve_entity(
         if (name && name[0] != '\0') {
             ecs_set_name(world, slot->entity, name);
         }
+        CelsSessionRegisterLifecycle(s, slot, NULL, _cels_entity_cleanup);
     }
     return slot ? slot->entity : 0;
 }
@@ -477,4 +486,3 @@ static inline ecs_entity_t _cels_resolve_entity(
 #ifdef __cplusplus
 }
 #endif
-

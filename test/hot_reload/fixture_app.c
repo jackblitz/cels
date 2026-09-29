@@ -5,7 +5,8 @@ CEL_Module(FixtureModule) {
     int volume;
 };
 
-CEL_Composition(FixtureRoot, key) {
+CEL_Composition(FixtureRoot, void *userData) {
+    (void)userData;
     FixtureModule *mod = CEL_GetModule(FixtureModule);
     (void)mod;
 }

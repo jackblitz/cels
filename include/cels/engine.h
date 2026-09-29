@@ -85,11 +85,46 @@ struct CelsEngine {
 };
 
 /* Engine lifecycle */
-void       CelsEngineInit(CelsEngine *engine, const struct CelsAppManifest *manifest, const CelsSessionConfig *config);
+CelsResult _CelsEngineInitInternal(CelsEngine *engine, const char *appName);
 void       CelsEngineDestroy(CelsEngine *engine);
-
 CelsResult CelsEngineStart(CelsEngine *engine);
 void       CelsEngineEnd(CelsEngine *engine);
+CelsResult CelsEngineRecompose(CelsEngine *engine);
+
+/**
+ * Initializes the engine and loads the application module.
+ *
+ * Discovers and binds the application module (<appName>.dll in Debug, static in Release),
+ * initializes the session memory slab, and mounts the root composition.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application module name. If NULL, defaults to CELS_APP_TARGET (injected by CMake).
+ * @return CELS_OK on success, or error code.
+ */
+static inline CelsResult CelsEngineInit(CelsEngine *engine, const char *appName)
+{
+#if defined(CELS_HOT_RELOAD) && !CELS_HOT_RELOAD
+    (void)appName;
+    CelsResult res = _CelsEngineInitInternal(engine, NULL);
+    if (res != CELS_OK) {
+        return res;
+    }
+    extern const struct CelsAppManifest *CelsGetAppManifest(void);
+    const struct CelsAppManifest *manifest = CelsGetAppManifest();
+    if (manifest != NULL) {
+        engine->manifest = manifest;
+        return CelsEngineStart(engine);
+    }
+    return CELS_OK;
+#else
+#if defined(CELS_APP_TARGET)
+    if (appName == NULL || appName[0] == '\0') {
+        appName = CELS_APP_TARGET;
+    }
+#endif
+    return _CelsEngineInitInternal(engine, appName);
+#endif
+}
 
 /**
  * Resolves and loads an application module into the engine.
@@ -142,6 +177,21 @@ void      *CelsEngineGetModule(const CelsEngine *engine, uint64_t key);
 
 CelsEngine *CelsGetCurrentEngine(void);
 void        CelsSetCurrentEngine(CelsEngine *engine);
+
+/**
+ * Requests that the host engine terminate its tick loop.
+ *
+ * @param engine Target engine. If NULL, targets CelsGetCurrentEngine().
+ */
+static inline void CelsEngineQuit(CelsEngine *engine)
+{
+    if (engine == NULL) {
+        engine = CelsGetCurrentEngine();
+    }
+    if (engine != NULL) {
+        engine->shouldQuit = true;
+    }
+}
 
 CelsResult CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessionConfig *config);
 

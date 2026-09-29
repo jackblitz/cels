@@ -9,6 +9,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_WIN32)
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <windows.h>
+#endif
+
 #ifndef CELS_THREAD_LOCAL
     #if defined(_MSC_VER)
         #define CELS_THREAD_LOCAL __declspec(thread)
@@ -35,27 +42,28 @@ CelsSetCurrentEngine(CelsEngine *engine)
     s_currentEngine = engine;
 }
 
-void
-CelsEngineInit(CelsEngine *engine, const struct CelsAppManifest *manifest, const CelsSessionConfig *config)
+CelsResult
+_CelsEngineInitInternal(CelsEngine *engine, const char *appName)
 {
-    assert(engine != NULL);
+    if (engine == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
     memset(engine, 0, sizeof(*engine));
     engine->magic = CELS_ENGINE_MAGIC;
-    engine->manifest = manifest;
     engine->moduleCount = 0;
     engine->isStarted = false;
     engine->shouldQuit = false;
+    CelsSetCurrentEngine(engine);
 
-    CelsSessionConfig sc = config ? *config : (CelsSessionConfig){0};
-    if (sc.slabSize == 0 && manifest != NULL && manifest->slabSize > 0) {
-        sc.slabSize = manifest->slabSize;
-        if (sc.maxGroups == 0 && manifest->maxGroups > 0) {
-            sc.maxGroups = manifest->maxGroups;
-        }
-    }
-    sc.engine = engine;
+    CelsSessionConfig sc = { .engine = engine };
     CelsSessionInit(&engine->session, &sc);
     engine->session.engine = engine;
+
+    if (appName != NULL && appName[0] != '\0') {
+        return CelsEngineLoadApp(engine, appName);
+    }
+
+    return CELS_OK;
 }
 
 void
@@ -65,7 +73,7 @@ CelsEngineDestroy(CelsEngine *engine)
         return;
     }
 
-    if (engine->isStarted) {
+    if (engine->isStarted || engine->appModule != NULL) {
         CelsEngineEnd(engine);
     }
 
@@ -107,7 +115,7 @@ CelsEngineStart(CelsEngine *engine)
     if (engine->manifest->onStart != NULL) {
         CelsCompositionRef ref = engine->manifest->onStart(engine, &engine->session);
         if (ref.body != NULL && ref.key != 0) {
-            CelsSessionAttachComposition(&engine->session, ref.key, ref.body, ref.lifecycleEval);
+            CelsSessionAttachComposition(&engine->session, ref.key, ref.body, ref.userData, ref.lifecycleEval, ref.evalCtx);
         }
     }
 
@@ -126,7 +134,11 @@ CelsEngineEnd(CelsEngine *engine)
         return;
     }
 
-    if (engine->manifest != NULL && engine->manifest->onEnd != NULL) {
+    if (engine->appModule != NULL) {
+        CelsAppModuleUnload(engine->appModule, &engine->session);
+        free(engine->appModule);
+        engine->appModule = NULL;
+    } else if (engine->manifest != NULL && engine->manifest->onEnd != NULL) {
         CelsEngine *const prevEngine = s_currentEngine;
         CelsSession *const prevSession = CelsGetCurrentSession();
         s_currentEngine = engine;
@@ -139,6 +151,17 @@ CelsEngineEnd(CelsEngine *engine)
     }
 
     engine->isStarted = false;
+}
+
+CelsResult
+CelsEngineRecompose(CelsEngine *engine)
+{
+    if (engine == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+    CelsResult res = CelsSessionRecompose(&engine->session);
+    CelsResult allRes = CelsRecomposeAllSessions();
+    return (res != CELS_OK) ? res : allRes;
 }
 
 void
@@ -264,12 +287,14 @@ _cels_resolve_module(const void *ctx, uint64_t key)
 CelsResult
 CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessionConfig *config)
 {
+    (void)config;
     if (manifest == NULL) {
         return CELS_ERROR_INVALID_STATE;
     }
 
     CelsEngine engine;
-    CelsEngineInit(&engine, manifest, config);
+    CelsEngineInit(&engine, NULL);
+    engine.manifest = manifest;
 
     CelsResult res = CelsEngineStart(&engine);
 
@@ -277,3 +302,70 @@ CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessio
     CelsEngineDestroy(&engine);
     return res;
 }
+
+CelsResult
+CelsEngineLoadApp(CelsEngine *engine, const char *appName)
+{
+    if (engine == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+
+#if defined(CELS_APP_TARGET)
+    if (appName == NULL || appName[0] == '\0') {
+        appName = CELS_APP_TARGET;
+    }
+#endif
+
+    char resolvedPath[CELS_PATH_MAX];
+    if (!CelsResolveModulePath(appName, resolvedPath, sizeof(resolvedPath))) {
+#if defined(_WIN32)
+        HMODULE hSelf = GetModuleHandleA(NULL);
+        if (hSelf != NULL) {
+            FARPROC fp = GetProcAddress(hSelf, "CelsGetAppManifest");
+            if (fp != NULL) {
+                typedef const struct CelsAppManifest *(*EntryFn)(void);
+                EntryFn entry = NULL;
+                memcpy(&entry, &fp, sizeof(entry));
+                if (entry != NULL) {
+                    engine->manifest = entry();
+                    return CelsEngineStart(engine);
+                }
+            }
+        }
+#endif
+        fprintf(stderr, "[CELS Engine] Could not locate application binary for '%s' (searched: %s)\n",
+                appName ? appName : "(default)", resolvedPath);
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+
+    if (engine->appModule == NULL) {
+        engine->appModule = (CelsAppModule *)calloc(1, sizeof(CelsAppModule));
+        if (engine->appModule == NULL) {
+            return CELS_ERROR_OUT_OF_MEMORY;
+        }
+    }
+
+    if (!CelsAppModuleLoad(engine->appModule, resolvedPath, &engine->session)) {
+        free(engine->appModule);
+        engine->appModule = NULL;
+        return CELS_ERROR_INVALID_STATE;
+    }
+
+    engine->manifest = engine->appModule->manifest;
+    engine->isStarted = true;
+    return CelsSessionRecompose(&engine->session);
+}
+
+bool
+CelsAppRuntimeCheck(CelsEngine *engine)
+{
+    if (engine == NULL || engine->appModule == NULL) {
+        return false;
+    }
+    bool reloaded = CelsAppModuleCheckAndReload(engine->appModule, &engine->session);
+    if (reloaded) {
+        engine->manifest = engine->appModule->manifest;
+    }
+    return reloaded;
+}
+

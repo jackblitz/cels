@@ -2,25 +2,13 @@
 
 /**
  * @file state.h
- * @brief Reactive state registry and mutation tracking.
+ * @brief Keyed double-buffered reactive state registry and mutation tracking.
  *
- * Typical usage:
- * @code
- *     CEL_State(WindowState) {
- *         bool isOpen;
- *         int width;
- *     };
- *
- *     WindowState state = { .isOpen = true, .width = 800 };
- *     WindowState current = cel_watch(&state);
- *
- *     cel_mutate(session, &state) {
- *         this->width = 1024;
- *     }
- * @endcode
- *
- * Thread safety: CelsState is managed within an active CelsSession. State
- * reads and mutations must occur on the session's thread.
+ * CELS state is owned, allocated, and tracked by the CEL_Session in cache-aligned slabs.
+ * State is double-buffered:
+ * - Reads (cel_watch, cel_get_state) read from the published front buffer (lock-free, zero torn reads).
+ * - Mutations (cel_mutate) write to the staging back buffer and flag the state dirty.
+ * - Dirty states are published atomically at frame boundaries in CelSessionRecompose.
  */
 
 #include <stdbool.h>
@@ -34,46 +22,36 @@
 #endif
 
 #ifndef CELS_MAX_WATCHERS
-#define CELS_MAX_WATCHERS 16u
+#define CELS_MAX_WATCHERS 32u
 #endif
 
 #ifndef CELS_MAX_QUEUE
 #define CELS_MAX_QUEUE 2048u
 #endif
 
-/* ========================================================================= */
-/* State Definitions                                                         */
-/* ========================================================================= */
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#ifndef CEL_State
-#define CEL_State(TypeName) \
-    typedef struct TypeName TypeName; \
-    struct TypeName
-
-#define CEL_LifecycleState(TypeName) CEL_State(TypeName)
-#define CEL_Observer(TypeName)       CEL_State(TypeName)
-#define CEL_Module(TypeName)         CEL_State(TypeName)
+/* Forward declaration of owning session */
+#ifndef CELS_SESSION_TYPEDEF_DEFINED
+#define CELS_SESSION_TYPEDEF_DEFINED
+typedef struct CelsSession CelsSession;
+typedef struct CelsSession CEL_Session;
 #endif
 
 /**
- * Forward declaration of owning session.
- */
-typedef struct CelsSession CelsSession;
-
-/**
- * Watcher key tracking header for a single reactive state cell.
- */
-typedef struct CelsStateHeader {
-    uint64_t watcherKeys[CELS_MAX_WATCHERS];
-    uint16_t watcherCount;
-} CelsStateHeader;
-
-/**
- * Reactive state cell binding an arbitrary memory address to its subscribers.
+ * Double-buffered reactive state cell binding a unique CEL_Id to front and back memory buffers.
  */
 typedef struct CelsStateCell {
-    const void *ptr;
-    CelsStateHeader header;
+    CEL_Id   id;
+    void    *frontBuffer;   /**< Published snapshot read by cel_watch / cel_get_state */
+    void    *backBuffer;    /**< Staging buffer written by cel_mutate */
+    size_t   size;          /**< Size in bytes of the state struct */
+    bool     isDirty;       /**< True if backBuffer has pending mutations to publish */
+    bool     inUse;         /**< True if cell slot is occupied */
+    uint64_t watcherKeys[CELS_MAX_WATCHERS]; /**< Subscribed composable/composition group keys */
+    uint16_t watcherCount;
 } CelsStateCell;
 
 /**
@@ -81,54 +59,88 @@ typedef struct CelsStateCell {
  */
 typedef struct CelsStateRegistry {
     CelsStateCell cells[CELS_MAX_STATES];
-    uint32_t cellCount;
+    uint32_t      cellCount;
 } CelsStateRegistry;
 
 /**
- * Initializes a reactive state registry to empty.
+ * Initializes a reactive state registry.
  *
  * @param registry Target registry. Non-NULL.
  */
 void CelsStateRegistryInit(CelsStateRegistry *registry);
 
 /**
- * Records a read of statePtr by the active composition group in session.
+ * Finds an existing reactive state cell by its unique CEL_Id.
  *
- * @param session  Target session. If NULL, current session is used.
- * @param statePtr Address of read state. Non-NULL.
+ * @param registry Target registry. Non-NULL.
+ * @param id       Unique 64-bit state identifier.
+ * @return Pointer to state cell, or NULL if not found.
  */
-void CelsStateRead(CelsSession *session, const void *statePtr);
+CelsStateCell *CelsStateRegistryFindCell(CelsStateRegistry *registry, CEL_Id id);
 
 /**
- * Compares current value at statePtr with oldVal. If different, queues
- * invalidations for all subscribing composition keys in session.
+ * Resolves or creates a double-buffered reactive state cell by CEL_Id.
  *
- * @param session  Target session. If NULL, current session is used.
- * @param statePtr Address of mutated state. Non-NULL.
- * @param oldVal   Pointer to snapshot of state before mutation. Non-NULL.
- * @param size     Byte size of mutated state.
+ * @param session    Owning session. Non-NULL.
+ * @param id         Unique 64-bit state identifier.
+ * @param size       Size in bytes of state struct.
+ * @param defaultVal Pointer to default initial values. May be NULL.
+ * @return Pointer to resolved state cell, or NULL if capacity exceeded.
  */
-void CelsStateCommitMutation(CelsSession *session,
-                             const void *statePtr,
-                             const void *oldVal,
-                             size_t size);
+CelsStateCell *CelsStateGetOrCreateCell(CelsSession *session,
+                                        CEL_Id id,
+                                        size_t size,
+                                        const void *defaultVal);
 
 /**
- * Unsubscribes groupKey from all state cells in registry.
+ * Subscribes the currently active composable to state id and returns a typed read-only pointer.
+ *
+ * @param session Active or target session.
+ * @param id      Unique 64-bit state identifier.
+ * @param size    Expected size of state struct for schema verification.
+ * @return Read-only pointer into the published front buffer, or NULL if not found.
+ */
+const void *CelsStateWatch(CelsSession *session, CEL_Id id, size_t size);
+
+/**
+ * Passively reads the published snapshot of state id without subscribing.
+ *
+ * @param session Target session.
+ * @param id      Unique 64-bit state identifier.
+ * @param size    Expected size of state struct.
+ * @return Read-only pointer into the published front buffer, or NULL if not found.
+ */
+const void *CelsStateGet(CelsSession *session, CEL_Id id, size_t size);
+
+/**
+ * Obtains a mutable pointer into the staging back buffer and schedules invalidations.
+ *
+ * Must NOT be called inside an active composable or composition body during evaluation.
+ *
+ * @param session Target session.
+ * @param id      Unique 64-bit state identifier.
+ * @param size    Expected size of state struct.
+ * @return Mutable pointer into the staging back buffer, or NULL if not found.
+ */
+void *CelsStateMutate(CelsSession *session, CEL_Id id, size_t size);
+
+/**
+ * Publishes all dirty state cells (synchronizes backBuffer -> frontBuffer and clears dirty flag).
+ *
+ * Invoked by CelSessionRecompose at frame boundaries.
+ *
+ * @param session Target session. Non-NULL.
+ */
+void CelsStatePublishDirty(CelsSession *session);
+
+/**
+ * Unsubscribes a groupKey from all reactive state cells in registry.
  *
  * @param registry Target registry. Non-NULL.
  * @param groupKey Group key to unsubscribe.
  */
-void CelsStateRegistryUnsubscribeKey(CelsStateRegistry *registry,
-                                     uint64_t groupKey);
+void CelsStateRegistryUnsubscribeKey(CelsStateRegistry *registry, uint64_t groupKey);
 
-/**
- * Removes any state cells whose pointer falls within [first, end).
- *
- * @param registry Target registry. Non-NULL.
- * @param first    Starting memory address (inclusive).
- * @param end      Ending memory address (exclusive).
- */
-void CelsStateRegistryReleaseRange(CelsStateRegistry *registry,
-                                   uintptr_t first,
-                                   uintptr_t end);
+#ifdef __cplusplus
+}
+#endif

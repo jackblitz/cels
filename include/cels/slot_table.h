@@ -49,6 +49,8 @@
 #define CELS_CACHE_LINE_SIZE 64u
 #define CELS_SLOT_WRITER_MAX_DEPTH 64u
 
+typedef uint64_t CEL_Id;
+
 static inline uint64_t CelsHashKey(const char *str)
 {
     uint64_t hash = 14695981039346656037ULL;
@@ -58,6 +60,9 @@ static inline uint64_t CelsHashKey(const char *str)
     }
     return hash;
 }
+
+#define CEL_ID(str)  CelsHashKey(str)
+#define CEL_KEY(str) CelsHashKey(str)
 
 static inline uint64_t CelsKeyIndex(uint64_t baseKey, uint64_t index)
 {
@@ -170,10 +175,6 @@ typedef struct CelsSlotGroup {
     uint16_t flags;        // CelsGroupFlags invalidation bits
 } CelsSlotGroup;
 
-/* Backwards compatibility aliases */
-#define reserved userData
-#define dataOffset slotIndex
-#define dataSize slotCount
 
 /**
  * Dual gap buffer carved out of a single contiguous, cache-aligned memory slab.

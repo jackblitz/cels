@@ -98,14 +98,20 @@ static void TestZeroAllocUserSlab(void) {
     assert(session.slab == NULL);
 }
 
-static void SmallTreeApp(CelsSession *s) {
-    CEL_Composition(s, CEL_KEY("Root")) {
-        for (int i = 0; i < 15; ++i) {
-            CEL_Composable(s, CEL_KeyIndex(CEL_KEY("Child"), (uint64_t)i)) {
-                cel_remember(s, int, i);
-            } CEL_Close(s);
-        }
-    } CEL_Close(s);
+static void SmallChild(int i) {
+    CelsSession *sess = CelsGetCurrentSession();
+    if (CelsEnterComposable(sess, CelsKeyIndex(CEL_ID("Child"), (uint64_t)i))) {
+        int *val = cel_remember(int, i);
+        (void)val;
+    }
+    CelsExitGroup(sess);
+}
+
+CEL_Composition(SmallTreeApp, void *userData) {
+    (void)userData;
+    for (int i = 0; i < 15; ++i) {
+        SmallChild(i);
+    }
 }
 
 static void TestGroupCapacityExceeded(void) {
@@ -115,9 +121,9 @@ static void TestGroupCapacityExceeded(void) {
     CelsSessionInit(&s, &(CelsSessionConfig){
         .slab = buf,
         .slabSize = sizeof(buf),
-        .maxGroups = 16,
-        .root = SmallTreeApp
+        .maxGroups = 16
     });
+    cel_attach(&s, CEL_ID("Root"), SmallTreeApp);
 
     assert(s.maxGroups == 16);
     CelsResult res = CelsSessionRecompose(&s);

@@ -14,10 +14,12 @@
     #include <dlfcn.h>
     #include <unistd.h>
     #include <mach-o/dyld.h>
+    #include <dirent.h>
 #else
     #include <sys/stat.h>
     #include <dlfcn.h>
     #include <unistd.h>
+    #include <dirent.h>
 #endif
 
 /* ========================================================================= */
@@ -190,7 +192,7 @@ static void PlatformDeleteFile(const char *path)
         return;
     }
 #if defined(_WIN32)
-    for (int retry = 0; retry < 5; ++retry) {
+    for (int retry = 0; retry < 15; ++retry) {
         if (DeleteFileA(path) != 0) {
             return;
         }
@@ -198,6 +200,60 @@ static void PlatformDeleteFile(const char *path)
     }
 #else
     unlink(path);
+#endif
+}
+
+static void GetDirectoryFromPath(const char *path, char *outDir, size_t maxLen)
+{
+    if (path == NULL || outDir == NULL || maxLen == 0) {
+        return;
+    }
+    snprintf(outDir, maxLen, "%s", path);
+    char *lastSlash = strrchr(outDir, '\\');
+    char *lastFwd = strrchr(outDir, '/');
+    if (lastFwd && (!lastSlash || lastFwd > lastSlash)) {
+        lastSlash = lastFwd;
+    }
+    if (lastSlash) {
+        *(lastSlash + 1) = '\0';
+    } else {
+        snprintf(outDir, maxLen, "./");
+    }
+}
+
+static void PlatformCleanupHotReloadFiles(const char *dir)
+{
+    if (dir == NULL || dir[0] == '\0') {
+        return;
+    }
+#if defined(_WIN32)
+    char pattern[CELS_PATH_MAX * 2];
+    snprintf(pattern, sizeof(pattern), "%s*.hot_*.tmp.*", dir);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                char fpath[CELS_PATH_MAX * 2];
+                snprintf(fpath, sizeof(fpath), "%s%s", dir, fd.cFileName);
+                PlatformDeleteFile(fpath);
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    DIR *d = opendir(dir);
+    if (d != NULL) {
+        struct dirent *entry;
+        while ((entry = readdir(d)) != NULL) {
+            if (strstr(entry->d_name, ".hot_") != NULL && strstr(entry->d_name, ".tmp.") != NULL) {
+                char fpath[CELS_PATH_MAX * 2];
+                snprintf(fpath, sizeof(fpath), "%s/%s", dir, entry->d_name);
+                PlatformDeleteFile(fpath);
+            }
+        }
+        closedir(d);
+    }
 #endif
 }
 
@@ -230,6 +286,26 @@ static bool PlatformCopyFile(const char *src, const char *dst)
 #endif
 }
 
+static CelsAppModule *s_activeAppModule = NULL;
+
+static void CelsAppModuleCleanupAtExit(void)
+{
+    if (s_activeAppModule != NULL && s_activeAppModule->isLoaded) {
+        CelsAppModuleUnload(s_activeAppModule, NULL);
+    }
+}
+
+#if defined(_WIN32)
+static BOOL WINAPI CelsAppModuleConsoleCtrlHandler(DWORD ctrlType)
+{
+    (void)ctrlType;
+    if (s_activeAppModule != NULL && s_activeAppModule->isLoaded) {
+        CelsAppModuleUnload(s_activeAppModule, NULL);
+    }
+    return FALSE;
+}
+#endif
+
 /* ========================================================================= */
 /* Public Application Module Lifecycle API                                   */
 /* ========================================================================= */
@@ -240,6 +316,11 @@ bool CelsAppModuleLoad(CelsAppModule *app, const char *libraryPath,
     if (app == NULL || libraryPath == NULL || session == NULL) {
         return false;
     }
+
+    /* Sweep and purge any orphaned temporary hot reload files from previous sessions */
+    char initialDir[CELS_PATH_MAX];
+    GetDirectoryFromPath(libraryPath, initialDir, sizeof(initialDir));
+    PlatformCleanupHotReloadFiles(initialDir);
 
     memset(app, 0, sizeof(*app));
     snprintf(app->originalPath, sizeof(app->originalPath), "%s", libraryPath);
@@ -338,12 +419,21 @@ bool CelsAppModuleLoad(CelsAppModule *app, const char *libraryPath,
             CelsCompositionRef ref = app->manifest->onStart(session->engine, session);
             if (ref.body != NULL && ref.key != 0) {
                 app->attachedKey = ref.key;
-                CelsSessionAttachComposition(session, ref.key, ref.body, ref.lifecycleEval, NULL);
+                CelsSessionAttachComposition(session, ref.key, ref.body, ref.userData, ref.lifecycleEval, ref.evalCtx);
             }
         }
     }
 
     app->isLoaded = true;
+    s_activeAppModule = app;
+    static bool s_cleanupHandlersInstalled = false;
+    if (!s_cleanupHandlersInstalled) {
+        s_cleanupHandlersInstalled = true;
+        atexit(CelsAppModuleCleanupAtExit);
+#if defined(_WIN32)
+        SetConsoleCtrlHandler(CelsAppModuleConsoleCtrlHandler, TRUE);
+#endif
+    }
     return true;
 }
 
@@ -438,7 +528,7 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
             CelsCompositionRef ref = app->manifest->onStart(session->engine, session);
             if (ref.body != NULL && ref.key != 0) {
                 app->attachedKey = ref.key;
-                CelsSessionAttachComposition(session, ref.key, ref.body, ref.lifecycleEval, NULL);
+                CelsSessionAttachComposition(session, ref.key, ref.body, ref.userData, ref.lifecycleEval, ref.evalCtx);
             }
         }
     }
@@ -452,6 +542,13 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
         PlatformFreeLibrary(oldHandle);
     }
     PlatformDeleteFile(oldLoadedPath);
+    char oldPdb[CELS_PATH_MAX];
+    snprintf(oldPdb, sizeof(oldPdb), "%s", oldLoadedPath);
+    char *ext = strstr(oldPdb, ".tmp.dll");
+    if (ext != NULL) {
+        memcpy(ext, ".tmp.pdb", 8);
+        PlatformDeleteFile(oldPdb);
+    }
 
     return true;
 }
@@ -460,6 +557,10 @@ void CelsAppModuleUnload(CelsAppModule *app, CelsSession *session)
 {
     if (app == NULL || !app->isLoaded) {
         return;
+    }
+
+    if (s_activeAppModule == app) {
+        s_activeAppModule = NULL;
     }
 
     if (app->manifest != NULL && app->manifest->onEnd != NULL && session != NULL) {
@@ -472,39 +573,25 @@ void CelsAppModuleUnload(CelsAppModule *app, CelsSession *session)
         app->attachedKey = 0;
     }
 
-    PlatformFreeLibrary(app->handle);
-    app->handle = NULL;
+    if (app->handle != NULL) {
+        PlatformFreeLibrary(app->handle);
+        app->handle = NULL;
+    }
 
-#if defined(_WIN32)
-    /* Delete shadow copy and any leftover temp hot files from previous reloads */
+    /* Delete shadow copy DLL and PDB */
     PlatformDeleteFile(app->loadedPath);
-    char dir[CELS_PATH_MAX] = {0};
-    snprintf(dir, sizeof(dir), "%s", app->loadedPath);
-    char *lastSlash = strrchr(dir, '\\');
-    char *lastFwd = strrchr(dir, '/');
-    if (lastFwd && (!lastSlash || lastFwd > lastSlash)) {
-        lastSlash = lastFwd;
+    char pdbPath[CELS_PATH_MAX];
+    snprintf(pdbPath, sizeof(pdbPath), "%s", app->loadedPath);
+    char *pdbExt = strstr(pdbPath, ".tmp.dll");
+    if (pdbExt != NULL) {
+        memcpy(pdbExt, ".tmp.pdb", 8);
+        PlatformDeleteFile(pdbPath);
     }
-    if (lastSlash) {
-        *(lastSlash + 1) = '\0';
-        char pattern[CELS_PATH_MAX * 2];
-        snprintf(pattern, sizeof(pattern), "%s*.hot_%lu_*.tmp.*", dir, (unsigned long)GetCurrentProcessId());
-        WIN32_FIND_DATAA fd;
-        HANDLE h = FindFirstFileA(pattern, &fd);
-        if (h != INVALID_HANDLE_VALUE) {
-            do {
-                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                    char fpath[CELS_PATH_MAX * 2];
-                    snprintf(fpath, sizeof(fpath), "%s%s", dir, fd.cFileName);
-                    PlatformDeleteFile(fpath);
-                }
-            } while (FindNextFileA(h, &fd));
-            FindClose(h);
-        }
-    }
-#else
-    PlatformDeleteFile(app->loadedPath);
-#endif
+
+    /* Sweep and purge all remaining hot reload temporary files in directory */
+    char dir[CELS_PATH_MAX];
+    GetDirectoryFromPath(app->loadedPath, dir, sizeof(dir));
+    PlatformCleanupHotReloadFiles(dir);
 
     app->isLoaded = false;
     app->manifest = NULL;

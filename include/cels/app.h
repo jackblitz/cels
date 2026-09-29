@@ -43,23 +43,29 @@ extern "C" {
  * Represents a reference to a composition root and its optional lifecycle evaluator.
  */
 typedef struct CelsCompositionRef {
-    uint64_t key;
-    void (*body)(CelsSession *session, uint64_t key);
-    bool (*lifecycleEval)(CelsSession *session);
+    CEL_Id key;
+    void (*body)(void *userData);
+    void *userData;
+    bool (*lifecycleEval)(void *evalCtx);
+    void *evalCtx;
 } CelsCompositionRef;
 
 #define _CEL_COMPOSITION_REF_2(CompName, Lifecycle) \
     ((CelsCompositionRef){ \
         .key = CelsHashKey(#CompName), \
-        .body = _cels_app_body_##CompName, \
-        .lifecycleEval = (bool(*)(CelsSession*))(Lifecycle) \
+        .body = (void(*)(void*))CompName, \
+        .userData = NULL, \
+        .lifecycleEval = (bool(*)(void*))(Lifecycle), \
+        .evalCtx = NULL \
     })
 
 #define _CEL_COMPOSITION_REF_1(CompName) \
     ((CelsCompositionRef){ \
         .key = CelsHashKey(#CompName), \
-        .body = _cels_app_body_##CompName, \
-        .lifecycleEval = NULL \
+        .body = (void(*)(void*))CompName, \
+        .userData = NULL, \
+        .lifecycleEval = NULL, \
+        .evalCtx = NULL \
     })
 
 /**
@@ -72,7 +78,7 @@ typedef struct CelsCompositionRef {
 #define CEL_COMPOSITION(...) \
     _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_COMPOSITION_REF_2, _CEL_COMPOSITION_REF_1)(__VA_ARGS__)
 
-#define CEL_NO_COMPOSITION ((CelsCompositionRef){ 0, NULL, NULL })
+#define CEL_NO_COMPOSITION ((CelsCompositionRef){ 0, NULL, NULL, NULL, NULL })
 
 /* ========================================================================= */
 /* Application Manifest & Lifecycle Types (Defined in .dll / module)         */

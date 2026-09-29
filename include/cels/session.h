@@ -40,6 +40,26 @@
 #define CELS_DATA_ARENA_SIZE 32768u
 #endif
 
+#ifndef CELS_DEFAULT_SLAB_SIZE
+#define CELS_SLAB_16K   (16u * 1024u)
+#define CELS_SLAB_32K   (32u * 1024u)
+#define CELS_SLAB_48K   (48u * 1024u)
+#define CELS_SLAB_64K   (64u * 1024u)
+#define CELS_SLAB_128K  (128u * 1024u)
+#define CELS_SLAB_256K  (256u * 1024u)
+#define CELS_SLAB_512K  (512u * 1024u)
+#define CELS_SLAB_1M    (1024u * 1024u)
+#define CELS_DEFAULT_SLAB_SIZE CELS_SLAB_512K
+#endif
+
+#ifndef CEL_SLAB
+#if defined(_MSC_VER)
+#define CEL_SLAB(name, size) __declspec(align(64)) uint8_t name[size]
+#else
+#define CEL_SLAB(name, size) __attribute__((aligned(64))) uint8_t name[size]
+#endif
+#endif
+
 #ifndef CELS_MAX_CLEANUPS
 #define CELS_MAX_CLEANUPS 4096u
 #endif
@@ -67,68 +87,30 @@
 struct CelsEngine;
 typedef struct CelsEngine CelsEngine;
 typedef struct CelsEngine CelsApp;
-
-/**
- * Memory slab profiles for CelsSession.
- * Fitting small session slabs entirely in L1d cache (16-64KB) eliminates CPU cache stalls.
- * For larger game worlds with hundreds or thousands of entities, scale up to 128K - 4M.
- */
-typedef enum CelsSlabProfile {
-    CELS_SLAB_16K  = 16u * 1024u,   /**< 16 KiB: Embedded & low-power cores (~128 groups) */
-    CELS_SLAB_32K  = 32u * 1024u,   /**< 32 KiB: Standard L1d (Zen 1-3, Intel E-cores, ARM) [DEFAULT] (~256 groups) */
-    CELS_SLAB_48K  = 48u * 1024u,   /**< 48 KiB: Modern high-perf L1d (Intel P-cores, Zen 4/5) (~384 groups) */
-    CELS_SLAB_64K  = 64u * 1024u,   /**< 64 KiB: Extended L1d (Apple Silicon, complex trees) (~512 groups) */
-    CELS_SLAB_128K = 128u * 1024u,  /**< 128 KiB: Mid-scale scenes (~1,024 groups) */
-    CELS_SLAB_256K = 256u * 1024u,  /**< 256 KiB: High-scale scenes (~2,048 groups) */
-    CELS_SLAB_512K = 512u * 1024u,  /**< 512 KiB: Large worlds (~4,096 groups) */
-    CELS_SLAB_1M   = 1024u * 1024u, /**< 1 MiB: Massive scenes (~8,192 groups) */
-    CELS_SLAB_2M   = 2048u * 1024u, /**< 2 MiB: Mega scale (~16,384 groups) */
-    CELS_SLAB_4M   = 4096u * 1024u, /**< 4 MiB: Ultra scale (~32,768 groups) */
-} CelsSlabProfile;
-
-#ifndef CELS_DEFAULT_SLAB_SIZE
-#define CELS_DEFAULT_SLAB_SIZE CELS_SLAB_512K
+#ifndef CELS_SESSION_TYPEDEF_DEFINED
+#define CELS_SESSION_TYPEDEF_DEFINED
+typedef struct CelsSession CelsSession;
+typedef struct CelsSession CEL_Session;
 #endif
 
 /**
- * Macro helper to declare a 64-byte aligned slab buffer for zero-alloc mode.
+ * Options for initializing a CEL_Session.
  */
-#if defined(_MSC_VER)
-#define CEL_SLAB(name, size) __declspec(align(64)) uint8_t name[size]
-#else
-#define CEL_SLAB(name, size) __attribute__((aligned(64))) uint8_t name[size]
-#endif
-
-typedef void (*CelsRootFn)(CelsSession *session);
+typedef struct CelSessionOptions {
+    size_t slabCapacityBytes; /**< Total slab capacity in bytes (e.g. CELS_SLAB_64K). Defaults to 512 KiB if 0. */
+    void  *allocator;         /**< Reserved for custom allocator hook (or NULL for default aligned slab). */
+} CelSessionOptions;
 
 /**
- * Configuration options for initializing a CelsSession.
+ * Backward-compatible session configuration.
  */
 typedef struct CelsSessionConfig {
-    CelsRootFn root;
-    uint32_t   maxDrainIterations;
-    size_t     slabSize;    /**< Total slab size in bytes (e.g. CELS_SLAB_32K). Defaults to 32 KiB if 0. */
-    void      *slab;        /**< Optional user-provided 64-byte aligned buffer (zero-alloc mode). */
-    uint32_t   maxGroups;   /**< Optional max groups. If 0, auto-calculated from slabSize. */
-    struct CelsEngine *engine; /**< Optional host engine owning system modules */
+    size_t     slabSize;           /**< Slab size in bytes. */
+    void      *slab;               /**< Optional user-provided 64-byte aligned buffer. */
+    uint32_t   maxGroups;          /**< Optional max groups. */
+    uint32_t   maxDrainIterations; /**< Maximum recomposition drain passes. */
+    struct CelsEngine *engine;     /**< Optional host engine. */
 } CelsSessionConfig;
-
-/**
- * Lifecycle state callbacks for managed resources stored in slot memory.
- */
-typedef struct CelsLifecycleDesc {
-    size_t size;
-    void (*onCreate)(void *instance, CelsSession *session);
-    void (*onDestroy)(void *instance, CelsSession *session);
-} CelsLifecycleDesc;
-typedef CelsLifecycleDesc CelsObserverDesc;
-
-#define onRemembered onCreate
-#define OnCreated onCreate
-#define OnCreate onCreate
-#define onForgotten onDestroy
-#define OnDestroyed onDestroy
-#define OnDestroy onDestroy
 
 /**
  * Cleanup hook tracking an active lifecycle state instance.
@@ -151,12 +133,14 @@ typedef struct CelsSlotAllocation {
     uint16_t userSize;     /**< Exact requested user type size for schema evolution check */
 } CelsSlotAllocation;
 
-#define CELS_MAX_ATTACHED_COMPOSITIONS 8u
+#define CELS_MAX_ATTACHED_COMPOSITIONS 16u
 
 typedef struct CelsAttachedComposition {
-    uint64_t key;
-    void (*body)(CelsSession *s, uint64_t key);
-    bool (*lifecycleEval)(CelsSession *s);
+    CEL_Id key;
+    void (*body)(void *userData);
+    void *userData;
+    bool (*lifecycleEval)(void *evalCtx);
+    void *evalCtx;
     bool isAttached;
 } CelsAttachedComposition;
 
@@ -182,10 +166,11 @@ typedef struct CelsModuleBinding {
  */
 struct CelsSession {
     uint32_t magic;        /**< CELS_SESSION_MAGIC validation tag */
-    CelsRootFn root;
+    CEL_Id   id;           /**< Unique 64-bit session identifier */
     bool hasComposedOnce;
     bool isRecomposing;
     bool isHotReloadPending;
+    bool isHeapAllocated;
 
     uint32_t currentDepth;
     uint32_t currentGroupIndex;
@@ -220,7 +205,7 @@ struct CelsSession {
     uint32_t dataGapStart;
     uint32_t dataGapEnd;
 
-    /* Reactive state registry */
+    /* Reactive state registry (double-buffered) */
     CelsStateRegistry stateRegistry;
 
     /* Lifecycle state cleanups */
@@ -244,17 +229,74 @@ struct CelsSession {
 };
 
 /* ========================================================================= */
+/* Keyed Session Creation & Registry                                         */
+/* ========================================================================= */
+
+/**
+ * Creates and registers a session by its unique 64-bit ID.
+ *
+ * @param sessionId Unique 64-bit ID (e.g. CEL_ID("SESSION_MAIN")).
+ * @param options   Memory slab and capacity configuration.
+ * @return Pointer to created CEL_Session.
+ */
+CEL_Session *CelSessionCreate(CEL_Id sessionId, const CelSessionOptions *options);
+
+/**
+ * Retrieves a registered session by its unique ID.
+ *
+ * @param sessionId Unique 64-bit ID.
+ * @return Pointer to resolved CEL_Session, or NULL if not found.
+ */
+CEL_Session *cel_session(CEL_Id sessionId);
+
+/**
+ * Returns the currently active ambient CEL_Session bound to the executing thread.
+ *
+ * @return Pointer to active CEL_Session, or NULL outside a session tick.
+ */
+CEL_Session *cel_active_session(void);
+
+/**
+ * Allocates aligned memory from the session's nonmoving data arena.
+ *
+ * @param s    Target session. Non-NULL.
+ * @param size Byte size to allocate.
+ * @return Pointer to aligned arena memory, or NULL on overflow.
+ */
+void *CelsSessionAllocData(CelsSession *s, size_t size);
+
+/**
+ * Remembers addressable reactive state in the session's cache-aligned slab.
+ *
+ * @param s          Target session. Non-NULL.
+ * @param id         Unique 64-bit state identifier.
+ * @param size       Size in bytes of state struct.
+ * @param defaultVal Default values to seed on initial mount.
+ * @return Pointer to persistent state in session slab.
+ */
+void *CelsSessionRememberState(CEL_Session *s, CEL_Id id, size_t size, const void *defaultVal);
+
+/* ========================================================================= */
 /* Attached Composition Functions                                            */
 /* ========================================================================= */
 
-void CelsSessionAttachComposition(CelsSession *s,
-                                  uint64_t key,
-                                  void (*body)(CelsSession *s, uint64_t key),
-                                  bool (*eval)(CelsSession *s));
+void CelsSessionAttachComposition(CEL_Session *s,
+                                  CEL_Id key,
+                                  void (*body)(void *userData),
+                                  void *userData,
+                                  bool (*eval)(void *evalCtx),
+                                  void *evalCtx);
 
-void CelsSessionDetachComposition(CelsSession *s, uint64_t key);
+void CelsSessionDetachComposition(CEL_Session *s, CEL_Id key);
 
-void CelsSessionRegisterLifecycle(CelsSession *s, void *instance, void (*onCreate)(void *instance, CelsSession *s), void (*onDestroy)(void *instance, CelsSession *s));
+void CelsSessionRegisterLifecycle(CEL_Session *s,
+                                  void *instance,
+                                  void (*onCreate)(void *instance, CEL_Session *s),
+                                  void (*onDestroy)(void *instance, CEL_Session *s));
+
+void CelsSessionUpdateLifecycle(CEL_Session *s,
+                                void *instance,
+                                void (*onDestroy)(void *instance, CEL_Session *s));
 
 /* ========================================================================= */
 /* Session Lifecycle Functions                                               */
@@ -269,19 +311,12 @@ void CelsSessionRegisterLifecycle(CelsSession *s, void *instance, void (*onCreat
 void CelsSessionInit(CelsSession *session, const CelsSessionConfig *config);
 
 /**
- * Assigns or replaces the root composable function for the session.
- *
- * @param session Target session. Non-NULL.
- * @param rootFn  Root composable function pointer.
- */
-void CelsSessionSetRoot(CelsSession *session, CelsRootFn rootFn);
-
-/**
- * Tears down a session, releasing all active lifecycle states and observers.
+ * Tears down a session, releasing all active lifecycle cleanups and slab memory.
  *
  * @param session Target session. NULL is safely ignored.
  */
 void CelsSessionDestroy(CelsSession *session);
+void CelSessionDestroy(CEL_Session *session);
 
 /**
  * Executes a recomposition pass over the session tree.
@@ -290,27 +325,25 @@ void CelsSessionDestroy(CelsSession *session);
  * @return CELS_OK or error code.
  */
 CelsResult CelsSessionRecompose(CelsSession *session);
+CelsResult CelSessionRecompose(CEL_Session *session);
+
+/**
+ * Recomposes all registered active sessions.
+ *
+ * @return CELS_OK on success, or the last encountered error code.
+ */
+CelsResult CelsRecomposeAllSessions(void);
+#define cel_recompose_all CelsRecomposeAllSessions
 
 /**
  * Flags all mounted composition groups for re-evaluation on the next recompose pass.
- *
- * Used by dynamic library hot-reload to force execution of newly loaded composable
- * bodies while preserving all slot allocations, cel_remember memory, and
- * reactive state in the session data arena.
  *
  * @param session Target session. Non-NULL.
  */
 void CelsSessionHotReload(CelsSession *session);
 
 /**
- * Registers an engine subsystem module (SDL, Flecs, Audio, etc.) with the session.
- *
- * @param session   Target session. Non-NULL.
- * @param key       Unique 64-bit identifier for the module.
- * @param name      Human-readable module name for diagnostics.
- * @param instance  Pointer to developer-owned module struct.
- * @param onReload  Optional callback invoked after hot reload. May be NULL.
- * @param onDestroy Optional callback invoked on session teardown. May be NULL.
+ * Registers an engine subsystem module with the session.
  */
 void CelsSessionRegisterModule(CelsSession *session,
                               uint64_t key,
@@ -321,10 +354,6 @@ void CelsSessionRegisterModule(CelsSession *session,
 
 /**
  * Retrieves a registered subsystem module pointer by its 64-bit key.
- *
- * @param session Target session, or NULL for current ambient session.
- * @param key     Unique 64-bit module identifier.
- * @return Pointer to module instance, or NULL if not found.
  */
 void *CelsSessionGetModule(const CelsSession *session, uint64_t key);
 
@@ -350,28 +379,15 @@ void CelsPruneSubtreeByKey(CelsSession *session, uint64_t key);
 
 /**
  * Allocates or resolves persistent slot memory in the session's arena.
- *
- * @param session Target session. Non-NULL.
- * @param size    Byte size of memory to resolve.
- * @param initVal Optional pointer to initial seed value (used on fresh mount).
- * @param desc    Optional lifecycle state descriptor (OnCreated/OnDestroyed).
- * @return Pointer to persistent slot memory in session arena.
  */
 void *CelsResolveSlot(CelsSession *session,
                       size_t size,
-                      const void *initVal,
-                      const CelsLifecycleDesc *desc);
+                      const void *initVal);
 
 /**
- * Finds an active lifecycle state or observer instance by its group key.
- *
- * @param session Target session.
- * @param key     Group key.
- * @return Pointer to instance, or NULL if not found.
+ * Finds an active state instance by its key in the session.
  */
 void *CelsGetState(CelsSession *session, uint64_t key);
-void *CelsFindLifecycleState(CelsSession *session, uint64_t key);
-void *CelsFindObserver(CelsSession *session, uint64_t key);
 
 /* ========================================================================= */
 /* Infallible Inline Accessors                                                */

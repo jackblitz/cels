@@ -12,14 +12,14 @@
 /* ========================================================================= */
 
 typedef struct KeyRegistryEntry {
-    uint32_t key;
+    uint64_t key;
     const char *name;
 } KeyRegistryEntry;
 
 static KeyRegistryEntry g_keyRegistry[128];
 static uint32_t g_registryCount = 0;
 
-static void RegisterKey(uint32_t key, const char *name) {
+static void RegisterKey(uint64_t key, const char *name) {
     for (uint32_t i = 0; i < g_registryCount; ++i) {
         if (g_keyRegistry[i].key == key) return;
     }
@@ -28,9 +28,9 @@ static void RegisterKey(uint32_t key, const char *name) {
     }
 }
 
-#define REGISTER_KEY(str) RegisterKey(CEL_KEY(str), str)
+#define REGISTER_KEY(str) RegisterKey(CEL_ID(str), str)
 
-static const char* GetKeyName(uint32_t key) {
+static const char* GetKeyName(uint64_t key) {
     for (uint32_t i = 0; i < g_registryCount; ++i) {
         if (g_keyRegistry[i].key == key) return g_keyRegistry[i].name;
     }
@@ -50,12 +50,12 @@ static inline const CelsSlotGroup* GetGroup(const CelsSession *s, uint32_t logic
 static void PrintNode(const CelsSession *s, uint32_t logicalIdx, const char *prefix, bool isLast) {
     const CelsSlotGroup *g = GetGroup(s, logicalIdx);
 
-    printf("%s%s[%s] (0x%08llX) | slots: %u B | descendants: %u\n",
+    printf("%s%s[%s] (0x%016llX) | slots: %u B | descendants: %u\n",
            prefix,
            isLast ? "\\-- " : "|-- ",
-           GetKeyName((uint32_t)g->key),
+           GetKeyName(g->key),
            (unsigned long long)g->key,
-           g->dataSize,
+           g->slotCount,
            g->groupSize);
 
     char nextPrefix[256];
@@ -77,7 +77,7 @@ static void PrintNode(const CelsSession *s, uint32_t logicalIdx, const char *pre
 static void PrintCompositionTree(const CelsSession *s, const char *title) {
     uint32_t totalGroups = CelsGetLogicalGroupCount(s);
     printf("\n  +-- %s (Active Nodes: %u, Arena: %u B) -------------------+\n",
-           title, totalGroups, s->dataGapStart);
+           title, totalGroups, (unsigned int)s->dataGapStart);
 
     if (totalGroups == 0) {
         printf("  |   [Empty Tree / All Compositions Despawned]\n");
@@ -86,8 +86,8 @@ static void PrintCompositionTree(const CelsSession *s, const char *title) {
     }
 
     const CelsSlotGroup *root = GetGroup(s, 0);
-    printf("  | [%s] (0x%08llX) | descendants: %u | slots: %u B\n",
-           GetKeyName((uint32_t)root->key), (unsigned long long)root->key, root->groupSize, root->dataSize);
+    printf("  | [%s] (0x%016llX) | descendants: %u | slots: %u B\n",
+           GetKeyName(root->key), (unsigned long long)root->key, root->groupSize, root->slotCount);
 
     uint32_t childLogical = 1;
     uint32_t endLogical = 1 + root->groupSize;
@@ -112,42 +112,48 @@ CEL_State(EnemyState) {
     bool isAlive;
 };
 
-CEL_Observer(EnemyTexture) {
+CEL_State(EnemyTexture) {
     int  gpuHandle;
     bool isLoaded;
 };
 
-static void Texture_OnRemembered(EnemyTexture *self, CelsSession *s) {
-    (void)s;
-    self->gpuHandle = 0x55AA;
-    self->isLoaded = true;
-}
-
-static void Texture_OnForgotten(EnemyTexture *self, CelsSession *s) {
-    (void)s;
-    self->gpuHandle = 0;
-    self->isLoaded = false;
-}
-
-CEL_LifeCycle(EnemyLifeCycle, EnemyState) {
-    EnemyState st = cel_watch(it);
-    if (st.hp <= 0 || !st.isAlive) {
-        cel_destroy();
+CEL_Lifecycle(TextureLifecycle, EnemyTexture *self) {
+    mount {
+        self->gpuHandle = 0x55AA;
+        self->isLoaded = true;
+    }
+    unmount {
+        self->gpuHandle = 0;
+        self->isLoaded = false;
     }
 }
 
-static EnemyState g_enemy = { .hp = 100, .isAlive = true };
-
-static void GoblinComposable(CelsSession *s) {
-    CEL_Composition(EnemyState, &g_enemy, EnemyLifeCycle) {
-        cel_remember_observer(s, EnemyTexture, Texture_OnRemembered, Texture_OnForgotten);
-        CEL_Composable(s, CEL_KEY("HealthBar")) {
-            cel_remember(s, int, it->hp);
-        } CEL_Close(s);
-        CEL_Composable(s, CEL_KEY("ArmorBadge")) {
-            cel_remember(s, int, 50);
-        } CEL_Close(s);
+CEL_EvaluateFn(EnemyLifeCycle, void*, ctx) {
+    (void)ctx;
+    const EnemyState *st = cel_get_state(CEL_ID("EnemyState"), EnemyState);
+    if (st != NULL && (st->hp <= 0 || !st->isAlive)) {
+        return false;
     }
+    return true;
+}
+
+CEL_Composable(HealthBar, int, hp) {
+    int *val = cel_remember(int, hp);
+    (void)val;
+}
+
+CEL_Composable(ArmorBadge) {
+    int *val = cel_remember(int, 50);
+    (void)val;
+}
+
+CEL_Composition(GoblinComposable, void *userData) {
+    (void)userData;
+    const EnemyState *st = cel_watch(EnemyState, CEL_ID("EnemyState"));
+    EnemyTexture *tex = cel_remember(EnemyTexture, 0);
+    cel_lifecycle(TextureLifecycle, tex);
+    HealthBar(st ? st->hp : 100);
+    ArmorBadge();
 }
 
 /* Wide & Deep Large Composable Tree */
@@ -157,45 +163,74 @@ CEL_State(DashboardState) {
     int itemCount;
 };
 
-static DashboardState g_dashboard = { .activeTab = 1, .showSidePanel = true, .itemCount = 8 };
+CEL_Composable(Logo) {}
+CEL_Composable(SearchField) {
+    int *v = cel_remember(int, 999);
+    (void)v;
+}
+CEL_Composable(UserAvatar) {}
 
-static void LargeDashboardTree(CelsSession *s) {
-    DashboardState st = cel_watch(s, &g_dashboard);
+CEL_Composable(NavigationBar) {
+    Logo();
+    SearchField();
+    UserAvatar();
+}
 
-    CEL_Composition(s, CEL_KEY("AppRoot")) {
-        CEL_Composable(s, CEL_KEY("NavigationBar")) {
-            CEL_Composable(s, CEL_KEY("Logo")) {} CEL_Close(s);
-            CEL_Composable(s, CEL_KEY("SearchField")) {
-                cel_remember(s, int, 999);
-            } CEL_Close(s);
-            CEL_Composable(s, CEL_KEY("UserAvatar")) {} CEL_Close(s);
-        } CEL_Close(s);
+static void NavButton(int i) {
+    CelsSession *sess = CelsGetCurrentSession();
+    if (CelsEnterComposable(sess, CelsKeyIndex(CEL_ID("NavButton"), (uint64_t)i))) {
+        int *val = cel_remember(int, i * 10);
+        (void)val;
+    }
+    CelsExitGroup(sess);
+}
 
-        CEL_Composable(s, CEL_KEY("WorkspaceArea")) {
-            if (st.showSidePanel) {
-                CEL_Composable(s, CEL_KEY("SidebarPanel")) {
-                    for (int i = 0; i < 4; ++i) {
-                        CEL_Composable(s, CEL_KeyIndex(CEL_KEY("NavButton"), (uint64_t)i)) {
-                            cel_remember(s, int, i * 10);
-                        } CEL_Close(s);
-                    }
-                } CEL_Close(s);
-            }
+CEL_Composable(SidebarPanel) {
+    for (int i = 0; i < 4; ++i) {
+        NavButton(i);
+    }
+}
 
-            CEL_Composable(s, CEL_KEY("MainContentPanel")) {
-                CEL_Composable(s, CEL_KEY("DataGridHeader")) {} CEL_Close(s);
-                for (int i = 0; i < st.itemCount; ++i) {
-                    CEL_Composable(s, CEL_KeyIndex(CEL_KEY("GridRow"), (uint64_t)i)) {
-                        cel_remember(s, int, i * 100 + st.activeTab);
-                    } CEL_Close(s);
-                }
-            } CEL_Close(s);
-        } CEL_Close(s);
+CEL_Composable(DataGridHeader) {}
 
-        CEL_Composable(s, CEL_KEY("StatusBar")) {
-            cel_remember(s, int, st.itemCount);
-        } CEL_Close(s);
-    } CEL_Close(s);
+static void GridRow(int i, int activeTab) {
+    CelsSession *sess = CelsGetCurrentSession();
+    if (CelsEnterComposable(sess, CelsKeyIndex(CEL_ID("GridRow"), (uint64_t)i))) {
+        int *val = cel_remember(int, i * 100 + activeTab);
+        (void)val;
+    }
+    CelsExitGroup(sess);
+}
+
+CEL_Composable(MainContentPanel, int, itemCount, int, activeTab) {
+    DataGridHeader();
+    for (int i = 0; i < itemCount; ++i) {
+        GridRow(i, activeTab);
+    }
+}
+
+CEL_Composable(WorkspaceArea, bool, showSidePanel, int, itemCount, int, activeTab) {
+    if (showSidePanel) {
+        SidebarPanel();
+    }
+    MainContentPanel(itemCount, activeTab);
+}
+
+CEL_Composable(StatusBar, int, count) {
+    int *v = cel_remember(int, count);
+    (void)v;
+}
+
+CEL_Composition(LargeDashboardTree, void *userData) {
+    (void)userData;
+    const DashboardState *st = cel_watch(DashboardState, CEL_ID("DashboardState"));
+    int activeTab = st ? st->activeTab : 1;
+    bool showSidePanel = st ? st->showSidePanel : true;
+    int itemCount = st ? st->itemCount : 8;
+
+    NavigationBar();
+    WorkspaceArea(showSidePanel, itemCount, activeTab);
+    StatusBar(itemCount);
 }
 
 /* ========================================================================= */
@@ -240,9 +275,9 @@ static BenchmarkResult RunBenchMultiSession(size_t sessions, size_t iterations, 
     // Allocate session instances
     CelsSession *sessionPool = (CelsSession *)malloc(sessions * sizeof(CelsSession));
     for (size_t s = 0; s < sessions; ++s) {
-        CelsSessionInit(&sessionPool[s], &(CelsSessionConfig){
-            .root = LargeDashboardTree
-        });
+        CelsSessionInit(&sessionPool[s], NULL);
+        cel_session_remember_state(&sessionPool[s], CEL_ID("DashboardState"), DashboardState, ((DashboardState){ .activeTab = 1, .showSidePanel = true, .itemCount = 8 }));
+        cel_attach(&sessionPool[s], CEL_ID("AppRoot"), LargeDashboardTree);
     }
 
     if (showTree) {
@@ -253,10 +288,13 @@ static BenchmarkResult RunBenchMultiSession(size_t sessions, size_t iterations, 
     uint64_t startTotal = BenchGetTimeNs();
 
     for (size_t it = 0; it < iterations; ++it) {
-        size_t sIdx = it % sessions;
         uint64_t t0 = BenchGetTimeNs();
+        size_t sIdx = it % sessions;
 
-        g_dashboard.activeTab = (int)(it % 5);
+        // Mutate session's local state
+        cel_mutate(&sessionPool[sIdx], CEL_ID("DashboardState"), DashboardState) {
+            this->activeTab = (int)(it % 4);
+        }
         CelsSessionRecompose(&sessionPool[sIdx]);
 
         uint64_t t1 = BenchGetTimeNs();
@@ -283,7 +321,7 @@ static BenchmarkResult RunBenchMultiSession(size_t sessions, size_t iterations, 
 }
 
 /**
- * Workload 2: Lifecycle Attach, Mutation & cel_destroy Churn
+ * Workload 2: Lifecycle Continuous Mount, State Churn, and cel_destroy()
  */
 static BenchmarkResult RunBenchLifecycleChurn(size_t iterations, bool showTree) {
     BenchmarkResult res;
@@ -299,18 +337,16 @@ static BenchmarkResult RunBenchLifecycleChurn(size_t iterations, bool showTree) 
     uint64_t *samples = (uint64_t *)malloc(iterations * sizeof(uint64_t));
 
     CelsSession session;
-    CelsSessionInit(&session, &(CelsSessionConfig){
-        .root = GoblinComposable
-    });
+    CelsSessionInit(&session, NULL);
+    cel_session_remember_state(&session, CEL_ID("EnemyState"), EnemyState, ((EnemyState){ .hp = 100, .isAlive = true }));
+    cel_attach(&session, CEL_ID("Goblin"), GoblinComposable, NULL, EnemyLifeCycle);
 
     if (showTree) {
-        g_enemy.hp = 100;
-        g_enemy.isAlive = true;
         CelsSessionRecompose(&session);
         PrintCompositionTree(&session, "Lifecycle Active Goblin (HP = 100)");
 
-        printf("  [Lifecycle Trigger] Setting Goblin HP = 0 -> triggers cel_destroy()...\n");
-        cel_mutate(&session, &g_enemy) {
+        printf("  [Lifecycle Trigger] Setting Goblin HP = 0 -> triggers composition pruning...\n");
+        cel_mutate(&session, CEL_ID("EnemyState"), EnemyState) {
             this->hp = 0;
         }
         CelsSessionRecompose(&session);
@@ -323,12 +359,16 @@ static BenchmarkResult RunBenchLifecycleChurn(size_t iterations, bool showTree) 
         uint64_t t0 = BenchGetTimeNs();
 
         // 1. Mount entity
-        g_enemy.hp = 100;
-        g_enemy.isAlive = true;
+        cel_mutate(&session, CEL_ID("EnemyState"), EnemyState) {
+            this->hp = 100;
+            this->isAlive = true;
+        }
         CelsSessionRecompose(&session);
 
-        // 2. Kill entity via cel_destroy
-        g_enemy.hp = 0;
+        // 2. Kill entity via evaluation predicate
+        cel_mutate(&session, CEL_ID("EnemyState"), EnemyState) {
+            this->hp = 0;
+        }
         CelsSessionRecompose(&session);
 
         uint64_t t1 = BenchGetTimeNs();
@@ -369,12 +409,10 @@ static BenchmarkResult RunBenchLargeTree(size_t iterations, bool showTree) {
     uint64_t *samples = (uint64_t *)malloc(iterations * sizeof(uint64_t));
 
     CelsSession session;
-    CelsSessionInit(&session, &(CelsSessionConfig){
-        .root = LargeDashboardTree
-    });
+    CelsSessionInit(&session, NULL);
+    cel_session_remember_state(&session, CEL_ID("DashboardState"), DashboardState, ((DashboardState){ .activeTab = 1, .showSidePanel = true, .itemCount = 16 }));
+    cel_attach(&session, CEL_ID("AppRoot"), LargeDashboardTree);
 
-    g_dashboard.itemCount = 16;
-    g_dashboard.showSidePanel = true;
     CelsSessionRecompose(&session);
 
     if (showTree) {
@@ -387,7 +425,7 @@ static BenchmarkResult RunBenchLargeTree(size_t iterations, bool showTree) {
         uint64_t t0 = BenchGetTimeNs();
 
         // Mutate middle node
-        cel_mutate(&session, &g_dashboard) {
+        cel_mutate(&session, CEL_ID("DashboardState"), DashboardState) {
             this->activeTab = (int)(it % 4);
             this->showSidePanel = ((it % 2) == 0);
         }
@@ -430,9 +468,9 @@ static BenchmarkResult RunBenchSteadyStateQuietSkip(size_t iterations) {
     uint64_t *samples = (uint64_t *)malloc(iterations * sizeof(uint64_t));
 
     CelsSession session;
-    CelsSessionInit(&session, &(CelsSessionConfig){
-        .root = LargeDashboardTree
-    });
+    CelsSessionInit(&session, NULL);
+    cel_session_remember_state(&session, CEL_ID("DashboardState"), DashboardState, ((DashboardState){ .activeTab = 1, .showSidePanel = true, .itemCount = 8 }));
+    cel_attach(&session, CEL_ID("AppRoot"), LargeDashboardTree);
     CelsSessionRecompose(&session);
 
     uint64_t startTotal = BenchGetTimeNs();
@@ -696,4 +734,3 @@ int main(int argc, char **argv) {
 
     return 0;
 }
-

@@ -1,5 +1,6 @@
 #include "cels/session.h"
 #include "cels/engine.h"
+#include "cels/module.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -168,7 +169,8 @@ static void ReleaseSlotsForGroup(CelsSession *s, uint32_t groupId)
         const uintptr_t first = (uintptr_t)&s->dataArena[slot->arenaOffset];
         const uintptr_t end = first + slot->size;
 
-        CelsStateRegistryReleaseRange(&s->stateRegistry, first, end);
+        (void)first;
+        (void)end;
 
         s->dataGapStart -= slot->size;
         --s->slotCount;
@@ -217,6 +219,114 @@ static void DrainInvalidationQueue(CelsSession *s)
             }
         }
     }
+}
+
+#ifndef CELS_MAX_SESSIONS
+#define CELS_MAX_SESSIONS 32u
+#endif
+
+typedef struct CelsSessionRegistryEntry {
+    CEL_Id id;
+    CEL_Session *session;
+} CelsSessionRegistryEntry;
+
+static CelsSessionRegistryEntry s_sessionRegistry[CELS_MAX_SESSIONS];
+static uint32_t s_sessionRegistryCount = 0;
+
+CEL_Session *CelSessionCreate(CEL_Id sessionId, const CelSessionOptions *options)
+{
+    CEL_Session *session = (CEL_Session *)calloc(1, sizeof(CEL_Session));
+    assert(session != NULL);
+    CelsSessionConfig config = {
+        .slabSize = options ? options->slabCapacityBytes : 0
+    };
+    CelsSessionInit(session, &config);
+    session->id = sessionId;
+    session->isHeapAllocated = true;
+
+    /* Register in session table */
+    if (s_sessionRegistryCount < CELS_MAX_SESSIONS) {
+        s_sessionRegistry[s_sessionRegistryCount++] = (CelsSessionRegistryEntry){
+            .id = sessionId,
+            .session = session
+        };
+    }
+    return session;
+}
+
+CEL_Session *cel_session(CEL_Id sessionId)
+{
+    for (uint32_t i = 0; i < s_sessionRegistryCount; ++i) {
+        if (s_sessionRegistry[i].id == sessionId) {
+            return s_sessionRegistry[i].session;
+        }
+    }
+    return NULL;
+}
+
+CEL_Session *cel_active_session(void)
+{
+    return CelsGetCurrentSession();
+}
+
+void CelSessionDestroy(CEL_Session *session)
+{
+    if (session == NULL) return;
+    for (uint32_t i = 0; i < s_sessionRegistryCount; ++i) {
+        if (s_sessionRegistry[i].session == session) {
+            --s_sessionRegistryCount;
+            memmove(&s_sessionRegistry[i],
+                    &s_sessionRegistry[i + 1],
+                    (s_sessionRegistryCount - i) * sizeof(s_sessionRegistry[0]));
+            break;
+        }
+    }
+    bool wasHeap = session->isHeapAllocated;
+    CelsSessionDestroy(session);
+    if (wasHeap) {
+        free(session);
+    }
+}
+
+CelsResult CelSessionRecompose(CEL_Session *session)
+{
+    return CelsSessionRecompose(session);
+}
+
+CelsResult CelsRecomposeAllSessions(void)
+{
+    CelsResult lastRes = CELS_OK;
+    for (uint32_t i = 0; i < s_sessionRegistryCount; ++i) {
+        if (s_sessionRegistry[i].session != NULL) {
+            CelsResult res = CelsSessionRecompose(s_sessionRegistry[i].session);
+            if (res != CELS_OK) {
+                lastRes = res;
+            }
+        }
+    }
+    return lastRes;
+}
+
+void *CelsSessionAllocData(CelsSession *s, size_t size)
+{
+    if (s == NULL || size == 0) return NULL;
+    const size_t aligned = (size + CELS_CACHE_LINE_SIZE - 1u) & ~(CELS_CACHE_LINE_SIZE - 1u);
+    if (s->dataGapStart + aligned > s->dataGapEnd) {
+        cel_print_log(ERROR, "[CELS ERROR] Out of session memory: Data arena overflow in slab.\n");
+        return NULL;
+    }
+    s->dataGapEnd -= (uint32_t)aligned;
+    return &s->dataArena[s->dataGapEnd];
+}
+
+void *CelsSessionRememberState(CEL_Session *s, CEL_Id id, size_t size, const void *defaultVal)
+{
+    if (s == NULL) {
+        s = CelsGetCurrentSession();
+    }
+    if (s == NULL || id == 0) return NULL;
+    CelsStateCell *cell = CelsStateGetOrCreateCell(s, id, size, defaultVal);
+    return cell ? cell->frontBuffer : NULL;
 }
 
 /**
@@ -286,10 +396,10 @@ void CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
     s->nextGroupId = 1;
 
     s->magic = CELS_SESSION_MAGIC;
-    s->root = config ? config->root : NULL;
     s->engine = config ? config->engine : NULL;
     s->hasComposedOnce = false;
     s->isHotReloadPending = false;
+    s->isHeapAllocated = false;
     s->fallbackModuleCount = 0;
 
     s->maxDrainIterations = (config && config->maxDrainIterations > 0)
@@ -297,18 +407,6 @@ void CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
         : CELS_MAX_DRAIN_ITERATIONS;
 
     CelsStateRegistryInit(&s->stateRegistry);
-}
-
-/**
- * Assigns or replaces the root composable function for the session.
- *
- * @param s      Target session. Non-NULL.
- * @param rootFn Root composable callback function.
- */
-void CelsSessionSetRoot(CelsSession *s, CelsRootFn rootFn)
-{
-    assert(s != NULL);
-    s->root = rootFn;
 }
 
 /**
@@ -364,9 +462,12 @@ void CelsSessionDestroy(CelsSession *s)
  * @param eval     Lifecycle evaluator function pointer. May be NULL.
  * @param statePtr Optional user state pointer passed to eval. May be NULL.
  */
-void CelsSessionAttachComposition(CelsSession *s, uint64_t key,
-                                  void (*body)(CelsSession *s, uint64_t key),
-                                  bool (*eval)(CelsSession *s))
+void CelsSessionAttachComposition(CEL_Session *s,
+                                  CEL_Id key,
+                                  void (*body)(void *userData),
+                                  void *userData,
+                                  bool (*eval)(void *evalCtx),
+                                  void *evalCtx)
 {
     assert(s != NULL);
     assert(body != NULL);
@@ -374,34 +475,31 @@ void CelsSessionAttachComposition(CelsSession *s, uint64_t key,
     for (uint32_t i = 0; i < s->attachedCount; ++i) {
         if (s->attachedCompositions[i].key == key) {
             s->attachedCompositions[i].body = body;
+            s->attachedCompositions[i].userData = userData;
             s->attachedCompositions[i].lifecycleEval = eval;
+            s->attachedCompositions[i].evalCtx = evalCtx;
             s->attachedCompositions[i].isAttached = true;
             return;
         }
     }
 
     if (s->attachedCount >= CELS_MAX_ATTACHED_COMPOSITIONS) {
-        fprintf(stderr,
-                "[CELS ERROR] Out of session memory: Exceeded CELS_MAX_ATTACHED_COMPOSITIONS (%u).\n",
-                CELS_MAX_ATTACHED_COMPOSITIONS);
-        // assert(s->attachedCount < CELS_MAX_ATTACHED_COMPOSITIONS && "Exceeded CELS_MAX_ATTACHED_COMPOSITIONS");
-        if (s->attachedCount >= CELS_MAX_ATTACHED_COMPOSITIONS) {
-            fprintf(stderr, "[CELS ERROR] Exceeded CELS_MAX_ATTACHED_COMPOSITIONS\n");
-            return;
-        }
+        cel_print_log(ERROR, "[CELS ERROR] Exceeded CELS_MAX_ATTACHED_COMPOSITIONS\n");
         return;
     }
     s->attachedCompositions[s->attachedCount++] = (CelsAttachedComposition){
         .key = key,
         .body = body,
+        .userData = userData,
         .lifecycleEval = eval,
+        .evalCtx = evalCtx,
         .isAttached = true
     };
 }
 
 void CelsSessionRegisterLifecycle(CelsSession *s, void *instance, void (*onCreate)(void *, CelsSession *), void (*onDestroy)(void *, CelsSession *))
 {
-    if (s == NULL || instance == NULL || s->currentDepth == 0) return;
+    if (s == NULL || s->currentDepth == 0) return;
 
     CelsSlotGroup *const group = CelsGetGroup(s, s->currentGroupIndex);
     
@@ -424,6 +522,27 @@ void CelsSessionRegisterLifecycle(CelsSession *s, void *instance, void (*onCreat
     }
 }
 
+void CelsSessionUpdateLifecycle(CelsSession *s, void *instance, void (*onDestroy)(void *, CelsSession *))
+{
+    if (s == NULL || s->currentDepth == 0) return;
+
+    CelsSlotGroup *const group = CelsGetGroup(s, s->currentGroupIndex);
+    const uint32_t gid = (uint32_t)group->userData;
+    const uint64_t key = group->key;
+
+    for (uint32_t i = 0; i < s->cleanupCount; ++i) {
+        if (s->cleanups[i].groupId == gid || s->cleanups[i].groupKey == key) {
+            s->cleanups[i].groupId = gid;
+            s->cleanups[i].groupKey = key;
+            s->cleanups[i].instance = instance;
+            s->cleanups[i].onDestroy = onDestroy;
+            return;
+        }
+    }
+
+    CelsSessionRegisterLifecycle(s, instance, NULL, onDestroy);
+}
+
 /**
  * Detaches an attached composition from the session.
  *
@@ -439,7 +558,9 @@ void CelsSessionDetachComposition(CelsSession *s, uint64_t key)
         if (s->attachedCompositions[i].key == key) {
             s->attachedCompositions[i].isAttached = false;
             s->attachedCompositions[i].body = NULL;
+            s->attachedCompositions[i].userData = NULL;
             s->attachedCompositions[i].lifecycleEval = NULL;
+            s->attachedCompositions[i].evalCtx = NULL;
             return;
         }
     }
@@ -458,11 +579,22 @@ void CelsSessionDetachComposition(CelsSession *s, uint64_t key)
 CelsResult CelsSessionRecompose(CelsSession *s)
 {
     assert(s != NULL);
-    if (s->root == NULL && s->attachedCount == 0) {
+    if (s->attachedCount == 0) {
         return CELS_ERROR_INVALID_STATE;
     }
 
+    bool hasDirtyState = false;
+    for (uint32_t i = 0; i < s->stateRegistry.cellCount; ++i) {
+        if (s->stateRegistry.cells[i].inUse && s->stateRegistry.cells[i].isDirty) {
+            hasDirtyState = true;
+            break;
+        }
+    }
+
     if (s->hasComposedOnce && s->queueCount == 0 && !s->isHotReloadPending) {
+        if (hasDirtyState) {
+            CelsStatePublishDirty(s);
+        }
         return CELS_OK;
     }
     s->isHotReloadPending = false;
@@ -472,6 +604,9 @@ CelsResult CelsSessionRecompose(CelsSession *s)
 
     uint32_t iterations = 0;
     s->isRecomposing = true;
+
+    /* Publish double-buffered state snapshots at frame boundary before evaluation */
+    CelsStatePublishDirty(s);
 
     do {
         if (++iterations > s->maxDrainIterations) {
@@ -486,10 +621,6 @@ CelsResult CelsSessionRecompose(CelsSession *s)
         s->currentSlotOffset = 0;
         s->logicalCursor = 0;
 
-        if (s->root != NULL) {
-            s->root(s);
-        }
-
         for (uint32_t i = 0; i < s->attachedCount; ++i) {
             CelsAttachedComposition *const comp = &s->attachedCompositions[i];
             if (!comp->isAttached) {
@@ -498,16 +629,24 @@ CelsResult CelsSessionRecompose(CelsSession *s)
 
             bool alive = true;
             if (comp->lifecycleEval != NULL) {
-                alive = comp->lifecycleEval(s);
+                alive = comp->lifecycleEval(comp->evalCtx);
             }
 
             if (alive) {
                 if (CelsEnterComposition(s, comp->key)) {
-                    comp->body(s, comp->key);
+                    comp->body(comp->userData);
                 }
                 CelsExitGroup(s);
             } else {
                 CelsPruneSubtreeByKey(s, comp->key);
+                if (s->engine != NULL && s == &s->engine->session) {
+                    uint64_t rootKey = (s->engine->appModule != NULL && s->engine->appModule->attachedKey != 0)
+                        ? s->engine->appModule->attachedKey
+                        : (s->attachedCount > 0 ? s->attachedCompositions[0].key : 0);
+                    if (comp->key == rootKey) {
+                        s->engine->shouldQuit = true;
+                    }
+                }
             }
         }
 
@@ -520,6 +659,9 @@ CelsResult CelsSessionRecompose(CelsSession *s)
         }
 
     } while (s->queueCount > 0);
+
+    /* Publish double-buffered state snapshots at frame boundary */
+    CelsStatePublishDirty(s);
 
     s->hasComposedOnce = true;
     s->isRecomposing = false;
@@ -725,8 +867,8 @@ bool CelsEnterComposition(CelsSession *s, uint64_t rootKey)
             .key = rootKey,
             .userData = s->nextGroupId++,
             .parentIndex = 0,
-            .dataOffset = 0,
-            .dataSize = 0,
+            .slotIndex = 0,
+            .slotCount = 0,
             .groupSize = 0,
             .nodeCount = 0,
             .flags = CELS_FLAG_FRESH_MOUNT
@@ -873,8 +1015,8 @@ bool CelsEnterComposable(CelsSession *s, uint64_t key)
         .key = key,
         .userData = s->nextGroupId++,
         .parentIndex = parentIdx,
-        .dataOffset = 0,
-        .dataSize = 0,
+        .slotIndex = 0,
+        .slotCount = 0,
         .groupSize = 0,
         .nodeCount = 0,
         .flags = CELS_FLAG_FRESH_MOUNT
@@ -934,7 +1076,7 @@ void CelsExitGroup(CelsSession *s)
 
         CelsSlotGroup *const g = CelsGetGroup(s, groupIdx);
         if (g->flags & CELS_FLAG_FRESH_MOUNT) {
-            g->dataSize = (uint16_t)s->currentSlotOffset;
+            g->slotCount = (uint16_t)s->currentSlotOffset;
             g->flags &= ~CELS_FLAG_FRESH_MOUNT;
         }
         assert(g->groupSize == (s->logicalCursor - 1) - groupIdx);
@@ -960,8 +1102,7 @@ void CelsExitGroup(CelsSession *s)
  * @param desc    Optional lifecycle descriptor (onCreate/onDestroy). May be NULL.
  * @return Pointer to persistent slot memory in session data arena, or NULL on overflow.
  */
-void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal,
-                      const CelsLifecycleDesc *desc)
+void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal)
 {
     assert(s->currentDepth > 0);
     CelsSlotGroup *const group = CelsGetGroup(s, s->currentGroupIndex);
@@ -1003,14 +1144,14 @@ void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal,
             }
         }
 
-        if (offset + alignedSize > s->dataArenaSize) {
+        if (offset + alignedSize > s->dataGapEnd) {
             static bool printed = false;
             if (!printed) {
                 cel_print_log(ERROR,
-                        "[CELS ERROR] Out of session memory: Slot data arena overflow (requested: %zu B, used: %u B, arena capacity: %zu B in %zu-byte slab).\n"
+                        "[CELS ERROR] Out of session memory: Slot data arena overflow (requested: %zu B, used: %u B, arena capacity: %u B in %zu-byte slab).\n"
                         "             Consider increasing slabSize (e.g. CELS_SLAB_48K or CELS_SLAB_64K).\n"
                         "             (Further identical allocation errors will be suppressed)",
-                        alignedSize, s->dataGapStart, s->dataArenaSize, s->slabSize);
+                        alignedSize, s->dataGapStart, s->dataGapEnd, s->slabSize);
                 printed = true;
             }
             return NULL;
@@ -1030,7 +1171,7 @@ void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal,
         ++s->slotCount;
 
         if (s->currentSlotOffset == 0) {
-            group->dataOffset = offset;
+            group->slotIndex = offset;
         }
 
         uint8_t *const slotPtr = &s->dataArena[offset];
@@ -1040,25 +1181,6 @@ void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal,
             memcpy(slotPtr, initVal, size);
         } else {
             memset(slotPtr, 0, size);
-        }
-
-        if (desc != NULL) {
-            if (s->cleanupCount >= CELS_MAX_CLEANUPS) {
-                fprintf(stderr,
-                        "[CELS ERROR] Out of session memory: Cleanup hook capacity exceeded (%u / %u).\n",
-                        s->cleanupCount, CELS_MAX_CLEANUPS);
-                // assert(s->cleanupCount < CELS_MAX_CLEANUPS && "CELS_ERROR_CLEANUP_OVERFLOW");
-                return NULL;
-            }
-            s->cleanups[s->cleanupCount++] = (CelsCleanupHook){
-                .groupKey = group->key,
-                .groupId = (uint32_t)group->userData,
-                .instance = slotPtr,
-                .onDestroy = desc->onDestroy
-            };
-            if (desc->onCreate != NULL) {
-                desc->onCreate(slotPtr, s);
-            }
         }
 
         s->currentSlotOffset += (uint32_t)alignedSize;
@@ -1087,17 +1209,7 @@ void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal,
                 FireCleanupsForGroup(s, (uint32_t)group->userData);
                 ReleaseSlotsForGroup(s, (uint32_t)group->userData);
                 group->flags |= CELS_FLAG_FRESH_MOUNT;
-                s->currentSlotOffset = 0;
-                return CelsResolveSlot(s, size, initVal, desc);
-            }
-            if (desc != NULL && desc->onDestroy != NULL) {
-                for (uint32_t c = 0; c < s->cleanupCount; ++c) {
-                    if (s->cleanups[c].groupId == (uint32_t)group->userData
-                        && s->cleanups[c].instance == (void*)&s->dataArena[slot->arenaOffset]) {
-                        s->cleanups[c].onDestroy = desc->onDestroy;
-                        break;
-                    }
-                }
+                return CelsResolveSlot(s, size, initVal);
             }
             s->currentSlotOffset += (uint32_t)alignedSize;
             return &s->dataArena[slot->arenaOffset];
@@ -1121,20 +1233,22 @@ void *CelsResolveSlot(CelsSession *s, size_t size, const void *initVal,
 void *CelsGetState(CelsSession *s, uint64_t key)
 {
     if (s == NULL) {
+        s = CelsGetCurrentSession();
+    }
+    if (s == NULL || key == 0) {
         return NULL;
     }
 
-    /* 1. Check active cleanups (lifecycle states) */
+    /* 1. Check double-buffered reactive state registry */
+    CelsStateCell *cell = CelsStateRegistryFindCell(&s->stateRegistry, key);
+    if (cell != NULL && cell->inUse) {
+        return cell->frontBuffer;
+    }
+
+    /* 2. Check active cleanups (lifecycle states) */
     for (uint32_t i = 0; i < s->cleanupCount; ++i) {
         if (s->cleanups[i].groupKey == key) {
             return s->cleanups[i].instance;
-        }
-    }
-
-    /* 2. Check attached compositions with matching key and state pointer */
-    for (uint32_t i = 0; i < s->attachedCount; ++i) {
-        if (s->attachedCompositions[i].key == key && s->attachedCompositions[i].statePtr != NULL) {
-            return s->attachedCompositions[i].statePtr;
         }
     }
 
@@ -1148,28 +1262,4 @@ void *CelsGetState(CelsSession *s, uint64_t key)
     }
 
     return NULL;
-}
-
-/**
- * Alias for CelsGetState for backwards compatibility.
- *
- * @param s   Target session. May be NULL.
- * @param key Callsite key of the composition group.
- * @return Pointer to state struct, or NULL if not found.
- */
-void *CelsFindLifecycleState(CelsSession *s, uint64_t key)
-{
-    return CelsGetState(s, key);
-}
-
-/**
- * Alias for CelsGetState for backwards compatibility.
- *
- * @param s   Target session. May be NULL.
- * @param key Callsite key of the composition group.
- * @return Pointer to state struct, or NULL if not found.
- */
-void *CelsFindObserver(CelsSession *s, uint64_t key)
-{
-    return CelsGetState(s, key);
 }

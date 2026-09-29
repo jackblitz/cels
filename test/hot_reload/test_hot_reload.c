@@ -26,13 +26,13 @@ CEL_Composable(HotWidget, HotState*, state) {
     (*localCounter)++;
     s_rememberedCurrent = *localCounter;
 
-    HotState val = cel_watch(state);
-    (void)val;
+    const HotState *val = cel_watch(HotState, CEL_ID("HotApp"));
+    if (!val) val = state;
 }
 
-CEL_Composition(HotApp, key) {
-    HotState init = { .value = 10, .revision = 1 };
-    HotState *state = cel_lifecycle_state(init, NULL, NULL);
+CEL_Composition(HotApp, void *userData) {
+    (void)userData;
+    HotState *state = cel_remember_state(CEL_ID("HotApp"), HotState, ((HotState){ .value = 10, .revision = 1 }));
     HotWidget(state);
 }
 
@@ -48,7 +48,7 @@ static void TestHotReloadInvalidation(void)
     CelsSession session;
     CelsSessionInit(&session, NULL);
 
-    CEL_Attach(&session, HotApp, CEL_None);
+    cel_attach(&session, CEL_ID("HotApp"), HotApp);
 
     /* Pass 1: Fresh mount */
     assert(CelsSessionRecompose(&session) == CELS_OK);
@@ -91,17 +91,17 @@ static void TestHotReloadStateRetention(void)
 
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    CEL_Attach(&session, HotApp, CEL_None);
+    cel_attach(&session, CEL_ID("HotApp"), HotApp);
 
     CelsSessionRecompose(&session);
     assert(s_rememberedCurrent == 43);
 
-    HotState *state = CEL_GetState(&session, CEL_KEY("HotApp"), HotState);
+    const HotState *state = cel_get_state(&session, CEL_ID("HotApp"), HotState);
     assert(state != NULL);
     assert(state->value == 10);
 
     /* Mutate state before hot reload */
-    cel_mutate(&session, state) {
+    cel_mutate(&session, CEL_ID("HotApp"), HotState) {
         this->value = 999;
         this->revision = 5;
     }
@@ -114,7 +114,7 @@ static void TestHotReloadStateRetention(void)
     CelsSessionRecompose(&session);
 
     /* State must STILL be 999 across hot reload */
-    HotState *retainedState = CEL_GetState(&session, CEL_KEY("HotApp"), HotState);
+    const HotState *retainedState = cel_get_state(&session, CEL_ID("HotApp"), HotState);
     assert(retainedState != NULL);
     assert(retainedState->value == 999);
     assert(retainedState->revision == 5);
@@ -131,7 +131,7 @@ static void TestHotReloadSchemaEvolution(void)
 
     /* Simulate mounting a group with a 4-byte slot */
     assert(CelsEnterComposition(&session, 0x1234));
-    int *slotA = (int *)CelsResolveSlot(&session, sizeof(int), &(int){ 10 }, NULL);
+    int *slotA = (int *)CelsResolveSlot(&session, sizeof(int), &(int){ 10 });
     assert(slotA != NULL && *slotA == 10);
     CelsExitGroup(&session);
 
@@ -141,8 +141,7 @@ static void TestHotReloadSchemaEvolution(void)
     assert(CelsEnterComposition(&session, 0x1234));
     uint64_t *slotB = (uint64_t *)CelsResolveSlot(&session,
                                                   sizeof(uint64_t),
-                                                  &(uint64_t){ 999999ULL },
-                                                  NULL);
+                                                  &(uint64_t){ 999999ULL });
     assert(slotB != NULL);
     assert(*slotB == 999999ULL);
     CelsExitGroup(&session);
@@ -177,7 +176,7 @@ static void TestModuleRegistry(void)
     s_flecsDestroyCount = 0;
 
     CelsEngine engine;
-    CelsEngineInit(&engine, NULL, NULL);
+    CelsEngineInit(&engine, NULL);
 
     SDLTestModule sdl = {
         .windowWidth = 1920,
@@ -223,7 +222,8 @@ CEL_Module(CustomAppTestModule) {
 static int s_testAppStartFired = 0;
 static int s_testAppEndFired = 0;
 
-CEL_Composition(TestAppRoot, key) {
+CEL_Composition(TestAppRoot, void *userData) {
+    (void)userData;
     CustomAppTestModule *mod = CEL_GetModule(CustomAppTestModule);
     assert(mod != NULL);
     assert(mod->value == 4242);
@@ -292,7 +292,7 @@ static void TestDynamicAppLoader(void)
     }
 
     CelsEngine engine;
-    CelsEngineInit(&engine, NULL, NULL);
+    CelsEngineInit(&engine, NULL);
 
     CelsAppModule mod;
     bool loaded = CelsAppModuleLoad(&mod, foundPath, &engine.session);

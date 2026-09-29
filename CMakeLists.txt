@@ -86,20 +86,16 @@ if(CELS_BUILD_EXAMPLES)
     cels_add_application(
         HOST cel_host
         APP cel_app
-        HOST_SOURCES examples/host.c
+        HOST_SOURCES
+            examples/host.c
         APP_SOURCES
-            examples/app.c
-            examples/window.c
+            examples/app/app.c
+            examples/app/composition/window.c
+            examples/app/composition/window_content.c
         INCLUDES
-            ${CMAKE_CURRENT_SOURCE_DIR}/examples
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/app
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/app/composition
     )
-
-    # Application Rebuild Script Runner (Triggered by CLion 'Play' Button on cel_app)
-    add_executable(build_app
-        scripts/build_app.c
-    )
-    target_include_directories(build_app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/scripts)
-    set_target_properties(build_app PROPERTIES EXCLUDE_FROM_ALL TRUE)
 endif()
 
 # =============================================================================
