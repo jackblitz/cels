@@ -116,7 +116,7 @@ To pass staged commands across threads (e.g. main thread UI -> render/physics wo
 
 ## 6. Slot Memory Unmount Cleanups
 
-To trigger cleanup when a composable leaves the tree:
+To trigger cleanup when a composable leaves the tree, use `cel_remember` with an optional 3rd argument for the destructor callback:
 
 ```c
 static void OnResourceUnmount(void *ptr, CelsSession *session) {
@@ -125,12 +125,12 @@ static void OnResourceUnmount(void *ptr, CelsSession *session) {
     cel_stage_delete(*resId);
 }
 
-/* Method 1: cel_remember_cleanup */
-uint64_t *res = cel_remember_cleanup(uint64_t, initialId, OnResourceUnmount);
+/* With unmount cleanup: */
+uint64_t *res = cel_remember(uint64_t, initialId, OnResourceUnmount);
 
-/* Method 2: cel_on_unmount */
-uint64_t *res = cel_remember(uint64_t, initialId);
-cel_on_unmount(OnResourceUnmount, res);
+/* Without unmount cleanup (omit or pass NULL): */
+int *counter = cel_remember(int, 0);
+int *counter_explicit = cel_remember(int, 0, NULL);
 ```
 
 ---

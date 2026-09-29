@@ -355,24 +355,30 @@ extern "C" {
     ((Type*)CelsSessionRememberState((session), (id), sizeof(Type), &(defaultVal)))
 
 /* ========================================================================= */
-/* Private Local Memory (cel_remember & cel_on_unmount)                      */
+/* Private Local Memory (cel_remember)                                       */
 /* ========================================================================= */
 
-#define cel_remember(Type, ...) \
-    ((Type*)CelsResolveSlot(CelsGetCurrentSession(), sizeof(Type), &(Type){ __VA_ARGS__ }))
+#define _CEL_REMEMBER_2(Type, Init) \
+    ((Type*)CelsResolveSlotWithCleanup(CelsGetCurrentSession(), sizeof(Type), (const Type[]){ Init }, NULL))
+
+#define _CEL_REMEMBER_3(Type, Init, OnDestroy) \
+    ((Type*)CelsResolveSlotWithCleanup(CelsGetCurrentSession(), sizeof(Type), (const Type[]){ Init }, (void (*)(void*, CelsSession*))(OnDestroy)))
+
+#define _CEL_GET_REMEMBER_MACRO(_1, _2, _3, NAME, ...) NAME
 
 /**
- * Registers an unmount cleanup destructor for a remembered resource pointer.
- * Invoked by CELS slot-table reconciliation when the composable leaves the tree.
+ * Allocates or resolves persistent slot memory in the session's arena.
+ * Supports optional unmount destructor callback (pass NULL or omit if not needed).
+ *
+ * Examples:
+ * @code
+ *     int *score = cel_remember(int, 0);
+ *     int *score = cel_remember(int, 0, NULL);
+ *     ecs_entity_t *entity = cel_remember(ecs_entity_t, 0, OnDestroyEntity);
+ * @endcode
  */
-#define cel_on_unmount(onDestroy, ptr) \
-    CelsSessionRegisterLifecycle(CelsGetCurrentSession(), (void*)(ptr), NULL, (void (*)(void*, CelsSession*))(onDestroy))
-
-/**
- * Allocates remembered slot memory with an optional unmount cleanup destructor in one call.
- */
-#define cel_remember_cleanup(Type, init, onDestroy) \
-    ((Type*)CelsResolveSlotWithCleanup(CelsGetCurrentSession(), sizeof(Type), &(Type){ init }, (void (*)(void*, CelsSession*))(onDestroy)))
+#define cel_remember(...) \
+    _CEL_GET_REMEMBER_MACRO(__VA_ARGS__, _CEL_REMEMBER_3, _CEL_REMEMBER_2)(__VA_ARGS__)
 
 /* ========================================================================= */
 /* Reactive Observation & State Reading (cel_watch & cel_get_state)          */

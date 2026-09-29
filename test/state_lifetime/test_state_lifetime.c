@@ -93,7 +93,7 @@ static void Node(int id) {
     uint64_t key = CelsKeyIndex(CEL_ID("node"), (uint64_t)id);
     if (CelsEnterComposable(sess, key)) {
         ++nodeRuns[id];
-        Resource *resource = cel_remember(Resource, .id = id, .magic = 0);
+        Resource *resource = cel_remember(Resource, ((Resource){ .id = id, .magic = 0 }));
         resource->id = id;
         cel_lifecycle(ResourceLifecycle, resource);
         int *value = cel_remember(int, id * 100);
@@ -195,7 +195,7 @@ CEL_Composition(TeardownRoot, void *userData) {
         if (CelsEnterComposable(sess, CEL_ID("parent"))) {
             Node(0);
             /* Parent resource is allocated after child */
-            Resource *parent = cel_remember(Resource, .id = 9, .magic = 0);
+            Resource *parent = cel_remember(Resource, ((Resource){ .id = 9, .magic = 0 }));
             parent->id = 9;
             cel_lifecycle(ParentLifecycle, parent);
         }
@@ -254,7 +254,7 @@ static void Parent(int id) {
     uint64_t key = CelsKeyIndex(CEL_ID("nested-parent"), (uint64_t)id);
     if (CelsEnterComposable(sess, key)) {
         ++parentRuns[id];
-        Resource *resource = cel_remember(Resource, .id = 10 + id, .magic = 0);
+        Resource *resource = cel_remember(Resource, ((Resource){ .id = 10 + id, .magic = 0 }));
         resource->id = 10 + id;
         cel_lifecycle(ParentLifecycle, resource);
         parentResources[id] = resource;

@@ -130,18 +130,8 @@ When mutations must be executed on a dedicated render or physics worker thread:
 
 ## 5. Slot Memory with Unmount Cleanups
 
-To tie native resource or entity lifecycles to slot memory:
+To tie native resource or entity lifecycles to slot memory, `cel_remember` serves as the single unified macro with an optional 3rd argument for the destructor callback:
 
-### Option A: `cel_on_unmount`
-```c
-ecs_entity_t *it = cel_remember(ecs_entity_t, 0);
-if (*it == 0) {
-    *it = ecs_new_id(world);
-}
-cel_on_unmount(OnEntityUnmount, it);
-```
-
-### Option B: `cel_remember_cleanup`
 ```c
 static void OnEntityUnmount(void *ptr, CelsSession *session) {
     (void)session;
@@ -150,10 +140,15 @@ static void OnEntityUnmount(void *ptr, CelsSession *session) {
 }
 
 /* Inside composable: */
-ecs_entity_t *it = cel_remember_cleanup(ecs_entity_t, 0, OnEntityUnmount);
+/* With unmount cleanup: */
+ecs_entity_t *it = cel_remember(ecs_entity_t, 0, OnEntityUnmount);
 if (*it == 0) {
     *it = ecs_new_id(world);
 }
+
+/* Without unmount cleanup (either pass NULL or omit the 3rd argument): */
+int *counter = cel_remember(int, 0);
+int *counter_explicit = cel_remember(int, 0, NULL);
 ```
 
 When the composable leaves the tree (e.g. `if (enemy->isAlive)` becomes `false`), CELS slot reconciliation calls `OnEntityUnmount`, automatically staging `cel_stage_delete` into the transaction batch.

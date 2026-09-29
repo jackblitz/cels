@@ -26,7 +26,7 @@ CEL_Lifecycle(StatusBadgeLifecycle, BadgeData *badge) {
 
 
 CEL_Composable(CEL_Test) {
-    BadgeData *badge = cel_remember(BadgeData, .label = "Test Compose");
+    BadgeData *badge = cel_remember(BadgeData, { .label = "Test Compose" });
     cel_lifecycle(StatusBadgeLifecycle, badge);
     printf("    [Badge] Status: %s\n", badge->label);
 }
@@ -36,7 +36,7 @@ CEL_Composable(CEL_Test) {
  * Defined in its own header file (.h).
  */
 CEL_Composable(CEL_StatusBadge) {
-    BadgeData *badge = cel_remember(BadgeData, .label = "Connected / Active");
+    BadgeData *badge = cel_remember(BadgeData, { .label = "Connected / Active" });
     cel_lifecycle(StatusBadgeLifecycle, badge);
     printf("    [Badge] Status: %s\n", badge->label);
     CEL_Test();

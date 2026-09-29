@@ -118,11 +118,8 @@ typedef struct CelsTaskState {
         const uint64_t key = CelsHashKey(#Name); \
         if (CelsEnterComposable(sess, key)) { \
             CelsTaskState *state = cel_remember(CelsTaskState, \
-                .step = 0, \
-                .waitTimerMs = 0, \
-                .isRunning = true, \
-                .isCancelled = false, \
-                .isDone = false \
+                ((CelsTaskState){ .step = 0, .waitTimerMs = 0, .isRunning = true, .isCancelled = false, .isDone = false }), \
+                _cels_task_clean_##Name \
             ); \
             _cels_task_last_##Name = state; \
             if (CelsIsFreshMount(sess)) { \
@@ -201,8 +198,8 @@ typedef struct CelsTaskState {
         const uint64_t key = CelsHashKey(#Name); \
         if (CelsEnterComposable(sess, key)) { \
             _CelsTaskBox_##Name *box = cel_remember(_CelsTaskBox_##Name, \
-                .state = { .step = 0, .waitTimerMs = 0, .isRunning = true, .isCancelled = false, .isDone = false }, \
-                .Arg1 = Arg1 \
+                ((_CelsTaskBox_##Name){ .state = { .step = 0, .waitTimerMs = 0, .isRunning = true, .isCancelled = false, .isDone = false }, .Arg1 = Arg1 }), \
+                _cels_task_clean_##Name \
             ); \
             box->Arg1 = Arg1; \
             _cels_task_last_##Name = &box->state; \
@@ -283,9 +280,8 @@ typedef struct CelsTaskState {
         const uint64_t key = CelsHashKey(#Name); \
         if (CelsEnterComposable(sess, key)) { \
             _CelsTaskBox_##Name *box = cel_remember(_CelsTaskBox_##Name, \
-                .state = { .step = 0, .waitTimerMs = 0, .isRunning = true, .isCancelled = false, .isDone = false }, \
-                .Arg1 = Arg1, \
-                .Arg2 = Arg2 \
+                ((_CelsTaskBox_##Name){ .state = { .step = 0, .waitTimerMs = 0, .isRunning = true, .isCancelled = false, .isDone = false }, .Arg1 = Arg1, .Arg2 = Arg2 }), \
+                _cels_task_clean_##Name \
             ); \
             box->Arg1 = Arg1; \
             box->Arg2 = Arg2; \

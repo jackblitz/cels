@@ -90,15 +90,15 @@ cel_mutate(&engine.session, CEL_Window, WindowState) {
 
 ## 2. Local Slot Memory: `cel_remember`
 
-When a composable needs local variables that persist between frames (render counts, cached calculations, animation progress, local buffers), use `cel_remember`.
+When a composable needs local variables that persist between frames (render counts, cached calculations, animation progress, local buffers, native handles), use `cel_remember`.
 
-- **Signature**: `cel_remember(TypeName, initial_value)`
-- **Mechanism**: Allocates a slot in the session's slot table gap buffer. On first execution (mount), the initial value is stored. On subsequent recompositions, the existing slot memory is returned.
+- **Signature**: `cel_remember(TypeName, initial_value, [onDestroy])`
+- **Mechanism**: Allocates a slot in the session's slot table gap buffer. On first execution (mount), the initial value is stored. On subsequent recompositions, the existing slot memory is returned. When the composable leaves the tree, the optional `onDestroy(void *instance, CelsSession *session)` callback is executed during slot table reconciliation (pass `NULL` or omit if no cleanup is needed).
 - **Return**: Mutable pointer `TypeName*`.
 
 ### Examples
 ```c
-/* Simple primitive counter */
+/* Simple primitive counter (no cleanup) */
 int *renderCount = cel_remember(int, 0);
 (*renderCount)++;
 
@@ -108,10 +108,19 @@ typedef struct CustomData {
     const char *title;
 } CustomData;
 
-CustomData *data = cel_remember(CustomData, {
+CustomData *data = cel_remember(CustomData, ((CustomData){
     .opacity = 1.0f,
     .title = "Default"
-});
+}));
+
+/* Native resource handle with automatic cleanup on unmount */
+static void OnTextureRelease(void *ptr, CelsSession *session) {
+    (void)session;
+    GLuint *tex = (GLuint *)ptr;
+    glDeleteTextures(1, tex);
+}
+
+GLuint *texId = cel_remember(GLuint, 0, OnTextureRelease);
 ```
 
 ---
@@ -137,7 +146,7 @@ CEL_Lifecycle(StatusBadgeLifecycle, BadgeData *badge) {
 ### Attaching the Hook inside a Composable
 ```c
 CEL_Composable(CEL_StatusBadge) {
-    BadgeData *badge = cel_remember(BadgeData, .label = "Active");
+    BadgeData *badge = cel_remember(BadgeData, { .label = "Active" });
     cel_lifecycle(StatusBadgeLifecycle, badge);
 
     printf("Rendering badge: %s\n", badge->label);

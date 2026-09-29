@@ -200,7 +200,7 @@ static void TestSessionUserDataAndPostRecomposeHook(void)
 }
 
 /* ========================================================================= */
-/* Test 4: cel_on_unmount & cel_remember_cleanup                             */
+/* Test 4: cel_remember with unmount callback                                */
 /* ========================================================================= */
 
 static int s_unmountCount = 0;
@@ -219,8 +219,13 @@ CEL_State(GateState) {
 };
 
 CEL_Composable(ChildWithCleanup, uint64_t, entityId) {
-    uint64_t *slot = cel_remember_cleanup(uint64_t, entityId, OnCleanupCallback);
+    /* Using cel_remember with unmount callback */
+    uint64_t *slot = cel_remember(uint64_t, entityId, OnCleanupCallback);
     assert(*slot == entityId);
+
+    /* Using cel_remember with explicit NULL (no unmount callback) */
+    int *noCleanup = cel_remember(int, 123, NULL);
+    assert(*noCleanup == 123);
 }
 
 CEL_Composition(GateComposition, void *userData) {
@@ -231,7 +236,7 @@ CEL_Composition(GateComposition, void *userData) {
     }
 }
 
-static void TestCelRememberCleanup(void)
+static void TestCelRememberWithUnmount(void)
 {
     s_unmountCount = 0;
     s_lastUnmountedVal = 0;
@@ -332,7 +337,7 @@ static const TestCase s_transactionTests[] = {
     { "TestTransactionStagingAndCommit", "Stage and commit operations via CelsTransactionBatch", TestTransactionStagingAndCommit },
     { "TestTransactionDoubleBuffering", "Double-buffered batch swapping for zero-lock cross-thread handoff", TestTransactionDoubleBuffering },
     { "TestSessionUserDataAndPostRecomposeHook", "Session user context pointer and post-recompose commit callback", TestSessionUserDataAndPostRecomposeHook },
-    { "TestCelRememberCleanup", "cel_remember_cleanup unmount destructor invocation during slot pruning", TestCelRememberCleanup },
+    { "TestCelRememberWithUnmount", "cel_remember with unmount destructor (or NULL) invocation during slot pruning", TestCelRememberWithUnmount },
     { "TestLifecycleTransactionStaging", "CEL_Lifecycle staging add/set on mount and delete on unmount", TestLifecycleTransactionStaging },
 };
 
