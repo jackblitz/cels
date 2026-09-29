@@ -668,6 +668,11 @@ CelsResult CelsSessionRecompose(CelsSession *s)
     /* Publish double-buffered state snapshots at frame boundary */
     CelsStatePublishDirty(s);
 
+    /* Post-recomposition frame completion hook (e.g. Flecs or worker commit) */
+    if (s->postRecomposeHook != NULL) {
+        s->postRecomposeHook(s, s->postRecomposeUserData);
+    }
+
     s->hasComposedOnce = true;
     s->isRecomposing = false;
     if (prevSession) {
@@ -1279,3 +1284,197 @@ void CelsSessionInvalidateKey(CelsSession *session, uint64_t key)
         session->nextFrameQueue[session->nextFrameQueueCount++] = key;
     }
 }
+
+/* ========================================================================= */
+/* Session Transaction API & Cross-Thread Staging Buffer                     */
+/* ========================================================================= */
+
+bool CelsSessionStageSet(CelsSession *session,
+                         uint64_t targetId,
+                         uint64_t typeKey,
+                         size_t size,
+                         const void *data)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL) return false;
+
+    CelsTransactionBatch *batch = &session->transactionBatches[session->activeBatchIndex];
+    if (batch->opCount >= CELS_MAX_TRANSACTIONS) return false;
+    if (batch->dataSize + size > CELS_TRANSACTION_DATA_SIZE) return false;
+
+    uint32_t offset = batch->dataSize;
+    if (size > 0 && data != NULL) {
+        memcpy(&batch->data[offset], data, size);
+        batch->dataSize += (uint32_t)size;
+    }
+
+    batch->ops[batch->opCount++] = (CelsTransactionOp){
+        .opCode = CELS_OP_SET,
+        .size = (uint32_t)size,
+        .targetId = targetId,
+        .typeKey = typeKey,
+        .dataOffset = offset
+    };
+    return true;
+}
+
+bool CelsSessionStageRemove(CelsSession *session,
+                            uint64_t targetId,
+                            uint64_t typeKey)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL) return false;
+
+    CelsTransactionBatch *batch = &session->transactionBatches[session->activeBatchIndex];
+    if (batch->opCount >= CELS_MAX_TRANSACTIONS) return false;
+
+    batch->ops[batch->opCount++] = (CelsTransactionOp){
+        .opCode = CELS_OP_REMOVE,
+        .size = 0,
+        .targetId = targetId,
+        .typeKey = typeKey,
+        .dataOffset = 0
+    };
+    return true;
+}
+
+bool CelsSessionStageDelete(CelsSession *session, uint64_t targetId)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL) return false;
+
+    CelsTransactionBatch *batch = &session->transactionBatches[session->activeBatchIndex];
+    if (batch->opCount >= CELS_MAX_TRANSACTIONS) return false;
+
+    batch->ops[batch->opCount++] = (CelsTransactionOp){
+        .opCode = CELS_OP_DELETE,
+        .size = 0,
+        .targetId = targetId,
+        .typeKey = 0,
+        .dataOffset = 0
+    };
+    return true;
+}
+
+bool CelsSessionStageCustom(CelsSession *session,
+                            uint32_t opCode,
+                            uint64_t targetId,
+                            uint64_t typeKey,
+                            size_t size,
+                            const void *data)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL) return false;
+
+    CelsTransactionBatch *batch = &session->transactionBatches[session->activeBatchIndex];
+    if (batch->opCount >= CELS_MAX_TRANSACTIONS) return false;
+    if (batch->dataSize + size > CELS_TRANSACTION_DATA_SIZE) return false;
+
+    uint32_t offset = batch->dataSize;
+    if (size > 0 && data != NULL) {
+        memcpy(&batch->data[offset], data, size);
+        batch->dataSize += (uint32_t)size;
+    }
+
+    batch->ops[batch->opCount++] = (CelsTransactionOp){
+        .opCode = opCode,
+        .size = (uint32_t)size,
+        .targetId = targetId,
+        .typeKey = typeKey,
+        .dataOffset = offset
+    };
+    return true;
+}
+
+uint32_t CelsSessionCommitTransactions(CelsSession *session,
+                                       CelsTransactionHandler handler,
+                                       void *userData)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL || handler == NULL) return 0;
+
+    CelsTransactionBatch *batch = &session->transactionBatches[session->activeBatchIndex];
+    uint32_t count = batch->opCount;
+    for (uint32_t i = 0; i < count; ++i) {
+        const CelsTransactionOp *op = &batch->ops[i];
+        const void *payload = (op->size > 0) ? &batch->data[op->dataOffset] : NULL;
+        handler((CelsOpCode)op->opCode, op->targetId, op->typeKey, payload, (size_t)op->size, userData);
+    }
+
+    batch->opCount = 0;
+    batch->dataSize = 0;
+    return count;
+}
+
+void CelsSessionSwapTransactionBatches(CelsSession *session)
+{
+    if (session == NULL) return;
+    session->activeBatchIndex = 1u - session->activeBatchIndex;
+    session->transactionBatches[session->activeBatchIndex].opCount = 0;
+    session->transactionBatches[session->activeBatchIndex].dataSize = 0;
+}
+
+const CelsTransactionBatch *CelsSessionGetReadyBatch(const CelsSession *session)
+{
+    if (session == NULL) return NULL;
+    uint32_t readyIndex = 1u - session->activeBatchIndex;
+    return &session->transactionBatches[readyIndex];
+}
+
+void CelsSessionClearReadyBatch(CelsSession *session)
+{
+    if (session == NULL) return;
+    uint32_t readyIndex = 1u - session->activeBatchIndex;
+    session->transactionBatches[readyIndex].opCount = 0;
+    session->transactionBatches[readyIndex].dataSize = 0;
+}
+
+void *CelsSessionGetUserData(const CelsSession *session)
+{
+    return session ? session->userData : NULL;
+}
+
+void CelsSessionSetUserData(CelsSession *session, void *userData)
+{
+    if (session != NULL) {
+        session->userData = userData;
+    }
+}
+
+void CelsSessionSetPostRecomposeHook(CelsSession *session,
+                                     CelsPostRecomposeFn hook,
+                                     void *userData)
+{
+    if (session != NULL) {
+        session->postRecomposeHook = hook;
+        session->postRecomposeUserData = userData;
+    }
+}
+
+void *CelsResolveSlotWithCleanup(CelsSession *s,
+                                 size_t size,
+                                 const void *initVal,
+                                 void (*onDestroy)(void *ptr, CelsSession *session))
+{
+    void *ptr = CelsResolveSlot(s, size, initVal);
+    if (ptr != NULL && onDestroy != NULL && s != NULL && s->currentDepth > 0) {
+        CelsSlotGroup *const group = CelsGetGroup(s, s->currentGroupIndex);
+        if (group->flags & CELS_FLAG_FRESH_MOUNT) {
+            CelsSessionRegisterLifecycle(s, ptr, NULL, onDestroy);
+        } else {
+            CelsSessionUpdateLifecycle(s, ptr, onDestroy);
+        }
+    }
+    return ptr;
+}
+

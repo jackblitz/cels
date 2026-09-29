@@ -30,6 +30,7 @@
 #include "cels/module.h"
 #include "cels/thread.h"
 #include "cels/task.h"
+#include "cels/transaction.h"
 #include "cels/version.h"
 
 #ifdef __cplusplus
@@ -354,11 +355,24 @@ extern "C" {
     ((Type*)CelsSessionRememberState((session), (id), sizeof(Type), &(defaultVal)))
 
 /* ========================================================================= */
-/* Private Local Memory (cel_remember)                                       */
+/* Private Local Memory (cel_remember & cel_on_unmount)                      */
 /* ========================================================================= */
 
 #define cel_remember(Type, ...) \
     ((Type*)CelsResolveSlot(CelsGetCurrentSession(), sizeof(Type), &(Type){ __VA_ARGS__ }))
+
+/**
+ * Registers an unmount cleanup destructor for a remembered resource pointer.
+ * Invoked by CELS slot-table reconciliation when the composable leaves the tree.
+ */
+#define cel_on_unmount(onDestroy, ptr) \
+    CelsSessionRegisterLifecycle(CelsGetCurrentSession(), (void*)(ptr), NULL, (void (*)(void*, CelsSession*))(onDestroy))
+
+/**
+ * Allocates remembered slot memory with an optional unmount cleanup destructor in one call.
+ */
+#define cel_remember_cleanup(Type, init, onDestroy) \
+    ((Type*)CelsResolveSlotWithCleanup(CelsGetCurrentSession(), sizeof(Type), &(Type){ init }, (void (*)(void*, CelsSession*))(onDestroy)))
 
 /* ========================================================================= */
 /* Reactive Observation & State Reading (cel_watch & cel_get_state)          */

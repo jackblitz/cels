@@ -139,6 +139,7 @@ if(CELS_BUILD_TESTS)
         test/benchmark/test_benchmark.c
         test/hot_reload/test_hot_reload.c
         test/task/test_task.c
+        test/transaction/test_transaction.c
     )
     target_include_directories(test_cli PRIVATE
         ${TEST_COMMON_DIR}

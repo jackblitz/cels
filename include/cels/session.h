@@ -27,6 +27,7 @@
 
 #include "cels/slot_table.h"
 #include "cels/state.h"
+#include "cels/transaction.h"
 
 #ifndef CELS_MAX_DEPTH
 #define CELS_MAX_DEPTH 64u
@@ -230,7 +231,20 @@ struct CelsSession {
     struct CelsEngine *engine;
     CelsModuleBinding fallbackModules[CELS_MAX_MODULES];
     uint32_t fallbackModuleCount;
+
+    /* Double-buffered transaction batches (for lockless cross-thread bridge) */
+    CelsTransactionBatch transactionBatches[2];
+    uint32_t activeBatchIndex;
+
+    /* Generic user context pointer */
+    void *userData;
+
+    /* Post-recomposition frame completion hook */
+    void (*postRecomposeHook)(struct CelsSession *session, void *userData);
+    void *postRecomposeUserData;
 };
+
+typedef void (*CelsPostRecomposeFn)(CelsSession *session, void *userData);
 
 /* ========================================================================= */
 /* Keyed Session Creation & Registry                                         */
@@ -397,6 +411,92 @@ void *CelsGetState(CelsSession *session, uint64_t key);
  * Queues a 64-bit group key for invalidation and recomposition on the next pass.
  */
 void CelsSessionInvalidateKey(CelsSession *session, uint64_t key);
+
+/* ========================================================================= */
+/* Session Transaction API & Cross-Thread Staging Buffer                     */
+/* ========================================================================= */
+
+/**
+ * Stages a component/data set operation in the session's active transaction batch.
+ */
+bool CelsSessionStageSet(CelsSession *session,
+                         uint64_t targetId,
+                         uint64_t typeKey,
+                         size_t size,
+                         const void *data);
+
+/**
+ * Stages a component removal operation in the session's active transaction batch.
+ */
+bool CelsSessionStageRemove(CelsSession *session,
+                            uint64_t targetId,
+                            uint64_t typeKey);
+
+/**
+ * Stages a target deletion/destruction in the session's active transaction batch.
+ */
+bool CelsSessionStageDelete(CelsSession *session, uint64_t targetId);
+
+/**
+ * Stages a custom opcode transaction in the session's active transaction batch.
+ */
+bool CelsSessionStageCustom(CelsSession *session,
+                            uint32_t opCode,
+                            uint64_t targetId,
+                            uint64_t typeKey,
+                            size_t size,
+                            const void *data);
+
+/**
+ * Commits the current active transaction batch using the supplied handler callback.
+ * Clears the active batch upon completion.
+ *
+ * @return Number of operations executed.
+ */
+uint32_t CelsSessionCommitTransactions(CelsSession *session,
+                                       CelsTransactionHandler handler,
+                                       void *userData);
+
+/**
+ * Swaps active and ready transaction batches for lockless handoff to worker threads.
+ */
+void CelsSessionSwapTransactionBatches(CelsSession *session);
+
+/**
+ * Returns pointer to the ready transaction batch (for consumption by worker threads).
+ */
+const CelsTransactionBatch *CelsSessionGetReadyBatch(const CelsSession *session);
+
+/**
+ * Resets the ready transaction batch after worker threads finish processing.
+ */
+void CelsSessionClearReadyBatch(CelsSession *session);
+
+/**
+ * Gets the session's user context pointer.
+ */
+void *CelsSessionGetUserData(const CelsSession *session);
+
+/**
+ * Sets the session's user context pointer.
+ */
+void CelsSessionSetUserData(CelsSession *session, void *userData);
+
+/**
+ * Registers a callback invoked immediately after CelsSessionRecompose finishes frame convergence.
+ */
+void CelsSessionSetPostRecomposeHook(CelsSession *session,
+                                     CelsPostRecomposeFn hook,
+                                     void *userData);
+
+/**
+ * Allocates or resolves persistent slot memory with an optional unmount cleanup callback.
+ * If onDestroy is NULL, behaves identically to CelsResolveSlot.
+ */
+void *CelsResolveSlotWithCleanup(CelsSession *session,
+                                 size_t size,
+                                 const void *initVal,
+                                 void (*onDestroy)(void *ptr, CelsSession *session));
 
 /* ========================================================================= */
 /* Infallible Inline Accessors                                                */

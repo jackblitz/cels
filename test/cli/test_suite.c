@@ -71,10 +71,11 @@ static void TestCliSuiteCount(void) {
         GetTreeTestSuite(),
         GetBenchmarkTestSuite(),
         GetHotReloadTestSuite(),
-        GetTaskTestSuite()
+        GetTaskTestSuite(),
+        GetTransactionTestSuite()
     };
     const size_t count = sizeof(suites) / sizeof(suites[0]);
-    assert(count == 9);
+    assert(count == 10);
 
     for (size_t i = 0; i < count; ++i) {
         assert(suites[i] != NULL);
@@ -112,7 +113,8 @@ int main(int argc, char **argv) {
         GetTreeTestSuite(),
         GetBenchmarkTestSuite(),
         GetHotReloadTestSuite(),
-        GetTaskTestSuite()
+        GetTaskTestSuite(),
+        GetTransactionTestSuite()
     };
     const size_t suiteCount = sizeof(suites) / sizeof(suites[0]);
     return TestCliRunAll(suites, suiteCount, argc, argv);
