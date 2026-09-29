@@ -261,6 +261,70 @@ static void TestCelRememberCleanup(void)
 }
 
 /* ========================================================================= */
+/* Test 5: CEL_Lifecycle Staging Operations (Mount: Add/Set, Unmount: Delete)*/
+/* ========================================================================= */
+
+CEL_Lifecycle(EntityTransactionLifecycle, uint64_t, entityId) {
+    mount {
+        cel_stage_set(entityId, Position, { .x = 100.0f, .y = 200.0f, .z = 300.0f });
+        cel_stage_set(entityId, Health, { .hp = 50, .maxHp = 100 });
+    }
+    unmount {
+        cel_stage_delete(entityId);
+    }
+}
+
+CEL_Composable(LivingEntityNode, uint64_t, entityId) {
+    cel_lifecycle(EntityTransactionLifecycle, entityId);
+}
+
+CEL_Composition(LifecycleEntityComposition, void *userData) {
+    (void)userData;
+    const GateState *gate = cel_watch(GateState, CEL_ID("GateState"));
+    if (gate && gate->open) {
+        LivingEntityNode(4242);
+    }
+}
+
+static void TestLifecycleTransactionStaging(void)
+{
+    s_capturedCount = 0;
+
+    CelsSession s;
+    CelsSessionInit(&s, NULL);
+    cel_session_remember_state(&s, CEL_ID("GateState"), GateState, ((GateState){ .open = true }));
+    cel_attach(&s, CEL_ID("LifecycleEntityComposition"), LifecycleEntityComposition);
+
+    /* Frame 1: Mount -> mount block stages Set Position and Set Health */
+    assert(CelsSessionRecompose(&s) == CELS_OK);
+    uint32_t committed = CelsSessionCommitTransactions(&s, TestCommitHandler, NULL);
+    assert(committed == 2);
+    assert(s_capturedCount == 2);
+    assert(s_capturedOps[0].opCode == CELS_OP_SET && s_capturedOps[0].targetId == 4242);
+    assert(s_capturedOps[1].opCode == CELS_OP_SET && s_capturedOps[1].targetId == 4242);
+
+    /* Frame 2: Steady state -> no new mount/unmount operations */
+    s_capturedCount = 0;
+    assert(CelsSessionRecompose(&s) == CELS_OK);
+    committed = CelsSessionCommitTransactions(&s, TestCommitHandler, NULL);
+    assert(committed == 0);
+    assert(s_capturedCount == 0);
+
+    /* Frame 3: Gate closes -> node is pruned from tree -> unmount stages Delete */
+    cel_mutate(&s, CEL_ID("GateState"), GateState) {
+        this->open = false;
+    }
+    assert(CelsSessionRecompose(&s) == CELS_OK);
+    committed = CelsSessionCommitTransactions(&s, TestCommitHandler, NULL);
+    assert(committed == 1);
+    assert(s_capturedCount == 1);
+    assert(s_capturedOps[0].opCode == CELS_OP_DELETE);
+    assert(s_capturedOps[0].targetId == 4242);
+
+    CelsSessionDestroy(&s);
+}
+
+/* ========================================================================= */
 /* Test Suite Registration                                                   */
 /* ========================================================================= */
 
@@ -269,6 +333,7 @@ static const TestCase s_transactionTests[] = {
     { "TestTransactionDoubleBuffering", "Double-buffered batch swapping for zero-lock cross-thread handoff", TestTransactionDoubleBuffering },
     { "TestSessionUserDataAndPostRecomposeHook", "Session user context pointer and post-recompose commit callback", TestSessionUserDataAndPostRecomposeHook },
     { "TestCelRememberCleanup", "cel_remember_cleanup unmount destructor invocation during slot pruning", TestCelRememberCleanup },
+    { "TestLifecycleTransactionStaging", "CEL_Lifecycle staging add/set on mount and delete on unmount", TestLifecycleTransactionStaging },
 };
 
 static const TestSuite s_transactionSuite = {

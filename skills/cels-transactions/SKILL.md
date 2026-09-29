@@ -132,3 +132,29 @@ uint64_t *res = cel_remember_cleanup(uint64_t, initialId, OnResourceUnmount);
 uint64_t *res = cel_remember(uint64_t, initialId);
 cel_on_unmount(OnResourceUnmount, res);
 ```
+
+---
+
+## 7. Staging Transactions from `CEL_Lifecycle`
+
+Transactions can also be staged directly inside `CEL_Lifecycle` blocks:
+- **`mount`**: Stage initial component sets or resource additions (`cel_stage_set`).
+- **`unmount`**: Stage resource deletions (`cel_stage_delete`) or component removals (`cel_stage_remove`).
+
+```c
+CEL_Lifecycle(EntityTransactionLifecycle, uint64_t, entityId) {
+    mount {
+        /* Add/set operations staged on initial mount */
+        cel_stage_set(entityId, Position, { .x = 100.0f, .y = 200.0f, .z = 0.0f });
+        cel_stage_set(entityId, Health,   { .hp = 100, .maxHp = 100 });
+    }
+    unmount {
+        /* Delete operation staged when omitted from the tree */
+        cel_stage_delete(entityId);
+    }
+}
+
+CEL_Composable(EnemyNode, uint64_t, entityId) {
+    cel_lifecycle(EntityTransactionLifecycle, entityId);
+}
+```

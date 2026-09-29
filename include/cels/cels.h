@@ -332,7 +332,7 @@ extern "C" {
     _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_LIFECYCLE_3, _CEL_LIFECYCLE_2, _CEL_LIFECYCLE_1)(__VA_ARGS__)
 
 #define _CEL_LIFECYCLE_INVOKE_2(Name, handle) \
-    _cels_lifecycle_attach_##Name(CelsGetCurrentSession(), (void*)(handle))
+    _cels_lifecycle_attach_##Name(CelsGetCurrentSession(), (handle))
 
 #define _CEL_LIFECYCLE_INVOKE_1(Name) \
     _cels_lifecycle_attach_##Name(CelsGetCurrentSession(), NULL)

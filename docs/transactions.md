@@ -157,3 +157,31 @@ if (*it == 0) {
 ```
 
 When the composable leaves the tree (e.g. `if (enemy->isAlive)` becomes `false`), CELS slot reconciliation calls `OnEntityUnmount`, automatically staging `cel_stage_delete` into the transaction batch.
+
+---
+
+## 6. Staging Transactions from `CEL_Lifecycle` (`mount` & `unmount`)
+
+Transactions can also be staged directly within `CEL_Lifecycle` blocks:
+- **`mount`**: Stages initial component sets/additions (`cel_stage_set`) when the composable first attaches to the tree.
+- **`unmount`**: Stages destruction (`cel_stage_delete`) or component removal (`cel_stage_remove`) when the composable is omitted and pruned by slot-table reconciliation.
+
+```c
+CEL_Lifecycle(EntityTransactionLifecycle, uint64_t, entityId) {
+    mount {
+        /* Stages add/set operations on initial mount */
+        cel_stage_set(entityId, Position, { .x = 100.0f, .y = 200.0f, .z = 0.0f });
+        cel_stage_set(entityId, Health,   { .hp = 100, .maxHp = 100 });
+    }
+    unmount {
+        /* Stages delete operation when omitted from tree */
+        cel_stage_delete(entityId);
+    }
+}
+
+CEL_Composable(EnemyNode, uint64_t, entityId) {
+    cel_lifecycle(EntityTransactionLifecycle, entityId);
+}
+```
+
+This guarantees that entity creation and destruction operations are staged into the transaction batch in perfect lockstep with the declarative composable tree hierarchy.
