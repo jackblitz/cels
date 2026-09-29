@@ -28,6 +28,8 @@
 #include "cels/engine.h"
 #include "cels/app.h"
 #include "cels/module.h"
+#include "cels/thread.h"
+#include "cels/task.h"
 #include "cels/version.h"
 
 #ifdef __cplusplus

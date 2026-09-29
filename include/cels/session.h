@@ -216,6 +216,10 @@ struct CelsSession {
     uint64_t invalidationQueue[CELS_MAX_QUEUE];
     uint32_t queueCount;
 
+    /* Next frame invalidation queue (for tasks and delayed yields) */
+    uint64_t nextFrameQueue[CELS_MAX_QUEUE];
+    uint32_t nextFrameQueueCount;
+
     uint32_t maxDrainIterations;
 
     /* Attached Compositions */
@@ -388,6 +392,11 @@ void *CelsResolveSlot(CelsSession *session,
  * Finds an active state instance by its key in the session.
  */
 void *CelsGetState(CelsSession *session, uint64_t key);
+
+/**
+ * Queues a 64-bit group key for invalidation and recomposition on the next pass.
+ */
+void CelsSessionInvalidateKey(CelsSession *session, uint64_t key);
 
 /* ========================================================================= */
 /* Infallible Inline Accessors                                                */

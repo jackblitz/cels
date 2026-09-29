@@ -17,7 +17,7 @@
 #ifndef CELS_THREAD_LOCAL
     #if defined(_MSC_VER)
         #define CELS_THREAD_LOCAL __declspec(thread)
-    #elif defined(__GNUC__) && !defined(_WIN32)
+    #elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32)
         #define CELS_THREAD_LOCAL __thread
     #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__) && !defined(_WIN32)
         #define CELS_THREAD_LOCAL _Thread_local
@@ -660,6 +660,11 @@ CelsResult CelsSessionRecompose(CelsSession *s)
 
     } while (s->queueCount > 0);
 
+    /* Transfer next-frame task invalidations to queue for the next recompose pass */
+    while (s->nextFrameQueueCount > 0 && s->queueCount < CELS_MAX_QUEUE) {
+        s->invalidationQueue[s->queueCount++] = s->nextFrameQueue[--s->nextFrameQueueCount];
+    }
+
     /* Publish double-buffered state snapshots at frame boundary */
     CelsStatePublishDirty(s);
 
@@ -1262,4 +1267,15 @@ void *CelsGetState(CelsSession *s, uint64_t key)
     }
 
     return NULL;
+}
+
+void CelsSessionInvalidateKey(CelsSession *session, uint64_t key)
+{
+    if (session == NULL) return;
+    for (uint32_t i = 0; i < session->nextFrameQueueCount; ++i) {
+        if (session->nextFrameQueue[i] == key) return;
+    }
+    if (session->nextFrameQueueCount < CELS_MAX_QUEUE) {
+        session->nextFrameQueue[session->nextFrameQueueCount++] = key;
+    }
 }

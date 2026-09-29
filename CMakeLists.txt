@@ -83,18 +83,31 @@ option(CELS_HOT_RELOAD "Enable dynamic hot-reload host (.exe + .dll). When OFF, 
 # Canonical Example Application (cel_host + cel_app) via cels_add_application
 # =============================================================================
 if(CELS_BUILD_EXAMPLES)
+    # 1. Window Example (cel_host + cel_app)
     cels_add_application(
         HOST cel_host
         APP cel_app
         HOST_SOURCES
-            examples/host.c
+            examples/window/host.c
         APP_SOURCES
-            examples/app/app.c
-            examples/app/composition/window.c
-            examples/app/composition/window_content.c
+            examples/window/app/app.c
+            examples/window/app/composition/window.c
+            examples/window/app/composition/window_content.c
         INCLUDES
-            ${CMAKE_CURRENT_SOURCE_DIR}/examples/app
-            ${CMAKE_CURRENT_SOURCE_DIR}/examples/app/composition
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/window/app
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/window/app/composition
+    )
+
+    # 2. Task / Network Example (cel_task_host + cel_task_app)
+    cels_add_application(
+        HOST cel_task_host
+        APP cel_task_app
+        HOST_SOURCES
+            examples/task/host.c
+        APP_SOURCES
+            examples/task/app/app.c
+        INCLUDES
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/task/app
     )
 endif()
 
@@ -125,6 +138,7 @@ if(CELS_BUILD_TESTS)
         test/tree/test_tree.c
         test/benchmark/test_benchmark.c
         test/hot_reload/test_hot_reload.c
+        test/task/test_task.c
     )
     target_include_directories(test_cli PRIVATE
         ${TEST_COMMON_DIR}
