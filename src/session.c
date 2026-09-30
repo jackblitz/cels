@@ -1274,6 +1274,14 @@ void *CelsGetState(CelsSession *s, uint64_t key)
     return NULL;
 }
 
+/**
+ * Queues a 64-bit group key for invalidation and recomposition on the next pass.
+ *
+ * Appends the key to the next-frame queue if not already present.
+ *
+ * @param session Target session. Safe if NULL.
+ * @param key     Unique 64-bit group key to invalidate.
+ */
 void CelsSessionInvalidateKey(CelsSession *session, uint64_t key)
 {
     if (session == NULL) return;
@@ -1289,6 +1297,18 @@ void CelsSessionInvalidateKey(CelsSession *session, uint64_t key)
 /* Session Transaction API & Cross-Thread Staging Buffer                     */
 /* ========================================================================= */
 
+/**
+ * Stages a component/data set operation in the session's active transaction batch.
+ *
+ * Copies size payload bytes into the batch linear arena with zero locks.
+ *
+ * @param session  Target session. Can be NULL (falls back to ambient session).
+ * @param targetId Target entity or resource identifier.
+ * @param typeKey  64-bit component or payload type identifier.
+ * @param size     Payload size in bytes.
+ * @param data     Pointer to payload bytes to copy. Safe if NULL when size is 0.
+ * @return True if staged successfully; false if batch capacity or arena is full.
+ */
 bool CelsSessionStageSet(CelsSession *session,
                          uint64_t targetId,
                          uint64_t typeKey,
@@ -1320,6 +1340,14 @@ bool CelsSessionStageSet(CelsSession *session,
     return true;
 }
 
+/**
+ * Stages a component removal operation in the session's active transaction batch.
+ *
+ * @param session  Target session. Can be NULL (falls back to ambient session).
+ * @param targetId Target entity or resource identifier.
+ * @param typeKey  64-bit component or payload type identifier.
+ * @return True if staged successfully; false if batch capacity is full.
+ */
 bool CelsSessionStageRemove(CelsSession *session,
                             uint64_t targetId,
                             uint64_t typeKey)
@@ -1342,6 +1370,13 @@ bool CelsSessionStageRemove(CelsSession *session,
     return true;
 }
 
+/**
+ * Stages a target deletion/destruction in the session's active transaction batch.
+ *
+ * @param session  Target session. Can be NULL (falls back to ambient session).
+ * @param targetId Target entity or resource identifier.
+ * @return True if staged successfully; false if batch capacity is full.
+ */
 bool CelsSessionStageDelete(CelsSession *session, uint64_t targetId)
 {
     if (session == NULL) {
@@ -1362,6 +1397,17 @@ bool CelsSessionStageDelete(CelsSession *session, uint64_t targetId)
     return true;
 }
 
+/**
+ * Stages a custom opcode transaction in the session's active transaction batch.
+ *
+ * @param session  Target session. Can be NULL (falls back to ambient session).
+ * @param opCode   Custom opcode identifier (typically >= CELS_OP_CUSTOM).
+ * @param targetId Target entity or resource identifier.
+ * @param typeKey  64-bit component or payload type identifier.
+ * @param size     Payload size in bytes.
+ * @param data     Pointer to payload bytes to copy. Safe if NULL when size is 0.
+ * @return True if staged successfully; false if batch capacity or arena is full.
+ */
 bool CelsSessionStageCustom(CelsSession *session,
                             uint32_t opCode,
                             uint64_t targetId,
@@ -1394,6 +1440,17 @@ bool CelsSessionStageCustom(CelsSession *session,
     return true;
 }
 
+/**
+ * Commits the current active transaction batch using the supplied handler callback.
+ *
+ * Iterates all staged operations in submission order and dispatches them to handler.
+ * Automatically clears the active batch upon completion.
+ *
+ * @param session  Target session. Can be NULL (falls back to ambient session).
+ * @param handler  Callback function invoked per operation. Non-NULL.
+ * @param userData Context pointer passed through to handler. Can be NULL.
+ * @return Number of operations dispatched.
+ */
 uint32_t CelsSessionCommitTransactions(CelsSession *session,
                                        CelsTransactionHandler handler,
                                        void *userData)
@@ -1416,6 +1473,14 @@ uint32_t CelsSessionCommitTransactions(CelsSession *session,
     return count;
 }
 
+/**
+ * Swaps active and ready transaction batches for lockless handoff to worker threads.
+ *
+ * The previously active batch becomes ready for consumption via CelsSessionGetReadyBatch,
+ * and the new active batch is reset for new staging operations.
+ *
+ * @param session Target session. Safe if NULL.
+ */
 void CelsSessionSwapTransactionBatches(CelsSession *session)
 {
     if (session == NULL) return;
@@ -1424,6 +1489,12 @@ void CelsSessionSwapTransactionBatches(CelsSession *session)
     session->transactionBatches[session->activeBatchIndex].dataSize = 0;
 }
 
+/**
+ * Returns a pointer to the ready transaction batch for consumption by worker threads.
+ *
+ * @param session Target session. Can be NULL.
+ * @return Read-only pointer to the ready batch, or NULL if session is NULL.
+ */
 const CelsTransactionBatch *CelsSessionGetReadyBatch(const CelsSession *session)
 {
     if (session == NULL) return NULL;
@@ -1431,6 +1502,11 @@ const CelsTransactionBatch *CelsSessionGetReadyBatch(const CelsSession *session)
     return &session->transactionBatches[readyIndex];
 }
 
+/**
+ * Resets the ready transaction batch after worker threads finish processing.
+ *
+ * @param session Target session. Safe if NULL.
+ */
 void CelsSessionClearReadyBatch(CelsSession *session)
 {
     if (session == NULL) return;
@@ -1439,11 +1515,23 @@ void CelsSessionClearReadyBatch(CelsSession *session)
     session->transactionBatches[readyIndex].dataSize = 0;
 }
 
+/**
+ * Gets the session's user context pointer.
+ *
+ * @param session Target session. Can be NULL.
+ * @return User context pointer, or NULL if session is NULL or unset.
+ */
 void *CelsSessionGetUserData(const CelsSession *session)
 {
     return session ? session->userData : NULL;
 }
 
+/**
+ * Sets the session's user context pointer.
+ *
+ * @param session  Target session. Safe if NULL.
+ * @param userData Pointer to arbitrary user application context.
+ */
 void CelsSessionSetUserData(CelsSession *session, void *userData)
 {
     if (session != NULL) {
@@ -1451,6 +1539,13 @@ void CelsSessionSetUserData(CelsSession *session, void *userData)
     }
 }
 
+/**
+ * Registers a callback invoked immediately after CelsSessionRecompose finishes frame convergence.
+ *
+ * @param session  Target session. Safe if NULL.
+ * @param hook     Callback invoked at frame completion. Can be NULL to clear.
+ * @param userData Context pointer passed to hook. Can be NULL.
+ */
 void CelsSessionSetPostRecomposeHook(CelsSession *session,
                                      CelsPostRecomposeFn hook,
                                      void *userData)
@@ -1461,6 +1556,18 @@ void CelsSessionSetPostRecomposeHook(CelsSession *session,
     }
 }
 
+/**
+ * Allocates or resolves persistent slot memory with an optional unmount cleanup callback.
+ *
+ * On first mount, registers the cleanup hook. On subsequent remounts, updates the
+ * cleanup hook pointer to prevent stale code addresses after hot-reload.
+ *
+ * @param s         Active session instance. Non-NULL.
+ * @param size      Byte size of the requested slot allocation.
+ * @param initVal   Pointer to initial data bytes, or NULL for zero-initialization.
+ * @param onDestroy Destructor callback invoked when slot is unmounted or session destroyed. Safe if NULL.
+ * @return Stable pointer to slot memory in session data arena, or NULL on allocation failure.
+ */
 void *CelsResolveSlotWithCleanup(CelsSession *s,
                                  size_t size,
                                  const void *initVal,

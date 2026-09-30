@@ -46,6 +46,7 @@ add_library(cels_core STATIC
     src/slot_table.c
     src/session.c
     src/state.c
+    src/task.c
     src/engine.c
     src/module.c
     src/log.c
@@ -79,14 +80,22 @@ else()
 endif()
 option(CELS_HOT_RELOAD "Enable dynamic hot-reload host (.exe + .dll). When OFF, builds a single monolithic .exe" ${CELS_HOT_RELOAD_DEFAULT})
 
+# Helper runner for IDE hot-reload rebuilds (CLion, VS Code)
+add_executable(cels_hot_reload_notifier
+    src/hot_reload_notifier.c
+)
+set_target_properties(cels_hot_reload_notifier PROPERTIES
+    OUTPUT_NAME cels_hot_reload_notifier
+)
+
 # =============================================================================
-# Canonical Example Application (cel_host + cel_app) via cels_add_application
+# Canonical Example Applications (**_host + **_dll) via cels_add_application
 # =============================================================================
 if(CELS_BUILD_EXAMPLES)
-    # 1. Window Example (cel_host + cel_app)
+    # 1. Window Example (cel_host + cel_dll)
     cels_add_application(
         HOST cel_host
-        APP cel_app
+        DLL cel_dll
         HOST_SOURCES
             examples/window/host.c
         APP_SOURCES
@@ -97,11 +106,15 @@ if(CELS_BUILD_EXAMPLES)
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/window/app
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/window/app/composition
     )
+    # Backward-compatibility alias
+    if(NOT TARGET cel_app)
+        add_custom_target(cel_app DEPENDS cel_dll)
+    endif()
 
-    # 2. Task / Network Example (cel_task_host + cel_task_app)
+    # 2. Task / Network Example (cel_task_host + cel_task_dll)
     cels_add_application(
         HOST cel_task_host
-        APP cel_task_app
+        DLL cel_task_dll
         HOST_SOURCES
             examples/task/host.c
         APP_SOURCES
@@ -109,6 +122,10 @@ if(CELS_BUILD_EXAMPLES)
         INCLUDES
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/task/app
     )
+    # Backward-compatibility alias
+    if(NOT TARGET cel_task_app)
+        add_custom_target(cel_task_app DEPENDS cel_task_dll)
+    endif()
 endif()
 
 # =============================================================================

@@ -144,26 +144,24 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Include CELS module
 find_package(CELS REQUIRED) # Or include(path/to/cmake/Cels.cmake)
 
-# 1. Define the Application
-cels_add_application(cel_app
-    SOURCES
+# Define Application Pair (**_host executable + **_dll shared library)
+cels_add_application(
+    HOST cel_host
+    DLL cel_dll
+    HOST_SOURCES
+        src/host.c
+    APP_SOURCES
         src/app.c
         src/composition/window.c
     INCLUDES
         include
         src
 )
-
-# 2. Define the Host
-cels_add_host(cel_host
-    APP cel_app
-    SOURCES
-        src/host.c
-    INCLUDES
-        include
-        src
-)
 ```
+
+In CLion and IDEs, two standard run configurations are provided for each app:
+- **`**_host`**: Launches the main engine executable (`cel_host.exe`, `cel_task_host.exe`).
+- **`**_dll`**: Recompiles the dynamic application library (`cel_dll.dll`, `cel_task_dll.dll`) and displays hot-reload confirmation with exit code 0.
 
 ---
 
@@ -172,9 +170,9 @@ cels_add_host(cel_host
 CELS adapts automatically based on the `CELS_HOT_RELOAD` CMake option:
 
 ### Hot Reload Mode (`CELS_HOT_RELOAD=ON`, default in Debug)
-- Application builds as a shared dynamic library (`cel_app.dll` / `libcel_app.so`).
+- Application builds as a shared dynamic library (`cel_dll.dll` / `libcel_dll.so`).
 - Host monitors the file write timestamp via `CelsAppRuntimeCheck`.
-- When you edit and recompile `cel_app` in your IDE, the host:
+- When you edit and recompile `cel_dll` in CLion (Play or Build), the host:
   1. Detects the new timestamp.
   2. Copies the new DLL to a shadow temporary file (avoiding Windows file locks).
   3. Reloads the symbols and refreshes lifecycle function pointers.

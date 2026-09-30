@@ -99,6 +99,15 @@ extern "C" {
 #define _CEL_ATTACH_6(s, id, comp, userData, eval, evalCtx) \
     CelsSessionAttachComposition((s), (id), (void(*)(void*))(comp), (void*)(userData), (bool(*)(void*))(eval), (void*)(evalCtx))
 
+/**
+ * Attaches a root composition function to a CelsSession.
+ *
+ * Supports variable arguments:
+ * - cel_attach(session, id, comp)
+ * - cel_attach(session, id, comp, userData)
+ * - cel_attach(session, id, comp, userData, evalPredicate)
+ * - cel_attach(session, id, comp, userData, evalPredicate, evalCtx)
+ */
 #define cel_attach(...) \
     _CEL_GET_MACRO_6(__VA_ARGS__, _CEL_ATTACH_6, _CEL_ATTACH_5, _CEL_ATTACH_4, _CEL_ATTACH_3, _UNUSED, _UNUSED)(__VA_ARGS__)
 
@@ -348,9 +357,20 @@ extern "C" {
 /* Addressable Persistent State (cel_remember_state)                         */
 /* ========================================================================= */
 
+/**
+ * Allocates or resolves globally addressable persistent state in the session.
+ *
+ * Example:
+ * @code
+ *     ScoreState *score = cel_remember_state(SCORE_ID, ScoreState, { .points = 0 });
+ * @endcode
+ */
 #define cel_remember_state(id, Type, defaultVal) \
     ((Type*)CelsSessionRememberState(CelsGetCurrentSession(), (id), sizeof(Type), &(defaultVal)))
 
+/**
+ * Allocates or resolves globally addressable persistent state in an explicit session.
+ */
 #define cel_session_remember_state(session, id, Type, defaultVal) \
     ((Type*)CelsSessionRememberState((session), (id), sizeof(Type), &(defaultVal)))
 
@@ -393,6 +413,18 @@ extern "C" {
 #define _CEL_WATCH_3(session, Type, id) \
     ((const Type*)CelsStateWatch((session), (id), sizeof(Type)))
 
+/**
+ * Reactively subscribes the current composable to state mutations.
+ *
+ * Automatically records a read dependency on the state cell. When the cell is
+ * mutated via cel_mutate, this composable's key is marked dirty for recomposition.
+ *
+ * Examples:
+ * @code
+ *     const AppTheme *theme = cel_watch(AppTheme);
+ *     const PlayerState *player = cel_watch(PlayerState, playerId);
+ * @endcode
+ */
 #define cel_watch(...) \
     _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_WATCH_3, _CEL_WATCH_2, _CEL_WATCH_1)(__VA_ARGS__)
 
@@ -402,6 +434,14 @@ extern "C" {
 #define _CEL_GET_STATE_3(session, id, Type) \
     ((const Type*)CelsStateGet((session), (id), sizeof(Type)))
 
+/**
+ * Reads reactive state without registering a reactive dependency.
+ *
+ * Example:
+ * @code
+ *     const ConfigState *cfg = cel_get_state(CONFIG_ID, ConfigState);
+ * @endcode
+ */
 #define cel_get_state(...) \
     _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_GET_STATE_3, _CEL_GET_STATE_2)(__VA_ARGS__)
 
@@ -429,9 +469,26 @@ extern "C" {
         } \
     } while (0)
 
+/**
+ * Mutates reactive state and invalidates all observing composables.
+ *
+ * Supports scoped block mutation:
+ * @code
+ *     cel_mutate(session, playerId, PlayerState) {
+ *         this->health -= 10;
+ *     }
+ * @endcode
+ * Or direct value mutation:
+ * @code
+ *     cel_mutate(session, counterId, int, count + 1);
+ * @endcode
+ */
 #define cel_mutate(...) \
     _CEL_GET_MACRO_4(__VA_ARGS__, _CEL_MUTATE_4, _CEL_MUTATE_3, _CEL_MUTATE_2)(__VA_ARGS__)
 
+/**
+ * Returns a mutable pointer to a state cell and invalidates observers.
+ */
 #define cel_mutate_ptr(session, id, Type) \
     ((Type*)CelsStateMutate((session), (id), sizeof(Type)))
 
@@ -439,7 +496,9 @@ extern "C" {
 /* Engine Loop Termination (cel_quit)                                        */
 /* ========================================================================= */
 
+/** Terminates the active host engine frame loop. */
 #define cel_engine_quit() CelsEngineQuit(NULL)
+/** Terminates the active host engine frame loop. */
 #define cel_quit()        CelsEngineQuit(NULL)
 
 /* ========================================================================= */

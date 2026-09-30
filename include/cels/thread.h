@@ -1,7 +1,44 @@
 #pragma once
 
+/**
+ * @file thread.h
+ * @brief Cross-Platform Threading, Monotonic Timing, and Synchronization Primitives.
+ *
+ * Provides a minimal, zero-overhead abstraction layer over Win32 and POSIX
+ * primitives for high-precision monotonic timing, mutex synchronization,
+ * and background worker threads.
+ *
+ * Typical usage:
+ * @code
+ *     // High-precision timing
+ *     uint64_t startMs = CelsGetTimeMs();
+ *     CelsSleepMs(16);
+ *     uint64_t elapsedMs = CelsGetTimeMs() - startMs;
+ *
+ *     // Mutex synchronization
+ *     CelsMutex mutex;
+ *     CelsMutexInit(&mutex);
+ *     CelsMutexLock(&mutex);
+ *     // ... critical section ...
+ *     CelsMutexUnlock(&mutex);
+ *     CelsMutexDestroy(&mutex);
+ *
+ *     // Background worker thread
+ *     CelsThread thread;
+ *     CelsThreadCreate(&thread, WorkerFunction, context);
+ *     CelsThreadJoin(&thread);
+ * @endcode
+ *
+ * Thread safety: Mutex operations are thread-safe. Thread handle functions
+ * should be called by the thread's owner/creator.
+ */
+
 #include <stdint.h>
 #include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #if defined(_WIN32) || defined(_MSC_VER)
     #ifndef WIN32_LEAN_AND_MEAN
@@ -9,20 +46,28 @@
     #endif
     #include <windows.h>
 
+    /** Native thread handle type. */
     typedef HANDLE CelsThreadHandle;
+    /** Native thread identifier type. */
     typedef DWORD  CelsThreadId;
+    /** Native non-recursive mutex type. */
     typedef CRITICAL_SECTION CelsMutex;
 
+    /** Native thread procedure signature. */
     typedef DWORD (WINAPI *CelsThreadFn)(void *arg);
 #else
     #include <pthread.h>
     #include <unistd.h>
     #include <time.h>
 
+    /** Native thread handle type. */
     typedef pthread_t CelsThreadHandle;
+    /** Native thread identifier type. */
     typedef pthread_t CelsThreadId;
+    /** Native non-recursive mutex type. */
     typedef pthread_mutex_t CelsMutex;
 
+    /** Native thread procedure signature. */
     typedef void* (*CelsThreadFn)(void *arg);
 #endif
 
@@ -43,8 +88,12 @@
 /* ========================================================================= */
 
 /**
- * Returns monotonic time in milliseconds since an unspecified epoch.
- * Guaranteed strictly monotonic across Windows, Linux, and macOS.
+ * Returns monotonic time in milliseconds since an unspecified system epoch.
+ *
+ * Guaranteed strictly monotonic across Windows (via QueryPerformanceCounter)
+ * and POSIX (via CLOCK_MONOTONIC). Unaffected by system clock changes.
+ *
+ * @return Current timestamp in milliseconds.
  */
 static inline uint64_t CelsGetTimeMs(void)
 {
@@ -66,7 +115,9 @@ static inline uint64_t CelsGetTimeMs(void)
 }
 
 /**
- * Suspends calling thread for specified milliseconds.
+ * Suspends calling thread for specified duration in milliseconds.
+ *
+ * @param ms Sleep duration in milliseconds.
  */
 static inline void CelsSleepMs(uint32_t ms)
 {
@@ -84,6 +135,11 @@ static inline void CelsSleepMs(uint32_t ms)
 /* Cross-Platform Mutex Primitives                                           */
 /* ========================================================================= */
 
+/**
+ * Initializes a mutex object before first use.
+ *
+ * @param mutex Pointer to uninitialized mutex structure. Non-NULL.
+ */
 static inline void CelsMutexInit(CelsMutex *mutex)
 {
 #if defined(_WIN32) || defined(_MSC_VER)
@@ -93,6 +149,11 @@ static inline void CelsMutexInit(CelsMutex *mutex)
 #endif
 }
 
+/**
+ * Acquires exclusive ownership of a mutex, blocking until available.
+ *
+ * @param mutex Pointer to initialized mutex structure. Non-NULL.
+ */
 static inline void CelsMutexLock(CelsMutex *mutex)
 {
 #if defined(_WIN32) || defined(_MSC_VER)
@@ -102,6 +163,11 @@ static inline void CelsMutexLock(CelsMutex *mutex)
 #endif
 }
 
+/**
+ * Releases exclusive ownership of a mutex previously acquired via CelsMutexLock.
+ *
+ * @param mutex Pointer to locked mutex structure. Non-NULL.
+ */
 static inline void CelsMutexUnlock(CelsMutex *mutex)
 {
 #if defined(_WIN32) || defined(_MSC_VER)
@@ -111,6 +177,11 @@ static inline void CelsMutexUnlock(CelsMutex *mutex)
 #endif
 }
 
+/**
+ * Destroys a mutex and releases any associated operating system resources.
+ *
+ * @param mutex Pointer to mutex structure. Non-NULL.
+ */
 static inline void CelsMutexDestroy(CelsMutex *mutex)
 {
 #if defined(_WIN32) || defined(_MSC_VER)
@@ -124,11 +195,22 @@ static inline void CelsMutexDestroy(CelsMutex *mutex)
 /* Cross-Platform Thread Creation & Joining                                  */
 /* ========================================================================= */
 
+/**
+ * Lightweight thread handle wrapper.
+ */
 typedef struct CelsThread {
-    CelsThreadHandle handle;
-    bool isRunning;
+    CelsThreadHandle handle;    /**< Underlying OS thread handle */
+    bool             isRunning; /**< True while thread is active */
 } CelsThread;
 
+/**
+ * Spawns a new OS thread executing the specified function.
+ *
+ * @param thread Pointer to thread struct to populate. Non-NULL.
+ * @param fn     Thread entry point function. Non-NULL.
+ * @param arg    Argument passed to thread procedure. Can be NULL.
+ * @return True if thread was successfully created; false otherwise.
+ */
 static inline bool CelsThreadCreate(CelsThread *thread, CelsThreadFn fn, void *arg)
 {
     if (thread == NULL || fn == NULL) return false;
@@ -144,6 +226,11 @@ static inline bool CelsThreadCreate(CelsThread *thread, CelsThreadFn fn, void *a
 #endif
 }
 
+/**
+ * Waits for a thread to terminate and cleans up its handle.
+ *
+ * @param thread Pointer to active thread struct. Safe if NULL or inactive.
+ */
 static inline void CelsThreadJoin(CelsThread *thread)
 {
     if (thread == NULL || !thread->isRunning) return;
@@ -157,3 +244,7 @@ static inline void CelsThreadJoin(CelsThread *thread)
 #endif
     thread->isRunning = false;
 }
+
+#ifdef __cplusplus
+}
+#endif

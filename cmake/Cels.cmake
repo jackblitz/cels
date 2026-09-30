@@ -47,17 +47,21 @@ Modes:
 #]=======================================================================]
 function(cels_add_application)
     set(options HOT_RELOAD SINGLE_BINARY MONOLITHIC)
-    set(oneValueArgs HOST APP MODE OUTPUT_DIR)
+    set(oneValueArgs HOST APP DLL MODE OUTPUT_DIR)
     set(multiValueArgs HOST_SOURCES APP_SOURCES INCLUDES HOST_INCLUDES APP_INCLUDES LIBRARIES HOST_LIBRARIES APP_LIBRARIES DEFINES)
 
     cmake_parse_arguments(PARSE_ARGV 0 PARSED "${options}" "${oneValueArgs}" "${multiValueArgs}")
+
+    if(PARSED_DLL AND NOT PARSED_APP)
+        set(PARSED_APP "${PARSED_DLL}")
+    endif()
 
     if(NOT PARSED_HOST)
         message(FATAL_ERROR "cels_add_application: Required argument 'HOST' (host executable target name) is missing.")
     endif()
 
     if(NOT PARSED_APP)
-        message(FATAL_ERROR "cels_add_application: Required argument 'APP' (application module target name) is missing.")
+        message(FATAL_ERROR "cels_add_application: Required argument 'APP' or 'DLL' (application module target name) is missing.")
     endif()
 
     if(NOT PARSED_HOST_SOURCES)
@@ -168,11 +172,6 @@ function(cels_add_application)
             )
         endif()
 
-        # Optional rebuild target: Rebuilds the application library without creating an executable
-        if(NOT TARGET ${PARSED_APP}_rebuild)
-            add_custom_target(${PARSED_APP}_rebuild DEPENDS ${PARSED_APP})
-        endif()
-
     else()
         message(STATUS "cels_add_application: Configuring '${PARSED_HOST}' in SINGLE-BINARY mode (monolithic standalone .exe)")
 
@@ -200,10 +199,6 @@ function(cels_add_application)
         # Compatibility target: If IDE or script targets APP, build HOST seamlessly
         if(NOT TARGET ${PARSED_APP})
             add_custom_target(${PARSED_APP} DEPENDS ${PARSED_HOST})
-        endif()
-
-        if(NOT TARGET ${PARSED_APP}_rebuild)
-            add_custom_target(${PARSED_APP}_rebuild DEPENDS ${PARSED_HOST})
         endif()
 
         if(RESOLVED_OUTPUT_DIR)
