@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20...4.3)
 
 # Single source of truth for version code and release string
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/include/cels/version.h" CELS_VER_LINE REGEX "^#define CELS_VERSION_STRING \"([0-9]+\\.[0-9]+\\.[0-9]+)\"")
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/include/cels/runtime/version.h" CELS_VER_LINE REGEX "^#define CELS_VERSION_STRING \"([0-9]+\\.[0-9]+\\.[0-9]+)\"")
 string(REGEX REPLACE "^#define CELS_VERSION_STRING \"([0-9]+\\.[0-9]+\\.[0-9]+)\"" "\\1" CELS_VERSION "${CELS_VER_LINE}")
 
 project(cels VERSION ${CELS_VERSION} LANGUAGES C)
@@ -41,21 +41,33 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+if(WIN32 AND CMAKE_C_COMPILER_ID MATCHES "GNU")
+    add_link_options(-static-libgcc)
+endif()
+
 # Core CELS library (C99 modular implementation)
 add_library(cels_core STATIC
-    src/slot_table.c
-    src/session.c
-    src/state.c
-    src/engine.c
-    src/module.c
+    src/runtime/slot_table.c
+    src/runtime/session.c
+    src/runtime/state.c
+    src/runtime/task.c
+    src/runtime/transition.c
+    src/host/engine.c
+    src/host/module.c
+    src/platform/fiber.c
+    src/platform/log.c
 )
 target_include_directories(cels_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
-if(UNIX AND NOT APPLE)
-    target_link_libraries(cels_core PUBLIC ${CMAKE_DL_LIBS})
+if(UNIX)
+    if(NOT APPLE)
+        target_link_libraries(cels_core PUBLIC ${CMAKE_DL_LIBS} m pthread)
+    else()
+        target_link_libraries(cels_core PUBLIC pthread)
+    endif()
 endif()
 
 # Modern CMake target aliases
@@ -78,27 +90,56 @@ else()
 endif()
 option(CELS_HOT_RELOAD "Enable dynamic hot-reload host (.exe + .dll). When OFF, builds a single monolithic .exe" ${CELS_HOT_RELOAD_DEFAULT})
 
+# Helper runner for IDE hot-reload rebuilds (CLion, VS Code)
+add_executable(cels_hot_reload_notifier
+    tools/hot_reload_notifier.c
+)
+set_target_properties(cels_hot_reload_notifier PROPERTIES
+    OUTPUT_NAME cels_hot_reload_notifier
+)
+
 # =============================================================================
-# Canonical Example Application (cel_host + cel_app) via cels_add_application
+# Canonical Example Applications (**_host + **_dll) via cels_add_application
 # =============================================================================
 if(CELS_BUILD_EXAMPLES)
+    # 1. Window Example (cel_host + cel_dll)
     cels_add_application(
         HOST cel_host
-        APP cel_app
-        HOST_SOURCES examples/host.c
+        DLL cel_dll
+        HOST_SOURCES
+            examples/window/host.c
         APP_SOURCES
-            examples/app.c
-            examples/window.c
+            examples/window/app/app.c
+            examples/window/app/composition/window.c
+            examples/window/app/composition/window_content.c
         INCLUDES
-            ${CMAKE_CURRENT_SOURCE_DIR}/examples
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/window/app
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/window/app/composition
     )
 
-    # Application Rebuild Script Runner (Triggered by CLion 'Play' Button on cel_app)
-    add_executable(build_app
-        scripts/build_app.c
+    # 2. Task / Network Example (cel_task_host + cel_task_dll)
+    cels_add_application(
+        HOST cel_task_host
+        DLL cel_task_dll
+        HOST_SOURCES
+            examples/task/host.c
+        APP_SOURCES
+            examples/task/app/app.c
+        INCLUDES
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/task/app
     )
-    target_include_directories(build_app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/scripts)
-    set_target_properties(build_app PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
+    # 3. Temporal Transition Example (cel_transition_host + cel_transition_dll)
+    cels_add_application(
+        HOST cel_transition_host
+        DLL cel_transition_dll
+        HOST_SOURCES
+            examples/transition/host.c
+        APP_SOURCES
+            examples/transition/app/app.c
+        INCLUDES
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/transition/app
+    )
 endif()
 
 # =============================================================================
@@ -128,12 +169,21 @@ if(CELS_BUILD_TESTS)
         test/tree/test_tree.c
         test/benchmark/test_benchmark.c
         test/hot_reload/test_hot_reload.c
+        test/task/test_task.c
+        test/transaction/test_transaction.c
+        test/transition/test_transition.c
     )
     target_include_directories(test_cli PRIVATE
         ${TEST_COMMON_DIR}
         ${TEST_COMMON_DIR}/benchmark
     )
     target_link_libraries(test_cli PRIVATE cels_core)
+    if(WIN32 AND CMAKE_C_COMPILER_ID MATCHES "GNU")
+        get_filename_component(MINGW_BIN_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
+        if(EXISTS "${MINGW_BIN_DIR}/libwinpthread-1.dll")
+            file(COPY "${MINGW_BIN_DIR}/libwinpthread-1.dll" DESTINATION "${CELS_OUTPUT_DIR}")
+        endif()
+    endif()
     set_target_properties(test_cli PROPERTIES OUTPUT_NAME test_cli)
     add_dependencies(test_cli test_fixture_app)
     add_test(NAME test_cli COMMAND test_cli)

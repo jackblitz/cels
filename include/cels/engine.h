@@ -9,13 +9,38 @@
  *    Flecs ECS entity worlds, and Audio streams. These survive DLL reloads.
  * 2. The reactive composition slot session (CelsSession) with its L1 cache slab.
  * 3. The main loop and dynamic application (.dll) loader / hot-reloader.
+ *
+ * Typical usage:
+ * @code
+ *     CelsEngine engine;
+ *     CelsResult result = CelsEngineInit(&engine, "my_app");
+ *     if (result != CELS_OK) {
+ *         fprintf(stderr, "Engine init failed: %s\n", CelsResultToString(result));
+ *         return result;
+ *     }
+ *
+ *     // Register host subsystem modules before or during tick
+ *     MyRenderer renderer = { ... };
+ *     CEL_RegisterModule(&engine, MyRenderer, &renderer);
+ *
+ *     while (!engine.shouldQuit) {
+ *         CelsEnginePollReload(&engine);
+ *         CelsEngineRecompose(&engine);
+ *     }
+ *
+ *     CelsEngineDestroy(&engine);
+ * @endcode
+ *
+ * Thread safety: CelsEngine functions operate on the primary engine thread.
+ * Subsystem modules registered via CelsEngineRegisterModule must synchronize
+ * their own access if accessed concurrently by background worker threads.
  */
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include "cels/session.h"
+#include "cels/runtime/session.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -77,19 +102,149 @@ struct CelsEngine {
     uint32_t                      magic;        /**< CELS_ENGINE_MAGIC validation tag */
     const struct CelsAppManifest *manifest;     /**< Application manifest from DLL or static */
     struct CelsAppModule         *appModule;    /**< Dynamic application handle in Hot-Reload mode */
-    CelsModuleBinding             modules[CELS_MAX_MODULES];
-    uint32_t                      moduleCount;
+    CelsModuleBinding             modules[CELS_MAX_MODULES]; /**< Subsystem module bindings */
+    uint32_t                      moduleCount;  /**< Number of active module bindings */
     CelsSession                   session;      /**< Primary reactive session */
-    bool                          isStarted;
-    bool                          shouldQuit;
+    bool                          isStarted;    /**< True if engine and app are active */
+    bool                          shouldQuit;   /**< True if exit has been requested */
 };
 
-/* Engine lifecycle */
-void       CelsEngineInit(CelsEngine *engine, const struct CelsAppManifest *manifest, const CelsSessionConfig *config);
-void       CelsEngineDestroy(CelsEngine *engine);
+/* ========================================================================= */
+/* Engine Lifecycle API                                                      */
+/* ========================================================================= */
 
+/**
+ * Internal initializer for CelsEngine.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application target name, or NULL.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult _CelsEngineInitInternal(CelsEngine *engine, const char *appName);
+
+/**
+ * Internal initializer for CelsEngine with explicit session configuration.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application target name, or NULL.
+ * @param config  Optional session configuration, or NULL for defaults.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult _CelsEngineInitInternalWithOptions(CelsEngine *engine, const char *appName, const CelsSessionConfig *config);
+
+/**
+ * Tears down a host engine, releasing modules, sessions, and dynamically loaded libraries.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ */
+void CelsEngineDestroy(CelsEngine *engine);
+
+/**
+ * Starts execution of an engine instance and performs initial composition mount.
+ *
+ * @param engine Target host engine. Non-NULL.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
 CelsResult CelsEngineStart(CelsEngine *engine);
-void       CelsEngineEnd(CelsEngine *engine);
+
+/**
+ * Stops execution of an engine instance and invokes teardown hooks.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ */
+void CelsEngineEnd(CelsEngine *engine);
+
+/**
+ * Triggers a recomposition pass on the engine's primary session and all active sessions.
+ *
+ * @param engine Target host engine. Non-NULL.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult CelsEngineRecompose(CelsEngine *engine);
+
+/**
+ * Initializes the engine with explicit session configuration and loads the application module.
+ *
+ * What it does:
+ * - Initializes engine context, thread-local binding, and memory modules.
+ * - Initializes the primary reactive session using the specified CelsSessionConfig
+ *   (e.g., custom slab size, workload profile, or composable count).
+ * - Binds and mounts the application module.
+ *
+ * Expected outcome:
+ * - Engine initialized with CELS_OK, ready for the main tick loop.
+ *
+ * Where to use:
+ * - Host executables customizing session slab memory, capacity profiles, or host engines.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application module name. If NULL, defaults to CELS_APP_TARGET.
+ * @param config  Session configuration (slab, profile, maxComposables), or NULL for defaults.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+static inline CelsResult CelsEngineInitWithOptions(CelsEngine *engine, const char *appName, const CelsSessionConfig *config)
+{
+#if defined(CELS_HOT_RELOAD) && !CELS_HOT_RELOAD
+    (void)appName;
+    CelsResult res = _CelsEngineInitInternalWithOptions(engine, NULL, config);
+    if (res != CELS_OK) {
+        return res;
+    }
+    extern const struct CelsAppManifest *CelsGetAppManifest(void);
+    const struct CelsAppManifest *manifest = CelsGetAppManifest();
+    if (manifest != NULL) {
+        engine->manifest = manifest;
+        return CelsEngineStart(engine);
+    }
+    return CELS_OK;
+#else
+#if defined(CELS_APP_TARGET)
+    if (appName == NULL || appName[0] == '\0') {
+        appName = CELS_APP_TARGET;
+    }
+#endif
+    return _CelsEngineInitInternalWithOptions(engine, appName, config);
+#endif
+}
+
+/**
+ * Initializes the engine and loads the application module with a named capacity profile.
+ *
+ * What it does:
+ * - Dimensions the primary reactive session memory slab using the target CelsSessionProfile.
+ * - Automatically configures optimal group/slot capacities and cache line alignment.
+ *
+ * Expected outcome:
+ * - Engine initialized with the chosen profile slab (e.g. 128 KiB for CELS_PROFILE_1K).
+ *
+ * Where to use:
+ * - Host applications selecting an intent-driven workload capacity profile.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application module name. If NULL, defaults to CELS_APP_TARGET.
+ * @param profile Workload capacity profile (e.g. CELS_PROFILE_1K, CELS_PROFILE_512).
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+static inline CelsResult CelsEngineInitWithProfile(CelsEngine *engine, const char *appName, CelsSessionProfile profile)
+{
+    CelsSessionConfig cfg = CelsSessionProfileConfig(profile);
+    return CelsEngineInitWithOptions(engine, appName, &cfg);
+}
+
+/**
+ * Initializes the engine and loads the application module.
+ *
+ * Discovers and binds the application module (<appName>.dll in Debug, static in Release),
+ * initializes the session memory slab, and mounts the root composition.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application module name. If NULL, defaults to CELS_APP_TARGET.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+static inline CelsResult CelsEngineInit(CelsEngine *engine, const char *appName)
+{
+    return CelsEngineInitWithOptions(engine, appName, NULL);
+}
 
 /**
  * Resolves and loads an application module into the engine.
@@ -118,6 +273,12 @@ static inline CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appNa
     return CelsEngineStart(engine);
 }
 
+/**
+ * Checks for runtime code reload (no-op in monolithic Release mode).
+ *
+ * @param engine Target host engine. Safe if NULL.
+ * @return Always false in monolithic release mode.
+ */
 static inline bool CelsAppRuntimeCheck(CelsEngine *engine)
 {
     (void)engine;
@@ -132,25 +293,91 @@ bool       CelsAppRuntimeCheck(CelsEngine *engine);
 #define CelsEnginePollReload CelsAppRuntimeCheck
 #define cels_engine_poll_reload CelsAppRuntimeCheck
 
-void       CelsEngineRegisterModule(CelsEngine *engine,
-                                    uint64_t key,
-                                    const char *name,
-                                    void *instance,
-                                    void (*onDestroy)(void *instance));
+/**
+ * Registers an engine subsystem module binding with the host engine.
+ *
+ * @param engine    Target host engine. Non-NULL.
+ * @param key       Unique 64-bit module type key.
+ * @param name      Human-readable module identifier for diagnostics. Non-NULL.
+ * @param instance  Pointer to developer-allocated module struct. Non-NULL.
+ * @param onDestroy Cleanup callback invoked when engine shuts down. Safe if NULL.
+ */
+void CelsEngineRegisterModule(CelsEngine *engine,
+                              uint64_t key,
+                              const char *name,
+                              void *instance,
+                              void (*onDestroy)(void *instance));
 
-void      *CelsEngineGetModule(const CelsEngine *engine, uint64_t key);
+/**
+ * Retrieves a registered subsystem module pointer by its 64-bit key from the engine.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ * @param key    Unique 64-bit module type key.
+ * @return Pointer to module struct instance, or NULL if not found.
+ */
+void *CelsEngineGetModule(const CelsEngine *engine, uint64_t key);
 
+/**
+ * Returns the currently active ambient host engine bound to the calling thread.
+ *
+ * @return Pointer to current CelsEngine, or NULL if none is active.
+ */
 CelsEngine *CelsGetCurrentEngine(void);
-void        CelsSetCurrentEngine(CelsEngine *engine);
 
+/**
+ * Sets the active ambient host engine bound to the calling thread.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ */
+void CelsSetCurrentEngine(CelsEngine *engine);
+
+/**
+ * Requests that the host engine terminate its tick loop.
+ *
+ * @param engine Target engine. If NULL, targets CelsGetCurrentEngine().
+ */
+static inline void CelsEngineQuit(CelsEngine *engine)
+{
+    if (engine == NULL) {
+        engine = CelsGetCurrentEngine();
+    }
+    if (engine != NULL) {
+        engine->shouldQuit = true;
+    }
+}
+
+/**
+ * Executes a standalone monolithic application lifecycle using the provided manifest.
+ *
+ * @param manifest Application manifest descriptor. Non-NULL.
+ * @param config   Optional session configuration, or NULL for defaults.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
 CelsResult CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessionConfig *config);
 
 /* ========================================================================= */
 /* Module Access Dispatch Helpers                                            */
 /* ========================================================================= */
 
+/**
+ * Resolves a subsystem module pointer from context or ambient engine/session.
+ *
+ * @param ctx Context pointer (CelsEngine* or CelsSession*), or NULL for ambient.
+ * @param key Unique 64-bit module type key.
+ * @return Resolved module pointer, or NULL if not found.
+ */
 void *_cels_resolve_module(const void *ctx, uint64_t key);
-void  _cels_dispatch_register_module(void *ctx, uint64_t key, const char *name, void *inst, void (*on_destroy)(void*));
+
+/**
+ * Dispatches module registration to the target engine or session context.
+ *
+ * @param ctx        Target context (CelsEngine* or CelsSession*), or NULL for ambient.
+ * @param key        Unique 64-bit module type key.
+ * @param name       Human-readable module identifier for diagnostics. Non-NULL.
+ * @param inst       Pointer to developer-allocated module struct. Non-NULL.
+ * @param on_destroy Optional cleanup callback. Safe if NULL.
+ */
+void _cels_dispatch_register_module(void *ctx, uint64_t key, const char *name, void *inst, void (*on_destroy)(void*));
 
 #define _CEL_REG_MODULE_3(target, Type, ptr) \
     _cels_dispatch_register_module((void*)(target), CelsHashKey(#Type), #Type, (void*)(ptr), NULL)

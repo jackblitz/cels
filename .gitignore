@@ -8,6 +8,7 @@
 /cmake-build-release/
 
 /.internaldocs/
+/internal/
 
 # Benchmark outputs
 /benchmark/

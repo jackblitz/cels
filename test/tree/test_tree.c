@@ -12,14 +12,14 @@
 /* ========================================================================= */
 
 typedef struct KeyRegistryEntry {
-    uint32_t key;
+    uint64_t key;
     const char *name;
 } KeyRegistryEntry;
 
 static KeyRegistryEntry g_keyRegistry[64];
 static uint32_t g_registryCount = 0;
 
-static void RegisterKey(uint32_t key, const char *name) {
+static void RegisterKey(uint64_t key, const char *name) {
     for (uint32_t i = 0; i < g_registryCount; ++i) {
         if (g_keyRegistry[i].key == key) return;
     }
@@ -28,9 +28,9 @@ static void RegisterKey(uint32_t key, const char *name) {
     }
 }
 
-#define REGISTER_KEY(str) RegisterKey(CEL_KEY(str), str)
+#define REGISTER_KEY(str) RegisterKey(CEL_ID(str), str)
 
-static const char* GetKeyName(uint32_t key) {
+static const char* GetKeyName(uint64_t key) {
     for (uint32_t i = 0; i < g_registryCount; ++i) {
         if (g_keyRegistry[i].key == key) return g_keyRegistry[i].name;
     }
@@ -54,13 +54,13 @@ static inline uint32_t GetActiveCount(const CelsSession *s) {
 static void PrintNode(const CelsSession *s, uint32_t logicalIdx, const char *prefix, bool isLast) {
     const CelsSlotGroup *g = GetGroup(s, logicalIdx);
 
-    printf("%s%s[%s] (0x%08llX) | descendants: %u | slots: %u B | parent: %u\n",
+    printf("%s%s[%s] (0x%016llX) | descendants: %u | slots: %u B | parent: %u\n",
            prefix,
            isLast ? "\\-- " : "|-- ",
-           GetKeyName((uint32_t)g->key),
+           GetKeyName(g->key),
            (unsigned long long)g->key,
            g->groupSize,
-           g->dataSize,
+           g->slotCount,
            g->parentIndex);
 
     char nextPrefix[256];
@@ -89,10 +89,10 @@ static void CelsDumpTree(const CelsSession *s) {
     const CelsSlotGroup *root = GetGroup(s, 0);
 
     printf("\n=== COMPOSABLE TREE DUMP (%u active nodes, %u arena bytes) ===\n",
-           totalGroups, s->dataGapStart);
+           totalGroups, (unsigned int)s->dataGapStart);
 
-    printf("[%s] (0x%08llX) | descendants: %u | slots: %u B\n",
-           GetKeyName((uint32_t)root->key), (unsigned long long)root->key, root->groupSize, root->dataSize);
+    printf("[%s] (0x%016llX) | descendants: %u | slots: %u B\n",
+           GetKeyName(root->key), (unsigned long long)root->key, root->groupSize, root->slotCount);
 
     uint32_t childLogical = 1;
     uint32_t endLogical = 1 + root->groupSize;
@@ -117,63 +117,67 @@ CEL_State(AppState) {
     bool showSubMenu;
 };
 
-static AppState g_appState = {
-    .showOptionalSidebar = true,
-    .showSubMenu = true
-};
-
-CEL_Observer(SidebarResource) {
+CEL_State(SidebarResource) {
     int resourceHandle;
 };
 
-static void SidebarResource_OnRemembered(SidebarResource *self, CelsSession *s) {
-    (void)s;
-    self->resourceHandle = 0xABCD;
-}
-
-static void SidebarResource_OnForgotten(SidebarResource *self, CelsSession *s) {
-    (void)s;
-    self->resourceHandle = 0;
+CEL_Lifecycle(SidebarLifecycle, SidebarResource *self) {
+    mount {
+        self->resourceHandle = 0xABCD;
+    }
+    unmount {
+        self->resourceHandle = 0;
+    }
 }
 
 /* ========================================================================= */
-/* Declarative Root Function                                                 */
+/* Declarative Tree Composables                                              */
 /* ========================================================================= */
 
-static void RootApp(CelsSession *s) {
-    CEL_Composition(s, CEL_KEY("RootWindow")) {
-        AppState state = cel_watch(s, &g_appState);
+CEL_Composable(SettingsItem) {}
 
-        CEL_Composable(s, CEL_KEY("HeaderBar")) {
-            CEL_Composable(s, CEL_KEY("TitleLabel")) {
-                cel_remember(s, int, 42);
-            } CEL_Close(s);
+CEL_Composable(SubMenu) {
+    SettingsItem();
+}
 
-            CEL_Composable(s, CEL_KEY("CloseButton")) {
-            } CEL_Close(s);
-        } CEL_Close(s);
+CEL_Composable(ProfileWidget) {}
 
-        CEL_Composable(s, CEL_KEY("MainBody")) {
-            CEL_Composable(s, CEL_KEY("ContentArea")) {
-            } CEL_Close(s);
+CEL_Composable(Sidebar) {
+    SidebarResource *res = cel_remember(SidebarResource, 0);
+    cel_lifecycle(SidebarLifecycle, res);
+    ProfileWidget();
+    const AppState *state = cel_watch(AppState, CEL_ID("AppState"));
+    if (state && state->showSubMenu) {
+        SubMenu();
+    }
+}
 
-            if (state.showOptionalSidebar) {
-                CEL_Composable(s, CEL_KEY("Sidebar")) {
-                    cel_remember_observer(s, SidebarResource, SidebarResource_OnRemembered, SidebarResource_OnForgotten);
+CEL_Composable(ContentArea) {}
 
-                    CEL_Composable(s, CEL_KEY("ProfileWidget")) {
-                    } CEL_Close(s);
+CEL_Composable(MainBody) {
+    ContentArea();
+    const AppState *state = cel_watch(AppState, CEL_ID("AppState"));
+    if (state && state->showOptionalSidebar) {
+        Sidebar();
+    }
+}
 
-                    if (state.showSubMenu) {
-                        CEL_Composable(s, CEL_KEY("SubMenu")) {
-                            CEL_Composable(s, CEL_KEY("SettingsItem")) {
-                            } CEL_Close(s);
-                        } CEL_Close(s);
-                    }
-                } CEL_Close(s);
-            }
-        } CEL_Close(s);
-    } CEL_Close(s);
+CEL_Composable(CloseButton) {}
+
+CEL_Composable(TitleLabel) {
+    int *val = cel_remember(int, 42);
+    (void)val;
+}
+
+CEL_Composable(HeaderBar) {
+    TitleLabel();
+    CloseButton();
+}
+
+CEL_Composition(RootWindow, void *userData) {
+    (void)userData;
+    HeaderBar();
+    MainBody();
 }
 
 static void InitKeyRegistry(void) {
@@ -190,10 +194,17 @@ static void InitKeyRegistry(void) {
     REGISTER_KEY("SettingsItem");
 }
 
-static void ResetTreeState(void) {
-    g_appState.showOptionalSidebar = true;
-    g_appState.showSubMenu = true;
+static void ResetTreeState(CelsSession *session) {
     InitKeyRegistry();
+    CelsSessionRememberState(session, CEL_ID("AppState"), sizeof(AppState), &((AppState){
+        .showOptionalSidebar = true,
+        .showSubMenu = true
+    }));
+    cel_mutate(session, CEL_ID("AppState"), AppState) {
+        this->showOptionalSidebar = true;
+        this->showSubMenu = true;
+    }
+    cel_attach(session, RootWindow);
 }
 
 /* ========================================================================= */
@@ -201,11 +212,9 @@ static void ResetTreeState(void) {
 /* ========================================================================= */
 
 static void TestTreeInitialMount(void) {
-    ResetTreeState();
     CelsSession session;
-    CelsSessionInit(&session, &(CelsSessionConfig){
-        .root = RootApp
-    });
+    CelsSessionInit(&session, NULL);
+    ResetTreeState(&session);
 
     CelsResult res = CelsSessionRecompose(&session);
     assert(res == CELS_OK);
@@ -216,70 +225,68 @@ static void TestTreeInitialMount(void) {
 }
 
 static void TestTreeToggleSubMenu(void) {
-    ResetTreeState();
     CelsSession session;
-    CelsSessionInit(&session, &(CelsSessionConfig){
-        .root = RootApp
-    });
+    CelsSessionInit(&session, NULL);
+    ResetTreeState(&session);
 
     assert(CelsSessionRecompose(&session) == CELS_OK);
     assert(GetActiveCount(&session) == 10);
 
-    cel_mutate(&session, &g_appState) {
+    cel_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showSubMenu = false;
     }
+
     assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(GetActiveCount(&session) == 8);
 
     CelsSessionDestroy(&session);
 }
 
 static void TestTreeToggleOptionalSidebar(void) {
-    ResetTreeState();
     CelsSession session;
-    CelsSessionInit(&session, &(CelsSessionConfig){
-        .root = RootApp
-    });
+    CelsSessionInit(&session, NULL);
+    ResetTreeState(&session);
 
     assert(CelsSessionRecompose(&session) == CELS_OK);
     assert(GetActiveCount(&session) == 10);
 
-    cel_mutate(&session, &g_appState) {
+    cel_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showOptionalSidebar = false;
     }
+
     assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(GetActiveCount(&session) == 6);
 
     CelsSessionDestroy(&session);
 }
 
 static void TestTreeReenableOptionalSidebar(void) {
-    ResetTreeState();
     CelsSession session;
-    CelsSessionInit(&session, &(CelsSessionConfig){
-        .root = RootApp
-    });
+    CelsSessionInit(&session, NULL);
+    ResetTreeState(&session);
 
     assert(CelsSessionRecompose(&session) == CELS_OK);
 
-    cel_mutate(&session, &g_appState) {
+    cel_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showOptionalSidebar = false;
     }
     assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(GetActiveCount(&session) == 6);
 
-    cel_mutate(&session, &g_appState) {
+    cel_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showOptionalSidebar = true;
         this->showSubMenu = false;
     }
     assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(GetActiveCount(&session) == 8);
 
     CelsSessionDestroy(&session);
 }
 
 static void TestTreeFullPassSequence(void) {
-    ResetTreeState();
     CelsSession session;
-    CelsSessionInit(&session, &(CelsSessionConfig){
-        .root = RootApp
-    });
+    CelsSessionInit(&session, NULL);
+    ResetTreeState(&session);
 
     /* PASS 1: Initial Mount */
     assert(CelsSessionRecompose(&session) == CELS_OK);
@@ -287,25 +294,28 @@ static void TestTreeFullPassSequence(void) {
     CelsDumpTree(&session);
 
     /* PASS 2: Toggling showSubMenu = false */
-    cel_mutate(&session, &g_appState) {
+    cel_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showSubMenu = false;
     }
     assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(GetActiveCount(&session) == 8);
     CelsDumpTree(&session);
 
     /* PASS 3: Toggling showOptionalSidebar = false */
-    cel_mutate(&session, &g_appState) {
+    cel_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showOptionalSidebar = false;
     }
     assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(GetActiveCount(&session) == 6);
     CelsDumpTree(&session);
 
     /* PASS 4: Re-enabling showOptionalSidebar = true */
-    cel_mutate(&session, &g_appState) {
+    cel_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showOptionalSidebar = true;
         this->showSubMenu = false;
     }
     assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(GetActiveCount(&session) == 8);
     CelsDumpTree(&session);
 
     CelsSessionDestroy(&session);

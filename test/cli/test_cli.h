@@ -47,6 +47,9 @@ const TestSuite *GetStateLifetimeTestSuite(void);
 const TestSuite *GetTreeTestSuite(void);
 const TestSuite *GetBenchmarkTestSuite(void);
 const TestSuite *GetHotReloadTestSuite(void);
+const TestSuite *GetTaskTestSuite(void);
+const TestSuite *GetTransactionTestSuite(void);
+const TestSuite *GetTransitionTestSuite(void);
 
 /**
  * Case-insensitive string comparison helper.

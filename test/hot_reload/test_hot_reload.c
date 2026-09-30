@@ -2,7 +2,7 @@
 #undef NDEBUG
 #endif
 #include "cels.h"
-#include "cels/module.h"
+#include "cels/runtime/module.h"
 #include "cli/test_cli.h"
 
 #include <assert.h>
@@ -26,13 +26,14 @@ CEL_Composable(HotWidget, HotState*, state) {
     (*localCounter)++;
     s_rememberedCurrent = *localCounter;
 
-    HotState val = cel_watch(state);
+    cel_watch(state);
+    const HotState *val = state;
     (void)val;
 }
 
-CEL_Composition(HotApp, key) {
-    HotState init = { .value = 10, .revision = 1 };
-    HotState *state = cel_lifecycle_state(init, NULL, NULL);
+CEL_Composition(HotApp, void *userData) {
+    (void)userData;
+    HotState *state = cel_remember_state(HotState, { .value = 10, .revision = 1 });
     HotWidget(state);
 }
 
@@ -48,7 +49,7 @@ static void TestHotReloadInvalidation(void)
     CelsSession session;
     CelsSessionInit(&session, NULL);
 
-    CEL_Attach(&session, HotApp, CEL_None);
+    cel_attach(&session, HotApp);
 
     /* Pass 1: Fresh mount */
     assert(CelsSessionRecompose(&session) == CELS_OK);
@@ -91,17 +92,17 @@ static void TestHotReloadStateRetention(void)
 
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    CEL_Attach(&session, HotApp, CEL_None);
+    cel_attach(&session, HotApp);
 
     CelsSessionRecompose(&session);
     assert(s_rememberedCurrent == 43);
 
-    HotState *state = CEL_GetState(&session, CEL_KEY("HotApp"), HotState);
+    const HotState *state = cel_get_state(&session, HotState);
     assert(state != NULL);
     assert(state->value == 10);
 
     /* Mutate state before hot reload */
-    cel_mutate(&session, state) {
+    cel_mutate(&session, HotState) {
         this->value = 999;
         this->revision = 5;
     }
@@ -114,7 +115,7 @@ static void TestHotReloadStateRetention(void)
     CelsSessionRecompose(&session);
 
     /* State must STILL be 999 across hot reload */
-    HotState *retainedState = CEL_GetState(&session, CEL_KEY("HotApp"), HotState);
+    const HotState *retainedState = cel_get_state(&session, HotState);
     assert(retainedState != NULL);
     assert(retainedState->value == 999);
     assert(retainedState->revision == 5);
@@ -131,7 +132,7 @@ static void TestHotReloadSchemaEvolution(void)
 
     /* Simulate mounting a group with a 4-byte slot */
     assert(CelsEnterComposition(&session, 0x1234));
-    int *slotA = (int *)CelsResolveSlot(&session, sizeof(int), &(int){ 10 }, NULL);
+    int *slotA = (int *)CelsResolveSlot(&session, sizeof(int), &(int){ 10 });
     assert(slotA != NULL && *slotA == 10);
     CelsExitGroup(&session);
 
@@ -141,8 +142,7 @@ static void TestHotReloadSchemaEvolution(void)
     assert(CelsEnterComposition(&session, 0x1234));
     uint64_t *slotB = (uint64_t *)CelsResolveSlot(&session,
                                                   sizeof(uint64_t),
-                                                  &(uint64_t){ 999999ULL },
-                                                  NULL);
+                                                  &(uint64_t){ 999999ULL });
     assert(slotB != NULL);
     assert(*slotB == 999999ULL);
     CelsExitGroup(&session);
@@ -177,7 +177,7 @@ static void TestModuleRegistry(void)
     s_flecsDestroyCount = 0;
 
     CelsEngine engine;
-    CelsEngineInit(&engine, NULL, NULL);
+    CelsEngineInit(&engine, NULL);
 
     SDLTestModule sdl = {
         .windowWidth = 1920,
@@ -223,20 +223,19 @@ CEL_Module(CustomAppTestModule) {
 static int s_testAppStartFired = 0;
 static int s_testAppEndFired = 0;
 
-CEL_Composition(TestAppRoot, key) {
+CEL_Composition(TestAppRoot, void *userData) {
+    (void)userData;
     CustomAppTestModule *mod = CEL_GetModule(CustomAppTestModule);
     assert(mod != NULL);
     assert(mod->value == 4242);
 }
 
-static CelsCompositionRef TestApp_OnStart(CelsEngine *engine,
-                                          CelsSession *session)
+static void TestApp_OnStart(CelsEngine *engine, CelsSession *session)
 {
-    (void)session;
     s_testAppStartFired++;
     static CustomAppTestModule mod = { .value = 4242 };
     CEL_RegisterModule(engine, CustomAppTestModule, &mod);
-    return CEL_COMPOSITION(TestAppRoot);
+    cel_attach(session, TestAppRoot);
 }
 
 static void TestApp_OnEnd(CelsEngine *engine, CelsSession *session)
@@ -246,7 +245,7 @@ static void TestApp_OnEnd(CelsEngine *engine, CelsSession *session)
     s_testAppEndFired++;
 }
 
-CEL_App(TestAppDefinition,
+CEL_App_Manifest(TestAppDefinition,
     .onStart = TestApp_OnStart,
     .onEnd = TestApp_OnEnd
 );
@@ -269,21 +268,33 @@ static void TestAppLifecycleAndReturnComposition(void)
 
 static void TestDynamicAppLoader(void)
 {
-    const char *modulePaths[] = {
-        "build/debug/windows/libtest_fixture_app.dll",
-        "../build/debug/windows/libtest_fixture_app.dll",
-        "../../build/debug/windows/libtest_fixture_app.dll",
-        "libtest_fixture_app.dll",
-        "libtest_fixture_app.so",
-        "build/debug/windows/libtest_fixture_app.so"
-    };
+    char resolvedPath[CELS_PATH_MAX] = {0};
     const char *foundPath = NULL;
-    for (size_t i = 0; i < sizeof(modulePaths) / sizeof(modulePaths[0]); ++i) {
-        FILE *f = fopen(modulePaths[i], "rb");
-        if (f != NULL) {
-            fclose(f);
-            foundPath = modulePaths[i];
-            break;
+
+    if (CelsResolveModulePath("test_fixture_app", resolvedPath, sizeof(resolvedPath))) {
+        foundPath = resolvedPath;
+    } else {
+        const char *const modulePaths[] = {
+            "build/debug/windows/libtest_fixture_app.dll",
+            "build/debug/linux/libtest_fixture_app.so",
+            "build/debug/macos/libtest_fixture_app.dylib",
+            "../build/debug/windows/libtest_fixture_app.dll",
+            "../build/debug/linux/libtest_fixture_app.so",
+            "../build/debug/macos/libtest_fixture_app.dylib",
+            "../../build/debug/windows/libtest_fixture_app.dll",
+            "../../build/debug/linux/libtest_fixture_app.so",
+            "../../build/debug/macos/libtest_fixture_app.dylib",
+            "libtest_fixture_app.dll",
+            "libtest_fixture_app.so",
+            "libtest_fixture_app.dylib"
+        };
+        for (size_t i = 0; i < sizeof(modulePaths) / sizeof(modulePaths[0]); ++i) {
+            FILE *f = fopen(modulePaths[i], "rb");
+            if (f != NULL) {
+                fclose(f);
+                foundPath = modulePaths[i];
+                break;
+            }
         }
     }
 
@@ -292,7 +303,7 @@ static void TestDynamicAppLoader(void)
     }
 
     CelsEngine engine;
-    CelsEngineInit(&engine, NULL, NULL);
+    CelsEngineInit(&engine, NULL);
 
     CelsAppModule mod;
     bool loaded = CelsAppModuleLoad(&mod, foundPath, &engine.session);
@@ -336,3 +347,4 @@ GetHotReloadTestSuite(void)
 {
     return &s_hotReloadSuite;
 }
+
