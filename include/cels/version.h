@@ -29,15 +29,21 @@
 #define CELS_VERSION_STRING "0.1.2"
 
 /**
- * Returns the human-readable version string (e.g. "0.1.0").
+ * Returns the human-readable version string (e.g. "0.1.2").
+ *
+ * @return Pointer to static null-terminated version string. Never NULL.
  */
-static inline const char *CelsGetVersionString(void) {
+static inline const char *CelsGetVersionString(void)
+{
     return CELS_VERSION_STRING;
 }
 
 /**
  * Returns the packed 32-bit integer version code.
+ *
+ * @return Packed 32-bit integer version representation.
  */
-static inline uint32_t CelsGetVersionCode(void) {
+static inline uint32_t CelsGetVersionCode(void)
+{
     return CELS_VERSION_CODE;
 }

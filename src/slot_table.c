@@ -11,8 +11,7 @@
  * @param result Any CelsResult value.
  * @return Static description string.
  */
-const char *
-CelsResultToString(CelsResult result)
+const char *CelsResultToString(CelsResult result)
 {
     switch (result) {
     case CELS_OK:

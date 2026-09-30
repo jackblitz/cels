@@ -1,10 +1,9 @@
 #include "cels/engine.h"
-#include "cels/app.h"
-#include "cels/session.h"
-#include "cels/module.h"
-#include "cels/module.h"
 
 #include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +14,10 @@
     #endif
     #include <windows.h>
 #endif
+
+#include "cels/app.h"
+#include "cels/module.h"
+#include "cels/session.h"
 
 #ifndef CELS_THREAD_LOCAL
     #if defined(_MSC_VER)
@@ -30,20 +33,37 @@
 
 static CELS_THREAD_LOCAL CelsEngine *s_currentEngine = NULL;
 
-CelsEngine *
-CelsGetCurrentEngine(void)
+/**
+ * Returns the currently active ambient host engine bound to the calling thread.
+ *
+ * @return Pointer to current CelsEngine, or NULL if none is active.
+ */
+CelsEngine *CelsGetCurrentEngine(void)
 {
     return s_currentEngine;
 }
 
-void
-CelsSetCurrentEngine(CelsEngine *engine)
+/**
+ * Sets the active ambient host engine bound to the calling thread.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ */
+void CelsSetCurrentEngine(CelsEngine *engine)
 {
     s_currentEngine = engine;
 }
 
-CelsResult
-_CelsEngineInitInternal(CelsEngine *engine, const char *appName)
+/**
+ * Internal initializer for CelsEngine.
+ *
+ * Initializes internal fields, establishes ambient thread binding, configures
+ * the primary reactive session, and optionally loads the application module.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application module target name, or NULL.
+ * @return CELS_OK on success, or error code on failure.
+ */
+CelsResult _CelsEngineInitInternal(CelsEngine *engine, const char *appName)
 {
     if (engine == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
@@ -66,8 +86,12 @@ _CelsEngineInitInternal(CelsEngine *engine, const char *appName)
     return CELS_OK;
 }
 
-void
-CelsEngineDestroy(CelsEngine *engine)
+/**
+ * Tears down a host engine, releasing modules, sessions, and dynamically loaded libraries.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ */
+void CelsEngineDestroy(CelsEngine *engine)
 {
     if (engine == NULL) {
         return;
@@ -77,7 +101,7 @@ CelsEngineDestroy(CelsEngine *engine)
         CelsEngineEnd(engine);
     }
 
-    /* Teardown engine subsystem modules */
+    /* Teardown engine subsystem modules in reverse registration order */
     for (uint32_t i = engine->moduleCount; i > 0; --i) {
         if (engine->modules[i - 1].onDestroy != NULL) {
             engine->modules[i - 1].onDestroy(engine->modules[i - 1].instance);
@@ -93,8 +117,13 @@ CelsEngineDestroy(CelsEngine *engine)
     engine->magic = 0;
 }
 
-CelsResult
-CelsEngineStart(CelsEngine *engine)
+/**
+ * Starts execution of an engine instance and performs initial composition mount.
+ *
+ * @param engine Target host engine. Non-NULL.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult CelsEngineStart(CelsEngine *engine)
 {
     if (engine == NULL || engine->manifest == NULL) {
         return CELS_ERROR_INVALID_STATE;
@@ -127,8 +156,12 @@ CelsEngineStart(CelsEngine *engine)
     return res;
 }
 
-void
-CelsEngineEnd(CelsEngine *engine)
+/**
+ * Stops execution of an engine instance and invokes teardown hooks.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ */
+void CelsEngineEnd(CelsEngine *engine)
 {
     if (engine == NULL || !engine->isStarted) {
         return;
@@ -153,8 +186,13 @@ CelsEngineEnd(CelsEngine *engine)
     engine->isStarted = false;
 }
 
-CelsResult
-CelsEngineRecompose(CelsEngine *engine)
+/**
+ * Triggers a recomposition pass on the engine's primary session and all active sessions.
+ *
+ * @param engine Target host engine. Non-NULL.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult CelsEngineRecompose(CelsEngine *engine)
 {
     if (engine == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
@@ -164,12 +202,20 @@ CelsEngineRecompose(CelsEngine *engine)
     return (res != CELS_OK) ? res : allRes;
 }
 
-void
-CelsEngineRegisterModule(CelsEngine *engine,
-                         uint64_t key,
-                         const char *name,
-                         void *instance,
-                         void (*onDestroy)(void *instance))
+/**
+ * Registers an engine subsystem module binding with the host engine.
+ *
+ * @param engine    Target host engine. Non-NULL.
+ * @param key       Unique 64-bit module type key.
+ * @param name      Human-readable module identifier for diagnostics. Non-NULL.
+ * @param instance  Pointer to developer-allocated module struct. Non-NULL.
+ * @param onDestroy Cleanup callback invoked when engine shuts down. Safe if NULL.
+ */
+void CelsEngineRegisterModule(CelsEngine *engine,
+                              uint64_t key,
+                              const char *name,
+                              void *instance,
+                              void (*onDestroy)(void *instance))
 {
     assert(engine != NULL);
     assert(instance != NULL);
@@ -183,7 +229,12 @@ CelsEngineRegisterModule(CelsEngine *engine,
         }
     }
 
-    assert(engine->moduleCount < CELS_MAX_MODULES && "Exceeded CELS_MAX_MODULES in CelsEngine");
+    if (engine->moduleCount >= CELS_MAX_MODULES) {
+        fprintf(stderr, "[CELS ERROR] Engine module registry full (%u / %u). Cannot register module '%s'.\n",
+                engine->moduleCount, CELS_MAX_MODULES, name);
+        return;
+    }
+
     engine->modules[engine->moduleCount++] = (CelsModuleBinding){
         .key = key,
         .name = name,
@@ -192,8 +243,14 @@ CelsEngineRegisterModule(CelsEngine *engine,
     };
 }
 
-void *
-CelsEngineGetModule(const CelsEngine *engine, uint64_t key)
+/**
+ * Retrieves a registered subsystem module pointer by its 64-bit key from the engine.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ * @param key    Unique 64-bit module type key.
+ * @return Pointer to module struct instance, or NULL if not found.
+ */
+void *CelsEngineGetModule(const CelsEngine *engine, uint64_t key)
 {
     if (engine == NULL) {
         return NULL;
@@ -206,8 +263,16 @@ CelsEngineGetModule(const CelsEngine *engine, uint64_t key)
     return NULL;
 }
 
-void
-_cels_dispatch_register_module(void *ctx, uint64_t key, const char *name, void *inst, void (*on_destroy)(void*))
+/**
+ * Dispatches module registration to the target engine or session context.
+ *
+ * @param ctx        Target context (CelsEngine* or CelsSession*), or NULL for ambient.
+ * @param key        Unique 64-bit module type key.
+ * @param name       Human-readable module identifier for diagnostics. Non-NULL.
+ * @param inst       Pointer to developer-allocated module struct. Non-NULL.
+ * @param on_destroy Optional cleanup callback. Safe if NULL.
+ */
+void _cels_dispatch_register_module(void *ctx, uint64_t key, const char *name, void *inst, void (*on_destroy)(void*))
 {
     if (ctx != NULL) {
         uint32_t magic = *(const uint32_t *)ctx;
@@ -245,8 +310,14 @@ _cels_dispatch_register_module(void *ctx, uint64_t key, const char *name, void *
     fprintf(stderr, "[CELS ERROR] CEL_RegisterModule: No active CelsEngine or CelsSession to register module '%s'.\n", name);
 }
 
-void *
-_cels_resolve_module(const void *ctx, uint64_t key)
+/**
+ * Resolves a subsystem module pointer from context or ambient ambient engine/session.
+ *
+ * @param ctx Context pointer (CelsEngine* or CelsSession*), or NULL for ambient.
+ * @param key Unique 64-bit module type key.
+ * @return Resolved module pointer, or NULL if not found.
+ */
+void *_cels_resolve_module(const void *ctx, uint64_t key)
 {
     if (ctx != NULL) {
         uint32_t magic = *(const uint32_t *)ctx;
@@ -284,8 +355,14 @@ _cels_resolve_module(const void *ctx, uint64_t key)
     return NULL;
 }
 
-CelsResult
-CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessionConfig *config)
+/**
+ * Executes a standalone monolithic application lifecycle using the provided manifest.
+ *
+ * @param manifest Application manifest descriptor. Non-NULL.
+ * @param config   Optional session configuration, or NULL for defaults.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessionConfig *config)
 {
     (void)config;
     if (manifest == NULL) {
@@ -303,8 +380,14 @@ CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessio
     return res;
 }
 
-CelsResult
-CelsEngineLoadApp(CelsEngine *engine, const char *appName)
+/**
+ * Resolves, loads, and starts an application dynamic module into the host engine.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application target name. If NULL, uses default target.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appName)
 {
     if (engine == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
@@ -356,8 +439,13 @@ CelsEngineLoadApp(CelsEngine *engine, const char *appName)
     return CelsSessionRecompose(&engine->session);
 }
 
-bool
-CelsAppRuntimeCheck(CelsEngine *engine)
+/**
+ * Polls for dynamic library modifications and reloads the application if updated.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ * @return True if a reload occurred and the application was recomposed; false otherwise.
+ */
+bool CelsAppRuntimeCheck(CelsEngine *engine)
 {
     if (engine == NULL || engine->appModule == NULL) {
         return false;
@@ -368,4 +456,3 @@ CelsAppRuntimeCheck(CelsEngine *engine)
     }
     return reloaded;
 }
-

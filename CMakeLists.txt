@@ -82,7 +82,7 @@ option(CELS_HOT_RELOAD "Enable dynamic hot-reload host (.exe + .dll). When OFF, 
 
 # Helper runner for IDE hot-reload rebuilds (CLion, VS Code)
 add_executable(cels_hot_reload_notifier
-    src/hot_reload_notifier.c
+    tools/hot_reload_notifier.c
 )
 set_target_properties(cels_hot_reload_notifier PROPERTIES
     OUTPUT_NAME cels_hot_reload_notifier

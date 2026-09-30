@@ -8,7 +8,25 @@
  * State is double-buffered:
  * - Reads (cel_watch, cel_get_state) read from the published front buffer (lock-free, zero torn reads).
  * - Mutations (cel_mutate) write to the staging back buffer and flag the state dirty.
- * - Dirty states are published atomically at frame boundaries in CelSessionRecompose.
+ * - Dirty states are published atomically at frame boundaries in CelsSessionRecompose.
+ *
+ * Typical usage:
+ * @code
+ *     // In a composable: read and subscribe to state changes
+ *     CEL_Composable(ScoreDisplay) {
+ *         const GameScore *score = cel_watch(GameScore, SCORE_ID);
+ *         printf("Current Score: %d\n", score->points);
+ *     }
+ *
+ *     // In an event handler or task: mutate state
+ *     cel_mutate(session, SCORE_ID, GameScore) {
+ *         this->points += 100;
+ *     }
+ * @endcode
+ *
+ * Thread safety: Front-buffer reads (`CelsStateWatch`, `CelsStateGet`) are lock-free
+ * and safe to read during recomposition. Mutations (`CelsStateMutate`) write to the
+ * back-buffer and publish atomically at the frame boundary.
  */
 
 #include <stdbool.h>

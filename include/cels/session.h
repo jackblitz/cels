@@ -298,6 +298,16 @@ void *CelsSessionRememberState(CEL_Session *s, CEL_Id id, size_t size, const voi
 /* Attached Composition Functions                                            */
 /* ========================================================================= */
 
+/**
+ * Attaches a root composition to the session with optional lifecycle evaluation.
+ *
+ * @param s        Target session. Non-NULL.
+ * @param key      Unique 64-bit composition identifier.
+ * @param body     Function pointer to root composition procedure. Non-NULL.
+ * @param userData Context pointer passed to body during composition. Can be NULL.
+ * @param eval     Optional evaluation predicate. When returning false, prunes subtree. Can be NULL.
+ * @param evalCtx  Context pointer passed to eval predicate. Can be NULL.
+ */
 void CelsSessionAttachComposition(CEL_Session *s,
                                   CEL_Id key,
                                   void (*body)(void *userData),
@@ -305,13 +315,39 @@ void CelsSessionAttachComposition(CEL_Session *s,
                                   bool (*eval)(void *evalCtx),
                                   void *evalCtx);
 
+/**
+ * Detaches an attached composition from the session by its key.
+ *
+ * @param s   Target session. Safe if NULL.
+ * @param key Unique 64-bit composition identifier.
+ */
 void CelsSessionDetachComposition(CEL_Session *s, CEL_Id key);
 
+/**
+ * Registers lifecycle creation and destruction callbacks for an active group node.
+ *
+ * Invokes onCreate immediately if non-NULL. When the group node is pruned or unmounted,
+ * onDestroy will be invoked in reverse mounting order.
+ *
+ * @param s         Target session. Non-NULL.
+ * @param instance  User resource handle or object pointer. Can be NULL.
+ * @param onCreate  Optional setup callback invoked on mount. Safe if NULL.
+ * @param onDestroy Destructor callback invoked on unmount or session destruction. Safe if NULL.
+ */
 void CelsSessionRegisterLifecycle(CEL_Session *s,
                                   void *instance,
                                   void (*onCreate)(void *instance, CEL_Session *s),
                                   void (*onDestroy)(void *instance, CEL_Session *s));
 
+/**
+ * Updates lifecycle callback pointers for a remounted node without re-running onCreate.
+ *
+ * Used after hot-reload or remount to refresh code pointers to unmount destructors.
+ *
+ * @param s         Target session. Non-NULL.
+ * @param instance  User resource handle or object pointer.
+ * @param onDestroy Refreshed destructor callback pointer. Safe if NULL.
+ */
 void CelsSessionUpdateLifecycle(CEL_Session *s,
                                 void *instance,
                                 void (*onDestroy)(void *instance, CEL_Session *s));
@@ -340,7 +376,7 @@ void CelSessionDestroy(CEL_Session *session);
  * Executes a recomposition pass over the session tree.
  *
  * @param session Target session. Non-NULL.
- * @return CELS_OK or error code.
+ * @return CELS_OK on success, or CelsResult error code.
  */
 CelsResult CelsSessionRecompose(CelsSession *session);
 CelsResult CelSessionRecompose(CEL_Session *session);
@@ -362,6 +398,13 @@ void CelsSessionHotReload(CelsSession *session);
 
 /**
  * Registers an engine subsystem module with the session.
+ *
+ * @param session   Target session. Non-NULL.
+ * @param key       Unique 64-bit module type key.
+ * @param name      Human-readable module identifier for diagnostics. Non-NULL.
+ * @param instance  Pointer to module data struct. Non-NULL.
+ * @param onReload  Optional callback invoked after code reload. Safe if NULL.
+ * @param onDestroy Optional cleanup callback invoked on session teardown. Safe if NULL.
  */
 void CelsSessionRegisterModule(CelsSession *session,
                               uint64_t key,
@@ -372,16 +415,24 @@ void CelsSessionRegisterModule(CelsSession *session,
 
 /**
  * Retrieves a registered subsystem module pointer by its 64-bit key.
+ *
+ * @param session Target session. Safe if NULL.
+ * @param key     Unique 64-bit module type key.
+ * @return Pointer to module struct instance, or NULL if not found.
  */
 void *CelsSessionGetModule(const CelsSession *session, uint64_t key);
 
 /**
  * Returns the currently active ambient session for the calling thread.
+ *
+ * @return Pointer to active session, or NULL outside an active composition pass.
  */
 CelsSession *CelsGetCurrentSession(void);
 
 /**
  * Sets the active ambient session for the calling thread.
+ *
+ * @param session Target session. Safe if NULL.
  */
 void CelsSetCurrentSession(CelsSession *session);
 

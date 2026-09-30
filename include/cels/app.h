@@ -8,6 +8,33 @@
  * Applications declare their composition tree, widgets, and logic using CEL_App.
  * Applications access engine-level subsystem memory (SDL, Flecs, Vulkan, Audio)
  * hosted in the executable (CelsEngine) via CEL_GetModule(ModuleType).
+ *
+ * Typical usage:
+ * @code
+ *     // 1. Declare root composition in application module
+ *     CEL_Composition(GameRoot, void *userData) {
+ *         // Compose UI, game state, widgets
+ *     }
+ *
+ *     // 2. Setup and teardown callbacks
+ *     static CelsCompositionRef OnStart(CelsEngine *engine, CelsSession *session) {
+ *         return CEL_COMPOSITION(GameRoot);
+ *     }
+ *
+ *     static void OnEnd(CelsEngine *engine, CelsSession *session) {
+ *         // Cleanup application resources
+ *     }
+ *
+ *     // 3. Register application manifest
+ *     CEL_App(MyGame,
+ *         .onStart = OnStart,
+ *         .onEnd = OnEnd,
+ *         .continuousCompose = true
+ *     );
+ * @endcode
+ *
+ * Thread safety: Application lifecycle functions (onStart, onEnd) and root
+ * compositions run on the primary session composition thread.
  */
 
 #include <stdbool.h>
@@ -43,11 +70,11 @@ extern "C" {
  * Represents a reference to a composition root and its optional lifecycle evaluator.
  */
 typedef struct CelsCompositionRef {
-    CEL_Id key;
-    void (*body)(void *userData);
-    void *userData;
-    bool (*lifecycleEval)(void *evalCtx);
-    void *evalCtx;
+    CEL_Id key;                         /**< Unique 64-bit key of the root composition */
+    void (*body)(void *userData);       /**< Function pointer to root composition procedure */
+    void *userData;                     /**< User context pointer passed to body */
+    bool (*lifecycleEval)(void *evalCtx); /**< Optional predicate controlling composition lifetime */
+    void *evalCtx;                      /**< Context pointer passed to lifecycleEval */
 } CelsCompositionRef;
 
 #define _CEL_COMPOSITION_REF_2(CompName, Lifecycle) \
@@ -104,6 +131,8 @@ typedef const CelsAppManifest *(*CelsAppEntryFn)(void);
 /**
  * Application manifest entry point. Exported from .dll in Debug mode,
  * or linked statically in Release standalone mode.
+ *
+ * @return Pointer to application manifest structure. Never NULL.
  */
 CELS_APP_EXPORT const CelsAppManifest *CelsGetAppManifest(void);
 
@@ -115,6 +144,18 @@ CELS_APP_EXPORT const CelsAppManifest *CelsGetAppManifest(void);
     #define NUCLEUS_DEFAULT_CONTINUOUS_COMPOSE false
 #endif
 
+/**
+ * Declares an application manifest and exports the entry point symbol.
+ *
+ * Example:
+ * @code
+ *     CEL_App(MyGame,
+ *         .onStart = OnStart,
+ *         .onEnd = OnEnd,
+ *         .continuousCompose = true
+ *     );
+ * @endcode
+ */
 #define CEL_App(AppName, ...) \
     static void _cels_app_set_session_##AppName(CelsSession *s) { \
         CelsSetCurrentSession(s); \
