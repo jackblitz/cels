@@ -45,7 +45,7 @@ static void TestTaskSequentialExecution(void) {
 
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    cel_attach(&session, CEL_ID("BasicComp"), BasicTaskComp);
+    cel_attach(&session, BasicTaskComp);
 
     /* Frame 1: Starts and runs step 1 */
     CelsSessionRecompose(&session);
@@ -103,7 +103,7 @@ static void TestTaskWaitNonBlocking(void) {
 
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    cel_attach(&session, CEL_ID("WaitComp"), WaitTaskComp);
+    cel_attach(&session, WaitTaskComp);
 
     /* Frame 1: Begins and enters wait */
     CelsSessionRecompose(&session);
@@ -155,7 +155,7 @@ static void TestTaskSelfCancel(void) {
 
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    cel_attach(&session, CEL_ID("SelfCancelComp"), SelfCancelComp);
+    cel_attach(&session, SelfCancelComp);
 
     /* Frame 1: Runs step 1 */
     CelsSessionRecompose(&session);
@@ -203,7 +203,7 @@ static void TestTaskExternalCancel(void) {
 
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    cel_attach(&session, CEL_ID("ExtCancelComp"), ExternalCancelComp);
+    cel_attach(&session, ExternalCancelComp);
 
     /* Frame 1: Step 1 runs */
     CelsSessionRecompose(&session);
@@ -255,7 +255,7 @@ static void TestTaskUnmountCancel(void) {
 
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    cel_attach(&session, CEL_ID("UnmountComp"), UnmountComp);
+    cel_attach(&session, UnmountComp);
 
     /* Frame 1: Task mounted and executing */
     CelsSessionRecompose(&session);
@@ -305,7 +305,7 @@ static void TestTaskWithArguments(void) {
 
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    cel_attach(&session, CEL_ID("ParamComp"), ParamComp);
+    cel_attach(&session, ParamComp);
 
     CelsSessionRecompose(&session);
     assert(s_stepCount == 1);
@@ -322,6 +322,98 @@ static void TestTaskWithArguments(void) {
 }
 
 /* ========================================================================= */
+/* Task 7: Local Stack Preservation Test                                     */
+/* ========================================================================= */
+
+static int s_savedStackVal = 0;
+
+CEL_Task(StackPreservationTask) {
+    cancel {
+    }
+    run {
+        int localVal = 100;
+        int localArr[4] = {1, 2, 3, 4};
+        cel_yield();
+        localVal += 50;
+        localArr[0] += 10;
+        cel_yield();
+        s_savedStackVal = localVal + localArr[0]; /* 150 + 11 = 161 */
+    }
+}
+
+CEL_Composition(StackComp, void *userData) {
+    (void)userData;
+    cel_task(StackPreservationTask);
+}
+
+static void TestTaskStackPreservation(void) {
+    s_savedStackVal = 0;
+    CelsSession session;
+    CelsSessionInit(&session, NULL);
+    cel_attach(&session, StackComp);
+
+    CelsSessionRecompose(&session);
+    assert(s_savedStackVal == 0);
+
+    CelsSessionRecompose(&session);
+    assert(s_savedStackVal == 0);
+
+    CelsSessionRecompose(&session);
+    assert(s_savedStackVal == 161);
+    assert(cel_is_task_done(StackPreservationTask));
+
+    CelsSessionDestroy(&session);
+}
+
+/* ========================================================================= */
+/* Task 8: Native C Switch Statement Test                                    */
+/* ========================================================================= */
+
+static int s_switchStep = 0;
+
+CEL_Task(SwitchStatementTask) {
+    cancel {
+    }
+    run {
+        int mode = 2;
+        switch (mode) {
+            case 1:
+                s_switchStep = 10;
+                break;
+            case 2:
+                s_switchStep = 20;
+                cel_yield();
+                s_switchStep = 21;
+                break;
+            default:
+                s_switchStep = 99;
+                break;
+        }
+    }
+}
+
+CEL_Composition(SwitchComp, void *userData) {
+    (void)userData;
+    cel_task(SwitchStatementTask);
+}
+
+static void TestTaskSwitchStatement(void) {
+    s_switchStep = 0;
+    CelsSession session;
+    CelsSessionInit(&session, NULL);
+    cel_attach(&session, SwitchComp);
+
+    CelsSessionRecompose(&session);
+    assert(s_switchStep == 20);
+
+    CelsSessionRecompose(&session);
+    assert(s_switchStep == 21);
+    assert(cel_is_task_done(SwitchStatementTask));
+
+    CelsSessionDestroy(&session);
+}
+
+/* ========================================================================= */
 /* Test Suite Registration                                                   */
 /* ========================================================================= */
 
@@ -331,7 +423,9 @@ static const TestCase s_taskTests[] = {
     { "TestTaskSelfCancel",          "Self cancellation with cel_cancel",          TestTaskSelfCancel },
     { "TestTaskExternalCancel",      "External cancellation via cel_cancel_task",  TestTaskExternalCancel },
     { "TestTaskUnmountCancel",       "Automatic cancellation on unmount",          TestTaskUnmountCancel },
-    { "TestTaskWithArguments",       "Parameterized task execution and cleanup",   TestTaskWithArguments }
+    { "TestTaskWithArguments",       "Parameterized task execution and cleanup",   TestTaskWithArguments },
+    { "TestTaskStackPreservation",   "Local C stack variables survive yields",     TestTaskStackPreservation },
+    { "TestTaskSwitchStatement",     "Native C switch statement around yields",    TestTaskSwitchStatement }
 };
 
 static const TestSuite s_taskSuite = {

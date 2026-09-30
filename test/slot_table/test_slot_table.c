@@ -1,4 +1,4 @@
-#include "cels/slot_table.h"
+#include "cels/runtime/slot_table.h"
 #include "cli/test_cli.h"
 
 #include <assert.h>

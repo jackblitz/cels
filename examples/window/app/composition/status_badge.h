@@ -24,22 +24,14 @@ CEL_Lifecycle(StatusBadgeLifecycle, BadgeData *badge) {
     }
 }
 
-
-CEL_Composable(CEL_Test) {
-    BadgeData *badge = cel_remember(BadgeData, { .label = "Test Compose" });
-    cel_lifecycle(StatusBadgeLifecycle, badge);
-    printf("    [Badge] Status: %s\n", badge->label);
-}
-
 /**
  * Leaf composable rendering a badge when showBadge is enabled.
- * Defined in its own header file (.h).
  */
-CEL_Composable(CEL_StatusBadge) {
+CEL_Composable(StatusBadge) {
     BadgeData *badge = cel_remember(BadgeData, { .label = "Connected / Active" });
     cel_lifecycle(StatusBadgeLifecycle, badge);
     printf("    [Badge] Status: %s\n", badge->label);
-    CEL_Test();
 }
+
 
 

@@ -1,6 +1,25 @@
 ---
 name: cels-transactions
-description: "Transaction batch staging, cross-thread command buffers, and external backend bridging in CELS. Use when staging mutations during recomposition, integrating external ECS or render backends, or configuring frame commit hooks."
+description: Provide technical guidance on CELS transaction batch staging, lock-free double-buffering, and external backend bridging. Use when staging mutations during recomposition, integrating external ECS (Flecs) or render backends (Vulkan), passing cross-thread command buffers, or configuring post-recomposition frame commit hooks.
+license: Apache-2.0
+compatibility: ANSI C99, CMake 3.20+, GCC/Clang/MSVC
+metadata:
+  author: CELS Authors
+  version: "0.3.0"
+  last-updated: '2026-09-30'
+  category: transactions-and-staging
+  keywords:
+    - transactions
+    - staging
+    - commit-hooks
+    - command-buffers
+    - lock-free
+    - double-buffering
+    - ECS
+    - Flecs
+    - Vulkan
+    - cross-thread
+    - C99
 ---
 
 # CELS Transactions & Cross-Thread Staging Guide
@@ -119,8 +138,7 @@ To pass staged commands across threads (e.g. main thread UI -> render/physics wo
 To trigger cleanup when a composable leaves the tree, use `cel_remember` with an optional 3rd argument for the destructor callback:
 
 ```c
-static void OnResourceUnmount(void *ptr, CelsSession *session) {
-    (void)session;
+static void OnResourceUnmount(void *ptr, CelsSession *session CELS_UNUSED) {
     uint64_t *resId = (uint64_t *)ptr;
     cel_stage_delete(*resId);
 }
@@ -156,5 +174,63 @@ CEL_Lifecycle(EntityTransactionLifecycle, uint64_t, entityId) {
 
 CEL_Composable(EnemyNode, uint64_t, entityId) {
     cel_lifecycle(EntityTransactionLifecycle, entityId);
+}
+```
+
+---
+
+## 8. Core Patterns & Anti-Patterns (Best for LLMs)
+
+### Pattern 1: Staging vs. Direct Mutation of External Systems
+
+```c
+// WRONG: Directly modifying external engine systems during recomposition walk
+CEL_Composable(PlayerEntity, uint64_t, entityId) {
+    ecs_world_t *world = GetExternalEcsWorld();
+    ecs_set(world, entityId, Position, { 10.0f, 20.0f, 0.0f }); // Bad! Lock contention, cache churn, non-atomic!
+}
+
+// CORRECT: Stage mutations to the linear transaction buffer
+CEL_Composable(PlayerEntity, uint64_t, entityId) {
+    cel_stage_set(entityId, Position, { .x = 10.0f, .y = 20.0f, .z = 0.0f }); // Lock-free, zero-allocation
+}
+```
+
+### Pattern 2: Atomic Dispatch at Pipeline Boundary
+
+```c
+// WRONG: Manually committing transactions inside individual composables
+CEL_Composable(PlayerEntity, uint64_t, entityId) {
+    cel_stage_set(entityId, Position, { 10.0f, 20.0f, 0.0f });
+    CelsSessionCommitTransactions(session, Dispatcher, NULL); // Bad! Breaks batching & partial state corruption!
+}
+
+// CORRECT: Commit atomically after recomposition via post-recompose hook
+static void OnFrameComplete(CelsSession *session, void *userData) {
+    // Drains the entire frame's staged operations in a single atomic batch
+    CelsSessionCommitTransactions(session, BackendCommitHandler, userData);
+}
+
+CelsSessionSetPostRecomposeHook(session, OnFrameComplete, backendWorld);
+```
+
+### Pattern 3: Lock-Free Worker Thread Handoff
+
+```c
+// WRONG: Sharing the active transaction batch across threads while recomposition writes to it
+void RenderThread(CelsSession *session) {
+    // Race condition! session->activeBatch is concurrently being written by the UI thread!
+    ProcessBatch(session->activeBatch);
+}
+
+// CORRECT: Double-buffer swap at frame boundary
+// Main Thread:
+CelsSessionSwapTransactionBatches(session);
+
+// Worker / Render Thread:
+CelsTransactionBatch *batch = CelsSessionGetReadyBatch(session);
+if (batch) {
+    ProcessBatch(batch);
+    CelsSessionClearReadyBatch(session);
 }
 ```

@@ -36,13 +36,12 @@ Usage:
 Generated Targets:
 - <HOST>: The primary engine executable.
 - <APP>: The application target (shared library in HOT_RELOAD, alias in SINGLE_BINARY).
-- <APP>_rebuild: Executable runner target for CLion/IDE 'Play' button to rebuild and hot-reload.
 
 Modes:
 - HOT_RELOAD: Builds HOST as an executable and APP as a shared library (.dll / .so / .dylib).
-  Attaches target dependencies, creates <APP>_rebuild runner, and sets CELS_HOT_RELOAD=1.
+  Attaches target dependencies and sets CELS_HOT_RELOAD=1.
 - SINGLE_BINARY / MONOLITHIC: Compiles HOST and APP together into a single standalone executable.
-  Creates compatibility custom targets for APP and <APP>_rebuild, and sets CELS_HOT_RELOAD=0.
+  Creates compatibility custom target for APP and sets CELS_HOT_RELOAD=0.
 - AUTO (default): Uses HOT_RELOAD for Debug builds, and SINGLE_BINARY for Release builds.
 #]=======================================================================]
 function(cels_add_application)

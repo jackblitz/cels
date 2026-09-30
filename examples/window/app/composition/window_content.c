@@ -8,24 +8,23 @@
  * Demonstrates:
  * - Persistent local slot memory (cel_remember)
  * - Reactive state observation (cel_watch)
- * - Composing child elements (CEL_StatusBadge)
+ * - Composing child elements (StatusBadge)
  */
-CEL_ComposableDef(CEL_WindowContent, WindowState*, win) {
+CEL_ComposableDef(WindowContent, WindowState*, win) {
     int *localRenderCount = cel_remember(int, 0);
     (*localRenderCount)++;
 
-    const WindowState *state = cel_watch(WindowState, CEL_Window);
-    if (state == NULL) {
-        state = win;
-    }
+    /* Reactively observe the hoisted window state instance */
+    cel_watch(win);
 
     printf("  [Content] Local renders: %d | Window: %dx%d (open: %s, badge: %s)\n",
-           *localRenderCount, state->width, state->height,
-           state->isOpen ? "true" : "false",
-           state->showBadge ? "visible" : "hidden");
+           *localRenderCount, win->width, win->height,
+           win->isOpen ? "true" : "false",
+           win->showBadge ? "visible" : "hidden");
 
     /* Status badge lifecycle is controlled by showBadge, decoupled from window isOpen */
-    if (state->showBadge) {
-        CEL_StatusBadge();
+    if (win->showBadge) {
+        StatusBadge();
     }
 }
+

@@ -110,14 +110,24 @@ int main(int argc, char **argv)
 {
     bool once = (argc > 1 && strcmp(argv[1], "--once") == 0);
 
-    /* 1. Initialize host engine and load application */
+    /*
+     * 1. Initialize host engine and primary session with workload profile:
+     *
+     * Profile Selection: CELS_PROFILE_1K
+     * - Capacity: Up to 1,024 active composables
+     * - Slab Size: 128 KiB contiguous 64-byte cache-aligned slab
+     * - Use Case: Standard application windows, forms, and dialog hierarchies.
+     *   CELS automatically partitions this slab into the slot table gap buffer,
+     *   descriptor index, and nonmoving data arena with zero heap fragmentation.
+     */
     CelsEngine engine;
-    if (CelsEngineInit(&engine, NULL) != CELS_OK) {
+    if (CelsEngineInitWithProfile(&engine, NULL, CELS_PROFILE_1K) != CELS_OK) {
         fprintf(stderr, "[Host] Failed to initialize engine\n");
         return 1;
     }
 
-    printf("[Host] Application loaded. Starting engine tick loop...\n");
+    printf("[Host] Application loaded (CELS_PROFILE_1K: 128 KiB slab, 1,024 composables).\n");
+    printf("[Host] Starting engine tick loop...\n");
     printf("[Host] Controls:\n");
     printf("[Host]   [B] Toggle Status Badge (child component mount / unmount lifecycle)\n");
     printf("[Host]   [Q] Close Window (root evaluation teardown -> engine quit)\n");
@@ -140,12 +150,12 @@ int main(int argc, char **argv)
         int key = PollKey();
         if (key == 'b' || key == 'B') {
             printf("[Host] Key 'B' pressed: toggling status badge\n");
-            cel_mutate(&engine.session, CEL_Window, WindowState) {
+            cel_mutate(&engine.session, WindowState) {
                 this->showBadge = !this->showBadge;
             }
         } else if (key == 'q' || key == 'Q' || key == 27) {
             printf("[Host] Key 'Q' pressed: closing window\n");
-            cel_mutate(&engine.session, CEL_Window, WindowState) {
+            cel_mutate(&engine.session, WindowState) {
                 this->isOpen = false;
             }
         }
@@ -153,7 +163,7 @@ int main(int argc, char **argv)
         SleepMs(16);
     }
 
-    /* 4. Clean teardown */
+    /* 3. Clean teardown */
     printf("[Host] Shutting down...\n");
     RestoreTerminal();
     CelsEngineEnd(&engine);

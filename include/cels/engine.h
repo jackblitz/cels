@@ -40,7 +40,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "cels/session.h"
+#include "cels/runtime/session.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -123,6 +123,16 @@ struct CelsEngine {
 CelsResult _CelsEngineInitInternal(CelsEngine *engine, const char *appName);
 
 /**
+ * Internal initializer for CelsEngine with explicit session configuration.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application target name, or NULL.
+ * @param config  Optional session configuration, or NULL for defaults.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult _CelsEngineInitInternalWithOptions(CelsEngine *engine, const char *appName, const CelsSessionConfig *config);
+
+/**
  * Tears down a host engine, releasing modules, sessions, and dynamically loaded libraries.
  *
  * @param engine Target host engine. Safe if NULL.
@@ -153,20 +163,30 @@ void CelsEngineEnd(CelsEngine *engine);
 CelsResult CelsEngineRecompose(CelsEngine *engine);
 
 /**
- * Initializes the engine and loads the application module.
+ * Initializes the engine with explicit session configuration and loads the application module.
  *
- * Discovers and binds the application module (<appName>.dll in Debug, static in Release),
- * initializes the session memory slab, and mounts the root composition.
+ * What it does:
+ * - Initializes engine context, thread-local binding, and memory modules.
+ * - Initializes the primary reactive session using the specified CelsSessionConfig
+ *   (e.g., custom slab size, workload profile, or composable count).
+ * - Binds and mounts the application module.
+ *
+ * Expected outcome:
+ * - Engine initialized with CELS_OK, ready for the main tick loop.
+ *
+ * Where to use:
+ * - Host executables customizing session slab memory, capacity profiles, or host engines.
  *
  * @param engine  Target host engine. Non-NULL.
  * @param appName Application module name. If NULL, defaults to CELS_APP_TARGET.
+ * @param config  Session configuration (slab, profile, maxComposables), or NULL for defaults.
  * @return CELS_OK on success, or CelsResult error code.
  */
-static inline CelsResult CelsEngineInit(CelsEngine *engine, const char *appName)
+static inline CelsResult CelsEngineInitWithOptions(CelsEngine *engine, const char *appName, const CelsSessionConfig *config)
 {
 #if defined(CELS_HOT_RELOAD) && !CELS_HOT_RELOAD
     (void)appName;
-    CelsResult res = _CelsEngineInitInternal(engine, NULL);
+    CelsResult res = _CelsEngineInitInternalWithOptions(engine, NULL, config);
     if (res != CELS_OK) {
         return res;
     }
@@ -183,8 +203,47 @@ static inline CelsResult CelsEngineInit(CelsEngine *engine, const char *appName)
         appName = CELS_APP_TARGET;
     }
 #endif
-    return _CelsEngineInitInternal(engine, appName);
+    return _CelsEngineInitInternalWithOptions(engine, appName, config);
 #endif
+}
+
+/**
+ * Initializes the engine and loads the application module with a named capacity profile.
+ *
+ * What it does:
+ * - Dimensions the primary reactive session memory slab using the target CelsSessionProfile.
+ * - Automatically configures optimal group/slot capacities and cache line alignment.
+ *
+ * Expected outcome:
+ * - Engine initialized with the chosen profile slab (e.g. 128 KiB for CELS_PROFILE_1K).
+ *
+ * Where to use:
+ * - Host applications selecting an intent-driven workload capacity profile.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application module name. If NULL, defaults to CELS_APP_TARGET.
+ * @param profile Workload capacity profile (e.g. CELS_PROFILE_1K, CELS_PROFILE_512).
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+static inline CelsResult CelsEngineInitWithProfile(CelsEngine *engine, const char *appName, CelsSessionProfile profile)
+{
+    CelsSessionConfig cfg = CelsSessionProfileConfig(profile);
+    return CelsEngineInitWithOptions(engine, appName, &cfg);
+}
+
+/**
+ * Initializes the engine and loads the application module.
+ *
+ * Discovers and binds the application module (<appName>.dll in Debug, static in Release),
+ * initializes the session memory slab, and mounts the root composition.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application module name. If NULL, defaults to CELS_APP_TARGET.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+static inline CelsResult CelsEngineInit(CelsEngine *engine, const char *appName)
+{
+    return CelsEngineInitWithOptions(engine, appName, NULL);
 }
 
 /**

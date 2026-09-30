@@ -1,6 +1,25 @@
 ---
 name: cels-app-development
-description: "Application and Host creation guide for CELS. Use when building a new CELS application, setting up a host process, configuring CMake build targets, or working with hot-reloading."
+description: Provide technical guidance for CELS application and host development. Use when creating new CELS applications, configuring host executables and application modules, managing CMake build targets, configuring CLion run configurations, or implementing hot-reloadable workflows.
+license: Apache-2.0
+compatibility: ANSI C99, CMake 3.20+, GCC/Clang/MSVC
+metadata:
+  author: CELS Authors
+  version: "0.3.0"
+  last-updated: '2026-09-30'
+  category: application-development
+  keywords:
+    - application
+    - host
+    - hot-reload
+    - cmake
+    - cels_add_application
+    - engine
+    - two-targets
+    - cel_host
+    - cel_dll
+    - CLion
+    - C99
 ---
 
 # CELS Application & Host Development Guide
@@ -34,38 +53,75 @@ CELS cleanly separates the **Host** (the native runtime harness and loop) from t
 ## 2. Creating an Application (`cel_app`)
 
 An application requires:
-1. One or more Compositions (e.g. `Window_GetComposition()`).
-2. An `onStart` hook returning the primary composition reference.
-3. An optional `onEnd` hook for application teardown.
-4. The `CEL_App` manifest macro.
+1. One or more Compositions (e.g. `WindowComposition`).
+2. The `CEL_App` declarative macro binding the root composition directly.
+3. Optional evaluation predicate (e.g. `WindowEval`) or custom manifest hooks via `CEL_App_Manifest`.
 
 ### Minimal Application Example (`app.c`)
 ```c
 #include "cels.h"
 #include "composition/window.h"
-#include <stdio.h>
 
-static CelsCompositionRef App_OnStart(CelsEngine *engine, CelsSession *session)
-{
-    (void)engine;
-    (void)session;
-    printf("[App] Application starting, mounting root window.\n");
-    return Window_GetComposition();
-}
-
-static void App_OnEnd(CelsEngine *engine, CelsSession *session)
-{
-    (void)engine;
-    (void)session;
-    printf("[App] Application shutting down.\n");
-}
-
-/* CEL_App defines the exported application manifest */
-CEL_App(WindowApp,
-    .onStart = App_OnStart,
-    .onEnd = App_OnEnd
-);
+/* Declarative root: binds WindowComposition and WindowEval directly */
+CEL_App(WindowApp, WindowComposition, WindowEval);
 ```
+
+### Declarative `CEL_App` Signatures
+- `CEL_App(AppName, RootComp)`: Direct 1-line root attachment.
+- `CEL_App(AppName, RootComp, EvalPred)`: Direct root attachment with lifecycle evaluation predicate.
+- `CEL_App(AppName, RootComp, EvalPred, UserData)`: Direct root attachment with evaluation and injected instance context.
+- `CEL_App_Manifest(AppName, ...)`: Low-level designated initializers for custom manifests (`.continuousCompose = true`, custom `.onEnd`, etc.).
+
+### Root Compositions and `userData`: How, When, and Why
+
+In CELS, root compositions can be declared in two ways depending on whether they need external instance data:
+
+#### 1. Standard Root Composition (Zero Arguments - Recommended)
+Most application windows and UI trees do not need external parameters because state is hoisted locally with `cel_state(...)` or accessed via ambient context (`cel_user_data(Type)`):
+
+```c
+// Zero parameters, zero (void)userData boilerplate
+CEL_Composition(MainWindow) {
+    WindowState *win = cel_state(WindowState, { .isOpen = true });
+    WindowContent(win);
+}
+
+// In onStart:
+CEL_OnStart(App_OnStart) {
+    cel_attach(session, MainWindow);
+}
+```
+
+#### 2. Root Composition with Injected `userData` (Typed Parameter)
+When the host or application factory needs to inject specific instance data (e.g. multi-window configs, native handles, or external ECS worlds), declare the parameter directly:
+
+```c
+typedef struct ViewportConfig {
+    int cameraIndex;
+    const char *label;
+} ViewportConfig;
+
+// Typed parameter received directly
+CEL_Composition(ViewportView, ViewportConfig*, cfg) {
+    RenderCamera(cfg->cameraIndex);
+    DrawLabel(cfg->label);
+}
+
+// In onStart:
+static ViewportConfig g_mainView = { .cameraIndex = 0, .label = "Primary 3D View" };
+
+CEL_OnStart(App_OnStart) {
+    // Injects g_mainView into ViewportView via cel_attach
+    cel_attach(session, ViewportView, NULL, &g_mainView);
+}
+```
+
+#### The 5 Real-World Use Cases for `userData`:
+1. **Multi-Window / Multi-Viewport Instances**: Running the exact same composition function for multiple distinct viewports (e.g. Top, Front, Perspective cameras) with different configuration structs.
+2. **Native OS / Hardware Handles**: Injecting host platform handles (Win32 `HWND`, GLFW window, Vulkan `VkDevice`) into the root composition upon launch.
+3. **External ECS / Physics Worlds**: Passing external engine contexts (e.g. Flecs `ecs_world_t*`, Box2D `b2WorldId`) down into root compositions.
+4. **Plugin Embeddings (VST / CLAP / Game Mods)**: When CELS is embedded in a digital audio workstation or modding engine where the host provides an audio processor instance pointer.
+5. **Unit Testing & Mocking**: Passing mock backends (simulated network lag, fake file systems) to verify UI flows under test conditions.
 
 ---
 
@@ -93,14 +149,18 @@ int main(int argc, char **argv)
     (void)argc;
     (void)argv;
 
-    /* 1. Initialize engine (loads application manifest) */
+    /*
+     * 1. Initialize engine with workload capacity profile:
+     * - CELS_PROFILE_1K: 128 KiB cache-aligned slab, up to 1,024 composables
+     * - CELS_PROFILE_512: 64 KiB L1 cache-resident slab, up to 512 composables
+     */
     CelsEngine engine;
-    if (CelsEngineInit(&engine, NULL) != CELS_OK) {
+    if (CelsEngineInitWithProfile(&engine, NULL, CELS_PROFILE_1K) != CELS_OK) {
         fprintf(stderr, "[Host] Failed to initialize engine\n");
         return 1;
     }
 
-    printf("[Host] Engine started. Entering main loop...\n");
+    printf("[Host] Engine started (CELS_PROFILE_1K: 128 KiB slab). Entering main loop...\n");
 
     /* 2. Main loop */
     while (!engine.shouldQuit) {
@@ -111,7 +171,7 @@ int main(int argc, char **argv)
         CelsEngineRecompose(&engine);
 
         /* Example: Mutate state based on events / input */
-        // cel_mutate(&engine.session, CEL_Window, WindowState) {
+        // cel_mutate(&engine.session, WindowState) {
         //     this->someField = newValue;
         // }
 
@@ -183,3 +243,54 @@ CELS adapts automatically based on the `CELS_HOT_RELOAD` CMake option:
 - Application sources are statically linked directly into `cel_host`.
 - No DLLs are created or loaded at runtime.
 - Maximum performance, zero runtime dynamic loading overhead, and simple single-executable distribution.
+
+---
+
+## 6. Core Patterns & Anti-Patterns (Best for LLMs)
+
+### Pattern 1: Application Pair Declaration in CMake
+
+```cmake
+# WRONG: Creating 3rd custom targets or separate app aliases
+cels_add_application(HOST my_host DLL my_dll ...)
+add_custom_target(my_app DEPENDS my_dll) # Bad! Confuses IDE configurations and generates redundant targets
+
+# CORRECT: Strictly two targets per application (host and dll)
+cels_add_application(
+    HOST cel_host
+    DLL cel_dll
+    HOST_SOURCES examples/window/host.c
+    APP_SOURCES examples/window/app/app.c
+)
+```
+
+### Pattern 2: Hot-Reload Check in Host Loop
+
+```c
+// WRONG: Forgetting CelsAppRuntimeCheck in host loop
+while (!engine.shouldQuit) {
+    CelsEngineRecompose(&engine); // DLL is recompiled on disk, but never reloaded into host!
+    SleepMs(16);
+}
+
+// CORRECT: Call CelsAppRuntimeCheck on every tick before recomposition
+while (!engine.shouldQuit) {
+    CelsAppRuntimeCheck(&engine); // Detects DLL modification, shadow-copies, and updates lifecycle pointers
+    CelsEngineRecompose(&engine);
+    SleepMs(16);
+}
+```
+
+### Pattern 3: Application Manifest Export
+ 
+```c
+// WRONG: Using manual symbol exports, custom structs, or boilerplate onStart
+__declspec(dllexport) void* MyCustomInit() { ... }
+
+// CORRECT: Declarative root composition attachment
+CEL_App(WindowApp, WindowComposition, WindowEval);
+
+// Or when custom manifest hooks are needed:
+// CEL_App_Manifest(WindowApp, .onStart = App_OnStart, .continuousCompose = true);
+```
+

@@ -196,7 +196,7 @@ static void InitKeyRegistry(void) {
 
 static void ResetTreeState(CelsSession *session) {
     InitKeyRegistry();
-    cel_session_remember_state(session, CEL_ID("AppState"), AppState, ((AppState){
+    CelsSessionRememberState(session, CEL_ID("AppState"), sizeof(AppState), &((AppState){
         .showOptionalSidebar = true,
         .showSubMenu = true
     }));
@@ -204,7 +204,7 @@ static void ResetTreeState(CelsSession *session) {
         this->showOptionalSidebar = true;
         this->showSubMenu = true;
     }
-    cel_attach(session, CEL_ID("RootWindow"), RootWindow);
+    cel_attach(session, RootWindow);
 }
 
 /* ========================================================================= */

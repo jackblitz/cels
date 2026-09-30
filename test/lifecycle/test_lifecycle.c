@@ -40,7 +40,7 @@ CEL_Lifecycle(TextureLifecycle, EnemyTexture *self) {
 
 CEL_EvaluateFn(EnemyEval, void*, ctx) {
     (void)ctx;
-    const Enemy *state = cel_get_state(CEL_ID("Goblin"), Enemy);
+    const Enemy *state = cel_get_state_keyed(CEL_ID("Goblin"), Enemy);
     if (state != NULL && (state->hp <= 0 || !state->isAlive)) {
         return false;
     }
@@ -60,7 +60,7 @@ static void ResetLifecycleState(CelsSession *s) {
     g_renderCount = 0;
     g_texturesRemembered = 0;
     g_texturesForgotten = 0;
-    cel_session_remember_state(s, CEL_ID("Goblin"), Enemy, ((Enemy){ .hp = 100, .isAlive = true }));
+    CelsSessionRememberState(s, CEL_ID("Goblin"), sizeof(Enemy), &((Enemy){ .hp = 100, .isAlive = true }));
     cel_mutate(s, CEL_ID("Goblin"), Enemy) {
         this->hp = 100;
         this->isAlive = true;
@@ -75,7 +75,7 @@ static void TestInitialMount(void) {
     CelsSession session;
     CelsSessionInit(&session, NULL);
     ResetLifecycleState(&session);
-    cel_attach(&session, CEL_ID("GoblinApp"), GoblinApp, NULL, EnemyEval);
+    cel_attach(&session, GoblinApp, EnemyEval);
 
     CelsResult res1 = CelsSessionRecompose(&session);
     assert(res1 == CELS_OK);
@@ -90,7 +90,7 @@ static void TestNonFatalMutation(void) {
     CelsSession session;
     CelsSessionInit(&session, NULL);
     ResetLifecycleState(&session);
-    cel_attach(&session, CEL_ID("GoblinApp"), GoblinApp, NULL, EnemyEval);
+    cel_attach(&session, GoblinApp, EnemyEval);
 
     CelsResult res1 = CelsSessionRecompose(&session);
     assert(res1 == CELS_OK);
@@ -112,7 +112,7 @@ static void TestFatalMutationAndDestroy(void) {
     CelsSession session;
     CelsSessionInit(&session, NULL);
     ResetLifecycleState(&session);
-    cel_attach(&session, CEL_ID("GoblinApp"), GoblinApp, NULL, EnemyEval);
+    cel_attach(&session, GoblinApp, EnemyEval);
 
     assert(CelsSessionRecompose(&session) == CELS_OK);
 
@@ -133,7 +133,7 @@ static void TestSubsequentQuietRecompose(void) {
     CelsSession session;
     CelsSessionInit(&session, NULL);
     ResetLifecycleState(&session);
-    cel_attach(&session, CEL_ID("GoblinApp"), GoblinApp, NULL, EnemyEval);
+    cel_attach(&session, GoblinApp, EnemyEval);
 
     assert(CelsSessionRecompose(&session) == CELS_OK);
 
@@ -154,7 +154,7 @@ static void TestFullLifecycleProgression(void) {
     CelsSession session;
     CelsSessionInit(&session, NULL);
     ResetLifecycleState(&session);
-    cel_attach(&session, CEL_ID("GoblinApp"), GoblinApp, NULL, EnemyEval);
+    cel_attach(&session, GoblinApp, EnemyEval);
 
     /* Step 1: Initial Mount */
     CelsResult res1 = CelsSessionRecompose(&session);
@@ -199,7 +199,7 @@ static void TestEngineEvaluationTeardownTriggerQuit(void) {
     CelsEngineInit(&engine, NULL);
     ResetLifecycleState(&engine.session);
 
-    cel_attach(&engine.session, CEL_ID("GoblinApp"), GoblinApp, NULL, EnemyEval);
+    cel_attach(&engine.session, GoblinApp, EnemyEval);
 
     /* Initial composition pass */
     assert(CelsSessionRecompose(&engine.session) == CELS_OK);
@@ -251,7 +251,7 @@ CEL_Composable(TestBadgeComposable) {
 }
 
 CEL_Composable(TestWindowBody) {
-    const AppWindowTestState *st = cel_watch(AppWindowTestState, CEL_ID("AppWindow"));
+    const AppWindowTestState *st = cel_watch_state(AppWindowTestState);
     if (st && st->showBadge) {
         TestBadgeComposable();
     }
@@ -259,16 +259,16 @@ CEL_Composable(TestWindowBody) {
 
 CEL_EvaluateFn(TestWindowEval, void*, ctx) {
     (void)ctx;
-    const AppWindowTestState *st = cel_get_state(CEL_ID("AppWindow"), AppWindowTestState);
+    const AppWindowTestState *st = cel_get_state(AppWindowTestState);
     return (st == NULL || st->isOpen);
 }
 
 CEL_Composition(TestWindowComposition, void *userData) {
     (void)userData;
-    cel_remember_state(CEL_ID("AppWindow"), AppWindowTestState, ((AppWindowTestState){
+    cel_remember_state(AppWindowTestState, {
         .isOpen = true,
         .showBadge = true
-    }));
+    });
     TestWindowBody();
 }
 
@@ -279,7 +279,7 @@ static void TestChildLifecycleDecoupledFromRootEvaluation(void) {
     CelsEngine engine;
     CelsEngineInit(&engine, NULL);
 
-    cel_attach(&engine.session, CEL_ID("TestWindow"), TestWindowComposition, NULL, TestWindowEval);
+    cel_attach(&engine.session, TestWindowComposition, TestWindowEval);
 
     /* 1. Initial mount: window is open, badge is shown */
     assert(CelsSessionRecompose(&engine.session) == CELS_OK);
@@ -288,7 +288,7 @@ static void TestChildLifecycleDecoupledFromRootEvaluation(void) {
     assert(!engine.shouldQuit);
 
     /* 2. Toggle showBadge = false. Badge unmounts via lifecycle, but window stays open! */
-    cel_mutate(&engine.session, CEL_ID("AppWindow"), AppWindowTestState) {
+    cel_mutate(&engine.session, AppWindowTestState) {
         this->showBadge = false;
     }
 
@@ -298,7 +298,7 @@ static void TestChildLifecycleDecoupledFromRootEvaluation(void) {
     assert(!engine.shouldQuit);
 
     /* 3. Re-enable showBadge = true. Badge mounts again */
-    cel_mutate(&engine.session, CEL_ID("AppWindow"), AppWindowTestState) {
+    cel_mutate(&engine.session, AppWindowTestState) {
         this->showBadge = true;
     }
 
@@ -308,7 +308,7 @@ static void TestChildLifecycleDecoupledFromRootEvaluation(void) {
     assert(!engine.shouldQuit);
 
     /* 4. Close window: isOpen = false. WindowEval returns false -> root window destroyed -> engine.shouldQuit = true */
-    cel_mutate(&engine.session, CEL_ID("AppWindow"), AppWindowTestState) {
+    cel_mutate(&engine.session, AppWindowTestState) {
         this->isOpen = false;
     }
 

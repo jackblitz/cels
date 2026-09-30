@@ -189,8 +189,8 @@ static void TestSessionUserDataAndPostRecomposeHook(void)
     s_receivedUserData = NULL;
     CelsSessionSetPostRecomposeHook(&s, DummyPostRecomposeHook, &myContext);
 
-    cel_session_remember_state(&s, CEL_ID("DummyState"), DummyState, ((DummyState){ .counter = 1 }));
-    cel_attach(&s, CEL_ID("UserDataTestComp"), UserDataTestComp);
+    CelsSessionRememberState(&s, CEL_ID("DummyState"), sizeof(DummyState), &((DummyState){ .counter = 1 }));
+    cel_attach(&s, UserDataTestComp);
 
     assert(CelsSessionRecompose(&s) == CELS_OK);
     assert(s_postRecomposeFired == true);
@@ -243,8 +243,8 @@ static void TestCelRememberWithUnmount(void)
 
     CelsSession s;
     CelsSessionInit(&s, NULL);
-    cel_session_remember_state(&s, CEL_ID("GateState"), GateState, ((GateState){ .open = true }));
-    cel_attach(&s, CEL_ID("GateComposition"), GateComposition);
+    CelsSessionRememberState(&s, CEL_ID("GateState"), sizeof(GateState), &((GateState){ .open = true }));
+    cel_attach(&s, GateComposition);
 
     /* Frame 1: Child mounts */
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -297,8 +297,8 @@ static void TestLifecycleTransactionStaging(void)
 
     CelsSession s;
     CelsSessionInit(&s, NULL);
-    cel_session_remember_state(&s, CEL_ID("GateState"), GateState, ((GateState){ .open = true }));
-    cel_attach(&s, CEL_ID("LifecycleEntityComposition"), LifecycleEntityComposition);
+    CelsSessionRememberState(&s, CEL_ID("GateState"), sizeof(GateState), &((GateState){ .open = true }));
+    cel_attach(&s, LifecycleEntityComposition);
 
     /* Frame 1: Mount -> mount block stages Set Position and Set Health */
     assert(CelsSessionRecompose(&s) == CELS_OK);

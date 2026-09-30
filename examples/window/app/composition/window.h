@@ -2,26 +2,28 @@
 
 #include "cels.h"
 
+
 /**
- * Compile-time unique 64-bit identifier for the Window root composition & state.
- * Allows using CEL_Window directly instead of CEL_ID("CEL_Window").
+ * Reactive Window State Definition.
+ * Fields are ordered in descending alignment to eliminate struct padding.
  */
-#define CEL_Window CEL_ID("CEL_Window")
-
-/* ========================================================================= */
-/* Reactive Window State Definition                                          */
-/* ========================================================================= */
-
 CEL_State(WindowState) {
-    bool isOpen;
-    bool showBadge;
-    int  width;
-    int  height;
-    void *nativeHandle;
+    void    *nativeHandle;
+    int32_t  width;
+    int32_t  height;
+    bool     isOpen;
+    bool     showBadge;
 };
 
-/* ========================================================================= */
-/* Window Composition Interface                                              */
-/* ========================================================================= */
+/**
+ * Evaluates whether the window composition should remain active.
+ * Returning false triggers composition teardown.
+ */
+bool WindowEval(void *ctx);
 
-CelsCompositionRef Window_GetComposition(void);
+/**
+ * Window root composition function.
+ * Attaches the window layout hierarchy to the session tree.
+ */
+void WindowComposition(void *userData);
+

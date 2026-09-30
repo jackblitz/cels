@@ -2,8 +2,10 @@
 
 #include "cels.h"
 
-#define CEL_NetworkState CEL_ID("CEL_NetworkState")
 
+/**
+ * Connection lifecycle states for the asynchronous network task.
+ */
 typedef enum NetStatus {
     NET_DISCONNECTED,
     NET_RESOLVING,
@@ -13,10 +15,15 @@ typedef enum NetStatus {
     NET_CANCELLED
 } NetStatus;
 
+/**
+ * Reactive network state structure.
+ * Fields are ordered in descending alignment to eliminate struct padding.
+ */
 CEL_State(NetworkState) {
+    uint32_t  packetsReceived;
+    int32_t   pingMs;
     NetStatus status;
-    bool isConnecting;
-    int  pingMs;
-    char server[64];
-    uint32_t packetsReceived;
+    char      server[64];
+    bool      isConnecting;
 };
+

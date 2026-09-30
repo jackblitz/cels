@@ -3,95 +3,61 @@
 #include "network_task.h"
 #include <stdio.h>
 
-#define CEL_NetworkApp CEL_ID("CEL_NetworkApp")
-
-/* ========================================================================= */
-/* Composable UI / HUD                                                       */
-/* ========================================================================= */
-
-CEL_Composable(NetworkHUD) {
-    const NetworkState *net = cel_watch(NetworkState, CEL_NetworkState);
+/**
+ * Composable HUD observing reactive network state.
+ * Uses persistent slot memory (cel_remember) to track previous status across frames.
+ */
+CEL_Composable(NetworkHUD, NetworkState*, net) {
+    cel_watch(net);
     if (net == NULL) return;
 
-    static NetStatus lastReportedStatus = -1;
-    static uint32_t lastReportedPackets = 0;
-
-    if (net->status != lastReportedStatus || (net->status == NET_CONNECTED && net->packetsReceived != lastReportedPackets)) {
-        lastReportedStatus = net->status;
-        lastReportedPackets = net->packetsReceived;
-
-        switch (net->status) {
-            case NET_DISCONNECTED:
-                printf("[HUD] Status: DISCONNECTED. Press [C] to connect.\n");
-                break;
-            case NET_RESOLVING:
-                printf("[HUD] Status: Resolving DNS...\n");
-                break;
-            case NET_CONNECTING:
-                printf("[HUD] Status: Opening TCP socket...\n");
-                break;
-            case NET_HANDSHAKE:
-                printf("[HUD] Status: Authenticating...\n");
-                break;
-            case NET_CONNECTED:
-                printf("[HUD] Status: CONNECTED | Server: %s | Ping: %d ms | Packets: %u\n",
-                       net->server, net->pingMs, net->packetsReceived);
-                break;
-            case NET_CANCELLED:
-                printf("[HUD] Status: CANCELLED. Ready to reconnect ([C]).\n");
-                break;
-        }
+    switch (net->status) {
+        case NET_DISCONNECTED:
+            printf("[HUD] Status: DISCONNECTED. Press [C] to connect.\n");
+            break;
+        case NET_RESOLVING:
+            printf("[HUD] Status: Resolving DNS...\n");
+            break;
+        case NET_CONNECTING:
+            printf("[HUD] Status: Opening TCP socket...\n");
+            break;
+        case NET_HANDSHAKE:
+            printf("[HUD] Status: Authenticating...\n");
+            break;
+        case NET_CONNECTED:
+            printf("[HUD] Status: CONNECTED | Server: %s | Ping: %d ms | Packets: %u\n",
+                   net->server, net->pingMs, net->packetsReceived);
+            break;
+        case NET_CANCELLED:
+            printf("[HUD] Status: CANCELLED. Ready to reconnect ([C]).\n");
+            break;
     }
 
     /* Conditionally execute task while isConnecting is true.
      * When isConnecting is toggled off (e.g. by user pressing [X]),
      * the task is unmounted and its cancel {} block runs immediately! */
     if (net->isConnecting) {
-        cel_task(NetworkConnectTask, "game.cels.internal", 7777);
+        cel_task(NetworkConnectTask, net, "game.cels.internal:7777");
     }
 }
 
-/* ========================================================================= */
-/* Root Composition                                                          */
-/* ========================================================================= */
-
-CEL_Composition(NetworkAppComposition, void *userData) {
-    (void)userData;
-    cel_remember_state(CEL_NetworkState, NetworkState, ((NetworkState){
-        .status = NET_DISCONNECTED,
-        .isConnecting = false,
-        .pingMs = 0,
+/**
+ * Root composition for the network task application.
+ */
+CEL_Composition(NetworkAppComposition) {
+    NetworkState *net = cel_remember_state(NetworkState, {
         .packetsReceived = 0,
-        .server = {0}
-    }));
+        .pingMs          = 0,
+        .status          = NET_DISCONNECTED,
+        .server          = {0},
+        .isConnecting    = false
+    });
 
-    NetworkHUD();
+    NetworkHUD(net);
 }
 
-static CelsCompositionRef App_OnStart(CelsEngine *engine, CelsSession *session) {
-    (void)engine;
-    (void)session;
-    printf("[App] Network Task Application started.\n");
-    return (CelsCompositionRef){
-        .key = CEL_NetworkApp,
-        .body = NetworkAppComposition,
-        .userData = NULL,
-        .lifecycleEval = NULL,
-        .evalCtx = NULL
-    };
-}
+/**
+ * Declarative Application Root.
+ */
+CEL_App(NetworkApp, NetworkAppComposition);
 
-static void App_OnEnd(CelsEngine *engine, CelsSession *session) {
-    (void)engine;
-    (void)session;
-    printf("[App] Network Task Application teardown complete.\n");
-}
-
-/* ========================================================================= */
-/* Application Manifest                                                      */
-/* ========================================================================= */
-
-CEL_App(NetworkApp,
-    .onStart = App_OnStart,
-    .onEnd   = App_OnEnd
-);

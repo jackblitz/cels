@@ -6,7 +6,7 @@
  */
 
 #include "bench_timer.h"
-#include "cels/version.h"
+#include "cels/runtime/version.h"
 
 #include <stdio.h>
 #include <stdlib.h>

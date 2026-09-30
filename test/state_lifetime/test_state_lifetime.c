@@ -37,8 +37,8 @@ static void TestHighKeys(void) {
 
     CelsSession s;
     CelsSessionInit(&s, NULL);
-    cel_session_remember_state(&s, CEL_ID("ChildState"), ChildState, ((ChildState){ 0 }));
-    cel_attach(&s, CEL_ID("KeyRoot"), KeyRoot);
+    CelsSessionRememberState(&s, CEL_ID("ChildState"), sizeof(ChildState), &((ChildState){ 0 }));
+    cel_attach(&s, KeyRoot);
 
     assert(CelsSessionRecompose(&s) == CELS_OK);
     assert(childRuns == 1 && siblingRuns == 1);
@@ -130,13 +130,13 @@ static void TestEditsPreserveResources(void) {
 
     CelsSession s;
     CelsSessionInit(&s, NULL);
-    cel_session_remember_state(&s, CEL_ID("LayoutState"), LayoutState, ((LayoutState){ .mode = 0, .childVal = 100 }));
+    CelsSessionRememberState(&s, CEL_ID("LayoutState"), sizeof(LayoutState), &((LayoutState){ .mode = 0, .childVal = 100 }));
     for (int i = 0; i < 4; ++i) {
         uint64_t valKey = CelsKeyIndex(CEL_ID("node-val"), (uint64_t)i);
         int initV = i * 100;
-        cel_session_remember_state(&s, valKey, int, initV);
+        CelsSessionRememberState(&s, valKey, sizeof(int), &initV);
     }
-    cel_attach(&s, CEL_ID("EditRoot"), EditRoot);
+    cel_attach(&s, EditRoot);
 
     assert(CelsSessionRecompose(&s) == CELS_OK);
     assert(creates == 3 && destroys == 0);
@@ -210,9 +210,9 @@ static void TestChildBeforeParent(void) {
 
     CelsSession s;
     CelsSessionInit(&s, NULL);
-    cel_session_remember_state(&s, CEL_ID("ShowParent"), ShowParent, ((ShowParent){ .show = true }));
-    cel_session_remember_state(&s, CEL_ID("LayoutState"), LayoutState, ((LayoutState){ .mode = 0, .childVal = 0 }));
-    cel_attach(&s, CEL_ID("TeardownRoot"), TeardownRoot);
+    CelsSessionRememberState(&s, CEL_ID("ShowParent"), sizeof(ShowParent), &((ShowParent){ .show = true }));
+    CelsSessionRememberState(&s, CEL_ID("LayoutState"), sizeof(LayoutState), &((LayoutState){ .mode = 0, .childVal = 0 }));
+    cel_attach(&s, TeardownRoot);
 
     assert(CelsSessionRecompose(&s) == CELS_OK);
     int start = destroys;
@@ -284,13 +284,13 @@ static void TestNestedEditsKeepSubscriptions(void) {
 
     CelsSession s;
     CelsSessionInit(&s, NULL);
-    cel_session_remember_state(&s, CEL_ID("NestedLayout"), NestedLayout, ((NestedLayout){ .mode = 0 }));
+    CelsSessionRememberState(&s, CEL_ID("NestedLayout"), sizeof(NestedLayout), &((NestedLayout){ .mode = 0 }));
     for (int i = 0; i < 3; ++i) {
         uint64_t valKey = CelsKeyIndex(CEL_ID("node-val"), (uint64_t)i);
         int initV = i * 100;
-        cel_session_remember_state(&s, valKey, int, initV);
+        CelsSessionRememberState(&s, valKey, sizeof(int), &initV);
     }
-    cel_attach(&s, CEL_ID("NestedRoot"), NestedRoot);
+    cel_attach(&s, NestedRoot);
 
     assert(CelsSessionRecompose(&s) == CELS_OK);
     Resource *parent = parentResources[1];
@@ -318,11 +318,196 @@ static void TestNestedEditsKeepSubscriptions(void) {
     assert(destroys == creates);
 }
 
+/* ========================================================================= */
+/* State Hoisting Tests (Pointer Instance Identity)                          */
+/* ========================================================================= */
+
+CEL_State(HoistedWindowState) {
+    int width;
+    int height;
+    bool isOpen;
+};
+
+static int s_hoistedChildRuns = 0;
+static int s_hoistedChildLastWidth = 0;
+
+CEL_Composable(HoistedWindowChild, HoistedWindowState*, win) {
+    cel_watch(win);
+    s_hoistedChildRuns++;
+    s_hoistedChildLastWidth = win->width;
+}
+
+static HoistedWindowState *s_capturedWinInstance = NULL;
+
+CEL_Composition(HoistedRootComp, void *userData) {
+    (void)userData;
+    HoistedWindowState *win = cel_state(HoistedWindowState, ((HoistedWindowState){
+        .width = 800,
+        .height = 600,
+        .isOpen = true
+    }));
+    s_capturedWinInstance = win;
+    HoistedWindowChild(win);
+}
+
+static void TestStateHoistingBasic(void) {
+    s_hoistedChildRuns = 0;
+    s_hoistedChildLastWidth = 0;
+    s_capturedWinInstance = NULL;
+
+    CelsSession s;
+    CelsSessionInit(&s, NULL);
+    cel_attach(&s, HoistedRootComp);
+
+    /* Frame 1: Initial mount */
+    assert(CelsSessionRecompose(&s) == CELS_OK);
+    assert(s_hoistedChildRuns == 1);
+    assert(s_hoistedChildLastWidth == 800);
+    assert(s_capturedWinInstance != NULL);
+
+    /* Frame 2: Mutate instance directly without string ID */
+    cel_mutate(s_capturedWinInstance) {
+        this->width = 1024;
+    }
+    assert(CelsSessionRecompose(&s) == CELS_OK);
+    assert(s_hoistedChildRuns == 2);
+    assert(s_hoistedChildLastWidth == 1024);
+
+    /* Frame 3: Quiet recompose */
+    assert(CelsSessionRecompose(&s) == CELS_OK);
+    assert(s_hoistedChildRuns == 2);
+
+    CelsSessionDestroy(&s);
+}
+
+static int s_instRuns1 = 0;
+static int s_instRuns2 = 0;
+static HoistedWindowState *s_capturedWin1 = NULL;
+static HoistedWindowState *s_capturedWin2 = NULL;
+
+CEL_Composable(HoistedConsumer1, HoistedWindowState*, win) {
+    cel_watch(win);
+    s_instRuns1++;
+}
+
+CEL_Composable(HoistedConsumer2, HoistedWindowState*, win) {
+    cel_watch(win);
+    s_instRuns2++;
+}
+
+CEL_Composition(HoistedMultiRoot, void *userData) {
+    (void)userData;
+    HoistedWindowState *win1 = cel_state(HoistedWindowState, ((HoistedWindowState){ .width = 800, .height = 600, .isOpen = true }));
+    HoistedWindowState *win2 = cel_state(HoistedWindowState, ((HoistedWindowState){ .width = 1920, .height = 1080, .isOpen = true }));
+    s_capturedWin1 = win1;
+    s_capturedWin2 = win2;
+
+    HoistedConsumer1(win1);
+    HoistedConsumer2(win2);
+}
+
+static void TestStateHoistingMultipleInstances(void) {
+    s_instRuns1 = 0;
+    s_instRuns2 = 0;
+    s_capturedWin1 = NULL;
+    s_capturedWin2 = NULL;
+
+    CelsSession s;
+    CelsSessionInit(&s, NULL);
+    cel_attach(&s, HoistedMultiRoot);
+
+    /* Frame 1: Mount both instances */
+    assert(CelsSessionRecompose(&s) == CELS_OK);
+    assert(s_instRuns1 == 1 && s_instRuns2 == 1);
+    assert(s_capturedWin1 != s_capturedWin2);
+    assert(s_capturedWin1->width == 800);
+    assert(s_capturedWin2->width == 1920);
+
+    /* Mutate only instance 1 */
+    cel_mutate(s_capturedWin1) {
+        this->width = 1280;
+    }
+    assert(CelsSessionRecompose(&s) == CELS_OK);
+    assert(s_instRuns1 == 2);
+    assert(s_instRuns2 == 1); /* Instance 2 was NOT invalidated */
+
+    /* Mutate only instance 2 */
+    cel_mutate(s_capturedWin2) {
+        this->width = 2560;
+    }
+    assert(CelsSessionRecompose(&s) == CELS_OK);
+    assert(s_instRuns1 == 2); /* Instance 1 was NOT invalidated */
+    assert(s_instRuns2 == 2);
+
+    CelsSessionDestroy(&s);
+}
+
+CEL_State(TeardownToggleState) {
+    bool enable;
+};
+
+static TeardownToggleState *s_capturedToggle = NULL;
+static int s_teardownChildRuns = 0;
+static HoistedWindowState *s_capturedTeardownWin = NULL;
+
+CEL_Composable(HoistedTeardownChild) {
+    HoistedWindowState *win = cel_state(HoistedWindowState, ((HoistedWindowState){ .width = 640 }));
+    s_capturedTeardownWin = win;
+    s_teardownChildRuns++;
+}
+
+CEL_Composition(HoistedTeardownRoot, void *userData) {
+    (void)userData;
+    TeardownToggleState *toggle = cel_state(TeardownToggleState, ((TeardownToggleState){ .enable = true }));
+    cel_watch(toggle);
+    s_capturedToggle = toggle;
+
+    if (toggle->enable) {
+        HoistedTeardownChild();
+    }
+}
+
+static void TestStateHoistingAutomaticTeardown(void) {
+    s_capturedToggle = NULL;
+    s_teardownChildRuns = 0;
+    s_capturedTeardownWin = NULL;
+
+    CelsSession s;
+    CelsSessionInit(&s, NULL);
+    cel_attach(&s, HoistedTeardownRoot);
+
+    /* Frame 1: Child is active */
+    assert(CelsSessionRecompose(&s) == CELS_OK);
+    assert(s_teardownChildRuns == 1);
+    assert(s_capturedTeardownWin != NULL);
+    assert(s.stateRegistry.cellCount > 0);
+
+    CelsStateHeader *hdr = CelsGetStateHeader(s_capturedTeardownWin);
+    assert(hdr != NULL);
+    CelsStateCell *cell = CelsStateRegistryFindCell(&s.stateRegistry, hdr->id);
+    assert(cell != NULL && cell->inUse == true);
+
+    /* Frame 2: Mutate toggle -> invalidates root, skips child, triggers pruning */
+    cel_mutate(s_capturedToggle) {
+        this->enable = false;
+    }
+    assert(CelsSessionRecompose(&s) == CELS_OK);
+    assert(s_teardownChildRuns == 1);
+
+    /* Slot cleanup automatically deactivated the child state cell! */
+    assert(cell->inUse == false);
+
+    CelsSessionDestroy(&s);
+}
+
 static const TestCase s_stateLifetimeTests[] = {
     { "TestHighKeys", "64-bit key dispatch and mutation tracking", TestHighKeys },
     { "TestEditsPreserveResources", "Tree edits and reordering preserve resource identity", TestEditsPreserveResources },
     { "TestChildBeforeParent", "Teardown order: child resources destroyed before parent", TestChildBeforeParent },
-    { "TestNestedEditsKeepSubscriptions", "Nested tree edits maintain reactive subscriptions", TestNestedEditsKeepSubscriptions }
+    { "TestNestedEditsKeepSubscriptions", "Nested tree edits maintain reactive subscriptions", TestNestedEditsKeepSubscriptions },
+    { "TestStateHoistingBasic", "State hoisting instance allocation, cel_watch(ptr), and cel_mutate(ptr)", TestStateHoistingBasic },
+    { "TestStateHoistingMultipleInstances", "Multiple distinct instances of the same struct without string keys", TestStateHoistingMultipleInstances },
+    { "TestStateHoistingAutomaticTeardown", "Automatic state cell deactivation when composable unmounts", TestStateHoistingAutomaticTeardown }
 };
 
 static const TestSuite s_stateLifetimeSuite = {

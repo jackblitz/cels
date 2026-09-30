@@ -107,14 +107,22 @@ int main(int argc, char **argv)
 {
     bool once = (argc > 1 && strcmp(argv[1], "--once") == 0);
 
-    /* 1. Initialize engine */
+    /*
+     * 1. Initialize host engine and primary session with workload profile:
+     *
+     * Profile Selection: CELS_PROFILE_512
+     * - Capacity: Up to 512 active composables
+     * - Slab Size: 64 KiB contiguous 64-byte cache-aligned slab
+     * - Use Case: L1/L2 cache-resident reactive state machines and asynchronous coroutines.
+     *   Keeps task execution stacks, state cells, and resumption frames ultra-fast and cache-hot.
+     */
     CelsEngine engine;
-    if (CelsEngineInit(&engine, NULL) != CELS_OK) {
+    if (CelsEngineInitWithProfile(&engine, NULL, CELS_PROFILE_512) != CELS_OK) {
         fprintf(stderr, "[Host] Failed to initialize engine\n");
         return 1;
     }
 
-    printf("[Host] Task Example loaded.\n");
+    printf("[Host] Task Example loaded (CELS_PROFILE_512: 64 KiB slab, 512 composables).\n");
     printf("[Host] Controls:\n");
     printf("[Host]   [C] Connect to server (start CEL_Task)\n");
     printf("[Host]   [X] Cancel connection (unmounts task, invokes cancel {} block)\n");
@@ -132,12 +140,12 @@ int main(int argc, char **argv)
         int key = PollKey();
         if (key == 'c' || key == 'C') {
             printf("[Host] Key 'C' pressed: Starting network connect task...\n");
-            cel_mutate(&engine.session, CEL_NetworkState, NetworkState) {
+            cel_mutate(&engine.session, NetworkState) {
                 this->isConnecting = true;
             }
         } else if (key == 'x' || key == 'X') {
             printf("[Host] Key 'X' pressed: Cancelling network task...\n");
-            cel_mutate(&engine.session, CEL_NetworkState, NetworkState) {
+            cel_mutate(&engine.session, NetworkState) {
                 this->isConnecting = false;
             }
         } else if (key == 'q' || key == 'Q' || key == 27) {

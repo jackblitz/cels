@@ -130,7 +130,7 @@ CEL_Lifecycle(TextureLifecycle, EnemyTexture *self) {
 
 CEL_EvaluateFn(EnemyLifeCycle, void*, ctx) {
     (void)ctx;
-    const EnemyState *st = cel_get_state(CEL_ID("EnemyState"), EnemyState);
+    const EnemyState *st = cel_get_state(EnemyState);
     if (st != NULL && (st->hp <= 0 || !st->isAlive)) {
         return false;
     }
@@ -276,8 +276,8 @@ static BenchmarkResult RunBenchMultiSession(size_t sessions, size_t iterations, 
     CelsSession *sessionPool = (CelsSession *)malloc(sessions * sizeof(CelsSession));
     for (size_t s = 0; s < sessions; ++s) {
         CelsSessionInit(&sessionPool[s], NULL);
-        cel_session_remember_state(&sessionPool[s], CEL_ID("DashboardState"), DashboardState, ((DashboardState){ .activeTab = 1, .showSidePanel = true, .itemCount = 8 }));
-        cel_attach(&sessionPool[s], CEL_ID("AppRoot"), LargeDashboardTree);
+        CelsSessionRememberState(&sessionPool[s], CEL_ID("DashboardState"), sizeof(DashboardState), &((DashboardState){ .activeTab = 1, .showSidePanel = true, .itemCount = 8 }));
+        cel_attach(&sessionPool[s], LargeDashboardTree);
     }
 
     if (showTree) {
@@ -338,8 +338,8 @@ static BenchmarkResult RunBenchLifecycleChurn(size_t iterations, bool showTree) 
 
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    cel_session_remember_state(&session, CEL_ID("EnemyState"), EnemyState, ((EnemyState){ .hp = 100, .isAlive = true }));
-    cel_attach(&session, CEL_ID("Goblin"), GoblinComposable, NULL, EnemyLifeCycle);
+    CelsSessionRememberState(&session, CEL_ID("EnemyState"), sizeof(EnemyState), &((EnemyState){ .hp = 100, .isAlive = true }));
+    cel_attach(&session, GoblinComposable, EnemyLifeCycle);
 
     if (showTree) {
         CelsSessionRecompose(&session);
@@ -410,8 +410,8 @@ static BenchmarkResult RunBenchLargeTree(size_t iterations, bool showTree) {
 
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    cel_session_remember_state(&session, CEL_ID("DashboardState"), DashboardState, ((DashboardState){ .activeTab = 1, .showSidePanel = true, .itemCount = 16 }));
-    cel_attach(&session, CEL_ID("AppRoot"), LargeDashboardTree);
+    CelsSessionRememberState(&session, CEL_ID("DashboardState"), sizeof(DashboardState), &((DashboardState){ .activeTab = 1, .showSidePanel = true, .itemCount = 16 }));
+    cel_attach(&session, LargeDashboardTree);
 
     CelsSessionRecompose(&session);
 
@@ -469,8 +469,8 @@ static BenchmarkResult RunBenchSteadyStateQuietSkip(size_t iterations) {
 
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    cel_session_remember_state(&session, CEL_ID("DashboardState"), DashboardState, ((DashboardState){ .activeTab = 1, .showSidePanel = true, .itemCount = 8 }));
-    cel_attach(&session, CEL_ID("AppRoot"), LargeDashboardTree);
+    CelsSessionRememberState(&session, CEL_ID("DashboardState"), sizeof(DashboardState), &((DashboardState){ .activeTab = 1, .showSidePanel = true, .itemCount = 8 }));
+    cel_attach(&session, LargeDashboardTree);
     CelsSessionRecompose(&session);
 
     uint64_t startTotal = BenchGetTimeNs();

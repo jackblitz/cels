@@ -5,6 +5,7 @@
 
 /**
  * Container composable displaying window metrics and render count.
- * Declared in window_content.h and implemented in window_content.c.
+ * Declared with standard C prototype and defined via CEL_ComposableDef.
  */
-CEL_ComposableDecl(CEL_WindowContent, WindowState *win);
+void WindowContent(WindowState *win);
+
