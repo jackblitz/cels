@@ -305,7 +305,7 @@ CelsResult CelsRecomposeAllSessions(void)
 {
     CelsResult lastRes = CELS_OK;
     for (uint32_t i = 0; i < s_sessionRegistryCount; ++i) {
-        if (s_sessionRegistry[i].session != NULL) {
+        if (s_sessionRegistry[i].session != NULL && s_sessionRegistry[i].session->attachedCount > 0) {
             CelsResult res = CelsSessionRecompose(s_sessionRegistry[i].session);
             if (res != CELS_OK) {
                 lastRes = res;
@@ -518,6 +518,7 @@ void CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
         : CELS_MAX_DRAIN_ITERATIONS;
 
     CelsStateRegistryInit(&s->stateRegistry);
+    CelsEventQueueInit(&s->eventQueue);
 }
 
 /**
@@ -557,6 +558,7 @@ void CelsSessionDestroy(CelsSession *s)
         CelsFreeAlignedSlab(s->slab);
     }
 
+    CelsEventQueueClear(&s->eventQueue);
     s->magic = 0;
     memset(s, 0, sizeof(*s));
 }
@@ -694,6 +696,11 @@ CelsResult CelsSessionRecompose(CelsSession *s)
         return CELS_ERROR_INVALID_STATE;
     }
 
+    /* Transfer next-frame task/external invalidations to active invalidation queue */
+    while (s->nextFrameQueueCount > 0 && s->queueCount < CELS_MAX_QUEUE) {
+        s->invalidationQueue[s->queueCount++] = s->nextFrameQueue[--s->nextFrameQueueCount];
+    }
+
     bool hasDirtyState = false;
     for (uint32_t i = 0; i < s->stateRegistry.cellCount; ++i) {
         if (s->stateRegistry.cells[i].inUse && s->stateRegistry.cells[i].isDirty) {
@@ -702,10 +709,7 @@ CelsResult CelsSessionRecompose(CelsSession *s)
         }
     }
 
-    if (s->hasComposedOnce && s->queueCount == 0 && !s->isHotReloadPending) {
-        if (hasDirtyState) {
-            CelsStatePublishDirty(s);
-        }
+    if (s->hasComposedOnce && s->queueCount == 0 && !s->isHotReloadPending && !hasDirtyState) {
         return CELS_OK;
     }
     s->isHotReloadPending = false;
@@ -715,16 +719,18 @@ CelsResult CelsSessionRecompose(CelsSession *s)
 
     uint32_t iterations = 0;
     s->isRecomposing = true;
-
-    /* Publish double-buffered state snapshots at frame boundary before evaluation */
-    CelsStatePublishDirty(s);
+    s->isHandlingEvent = false;
 
     do {
         if (++iterations > s->maxDrainIterations) {
             s->isRecomposing = false;
+            s->isHandlingEvent = false;
             s_currentSession = prevSession;
             return CELS_ERROR_RECOMPOSE_DID_NOT_CONVERGE;
         }
+
+        /* Publish double-buffered state snapshots before each evaluation pass */
+        CelsStatePublishDirty(s);
 
         DrainInvalidationQueue(s);
 
@@ -784,8 +790,12 @@ CelsResult CelsSessionRecompose(CelsSession *s)
         s->postRecomposeHook(s, s->postRecomposeUserData);
     }
 
+    /* Retire consumed events at frame completion */
+    CelsEventRetireConsumed(s);
+
     s->hasComposedOnce = true;
     s->isRecomposing = false;
+    s->isHandlingEvent = false;
     if (prevSession) {
         s_currentSession = prevSession;
     }
@@ -1395,6 +1405,9 @@ void *CelsGetState(CelsSession *s, uint64_t key)
  */
 void CelsSessionInvalidateKey(CelsSession *session, uint64_t key)
 {
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
     if (session == NULL) return;
     for (uint32_t i = 0; i < session->nextFrameQueueCount; ++i) {
         if (session->nextFrameQueue[i] == key) return;
@@ -1402,6 +1415,24 @@ void CelsSessionInvalidateKey(CelsSession *session, uint64_t key)
     if (session->nextFrameQueueCount < CELS_MAX_QUEUE) {
         session->nextFrameQueue[session->nextFrameQueueCount++] = key;
     }
+}
+
+void CelsSessionInvalidateKeyImmediate(CelsSession *session, uint64_t key)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL) return;
+    if (session->isRecomposing) {
+        for (uint32_t i = 0; i < session->queueCount; ++i) {
+            if (session->invalidationQueue[i] == key) return;
+        }
+        if (session->queueCount < CELS_MAX_QUEUE) {
+            session->invalidationQueue[session->queueCount++] = key;
+        }
+        return;
+    }
+    CelsSessionInvalidateKey(session, key);
 }
 
 uint64_t CelsSessionGetCurrentGroupKey(const CelsSession *session)

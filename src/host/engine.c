@@ -63,13 +63,15 @@ CelsResult _CelsEngineInitInternalWithOptions(CelsEngine *engine, const char *ap
     engine->magic = CELS_ENGINE_MAGIC;
     engine->moduleCount = 0;
     engine->isStarted = false;
-    engine->shouldQuit = false;
+    engine->broadcastCount = 0;
+    CelsMutexInit(&engine->broadcastMutex);
     CelsSetCurrentEngine(engine);
 
     CelsSessionConfig sc = config ? *config : (CelsSessionConfig){0};
     sc.engine = engine;
     CelsSessionInit(&engine->session, &sc);
     engine->session.engine = engine;
+    engine->secondarySessionCount = 0;
 
     if (appName != NULL && appName[0] != '\0') {
         return CelsEngineLoadApp(engine, appName);
@@ -106,7 +108,17 @@ void CelsEngineDestroy(CelsEngine *engine)
     }
     engine->moduleCount = 0;
 
+    for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
+        if (engine->secondarySessions[i].isUsed && engine->secondarySessions[i].session != NULL) {
+            CelsSessionDestroy(engine->secondarySessions[i].session);
+            free(engine->secondarySessions[i].session);
+            engine->secondarySessions[i].session = NULL;
+            engine->secondarySessions[i].isUsed = false;
+        }
+    }
+    engine->secondarySessionCount = 0;
     CelsSessionDestroy(&engine->session);
+    CelsMutexDestroy(&engine->broadcastMutex);
 
     if (s_currentEngine == engine) {
         s_currentEngine = NULL;
@@ -180,8 +192,117 @@ void CelsEngineEnd(CelsEngine *engine)
     engine->isStarted = false;
 }
 
+bool CelsEngineBroadcast(CelsEngine *engine, uint64_t typeHash, const void *payload, size_t size)
+{
+    if (engine == NULL) {
+        return false;
+    }
+    CelsMutexLock(&engine->broadcastMutex);
+    if (engine->broadcastCount >= CELS_EVENT_QUEUE_CAPACITY) {
+        CelsMutexUnlock(&engine->broadcastMutex);
+        return false;
+    }
+
+    CelsEventRecord *const rec = &engine->broadcastQueue[engine->broadcastCount++];
+    rec->typeHash = typeHash;
+    rec->scope = CELS_EVENT_SCOPE_BROADCAST;
+    rec->size = (uint32_t)((size > CELS_EVENT_MAX_PAYLOAD) ? CELS_EVENT_MAX_PAYLOAD : size);
+    rec->sourceGroupId = 0;
+    rec->readCount = 0;
+    if (payload != NULL && rec->size > 0) {
+        memcpy(rec->payload, payload, rec->size);
+    }
+
+    CelsMutexUnlock(&engine->broadcastMutex);
+    return true;
+}
+
+void CelsEngineDrainBroadcasts(CelsEngine *engine)
+{
+    if (engine == NULL) {
+        return;
+    }
+    CelsMutexLock(&engine->broadcastMutex);
+    if (engine->broadcastCount == 0) {
+        CelsMutexUnlock(&engine->broadcastMutex);
+        return;
+    }
+
+    /* 1. Deliver staged broadcasts into engine's primary session */
+    {
+        CelsSession *sess = &engine->session;
+        CelsEventQueue *const q = &sess->eventQueue;
+
+        for (uint32_t i = 0; i < engine->broadcastCount; ++i) {
+            const CelsEventRecord *src = &engine->broadcastQueue[i];
+
+            for (uint32_t w = 0; w < q->waiterCount; ++w) {
+                CelsTaskEventWaiter *const waiter = &q->waiters[w];
+                if (waiter->isWaiting && waiter->typeHash == src->typeHash && (waiter->scopeMask & CELS_EVENT_SCOPE_BROADCAST)) {
+                    if (waiter->outBuffer != NULL && src->size > 0) {
+                        const size_t copySize = (src->size < waiter->outSize) ? src->size : waiter->outSize;
+                        memcpy(waiter->outBuffer, src->payload, copySize);
+                    }
+                    waiter->received = true;
+                    waiter->isWaiting = false;
+                    CelsSessionInvalidateKey(sess, waiter->groupKey);
+                }
+            }
+
+            if (q->count < CELS_EVENT_QUEUE_CAPACITY) {
+                CelsEventRecord *const dst = &q->records[q->count++];
+                *dst = *src;
+
+                for (uint32_t l = 0; l < q->listenerCount; ++l) {
+                    if (q->listeners[l].typeHash == src->typeHash && (q->listeners[l].scopeMask & CELS_EVENT_SCOPE_BROADCAST)) {
+                        CelsSessionInvalidateKey(sess, q->listeners[l].key);
+                    }
+                }
+            }
+        }
+    }
+
+    /* 2. Deliver staged broadcasts into all engine-managed secondary sessions */
+    for (uint32_t sIdx = 0; sIdx < CELS_MAX_SECONDARY_SESSIONS; ++sIdx) {
+        if (!engine->secondarySessions[sIdx].isUsed || engine->secondarySessions[sIdx].session == NULL) continue;
+        CelsSession *sess = engine->secondarySessions[sIdx].session;
+        CelsEventQueue *const q = &sess->eventQueue;
+
+        for (uint32_t i = 0; i < engine->broadcastCount; ++i) {
+            const CelsEventRecord *src = &engine->broadcastQueue[i];
+
+            for (uint32_t w = 0; w < q->waiterCount; ++w) {
+                CelsTaskEventWaiter *const waiter = &q->waiters[w];
+                if (waiter->isWaiting && waiter->typeHash == src->typeHash && (waiter->scopeMask & CELS_EVENT_SCOPE_BROADCAST)) {
+                    if (waiter->outBuffer != NULL && src->size > 0) {
+                        const size_t copySize = (src->size < waiter->outSize) ? src->size : waiter->outSize;
+                        memcpy(waiter->outBuffer, src->payload, copySize);
+                    }
+                    waiter->received = true;
+                    waiter->isWaiting = false;
+                    CelsSessionInvalidateKey(sess, waiter->groupKey);
+                }
+            }
+
+            if (q->count < CELS_EVENT_QUEUE_CAPACITY) {
+                CelsEventRecord *const dst = &q->records[q->count++];
+                *dst = *src;
+
+                for (uint32_t l = 0; l < q->listenerCount; ++l) {
+                    if (q->listeners[l].typeHash == src->typeHash && (q->listeners[l].scopeMask & CELS_EVENT_SCOPE_BROADCAST)) {
+                        CelsSessionInvalidateKey(sess, q->listeners[l].key);
+                    }
+                }
+            }
+        }
+    }
+
+    engine->broadcastCount = 0;
+    CelsMutexUnlock(&engine->broadcastMutex);
+}
+
 /**
- * Triggers a recomposition pass on the engine's primary session and all active sessions.
+ * Triggers a recomposition pass on the primary session and all active secondary sessions.
  *
  * @param engine Target host engine. Non-NULL.
  * @return CELS_OK on success, or CelsResult error code.
@@ -191,9 +312,95 @@ CelsResult CelsEngineRecompose(CelsEngine *engine)
     if (engine == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
     }
-    CelsResult res = CelsSessionRecompose(&engine->session);
-    CelsResult allRes = CelsRecomposeAllSessions();
-    return (res != CELS_OK) ? res : allRes;
+    CelsEngineDrainBroadcasts(engine);
+    CelsResult res = CELS_OK;
+    if (engine->session.attachedCount > 0) {
+        res = CelsSessionRecompose(&engine->session);
+    }
+    for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
+        if (engine->secondarySessions[i].isUsed && engine->secondarySessions[i].session != NULL) {
+            if (engine->secondarySessions[i].session->attachedCount > 0) {
+                CelsResult r = CelsSessionRecompose(engine->secondarySessions[i].session);
+                if (r != CELS_OK && res == CELS_OK) {
+                    res = r;
+                }
+            }
+        }
+    }
+    return res;
+}
+
+/**
+ * Creates and registers a named secondary session supervised by the engine.
+ */
+CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsSessionProfile profile)
+{
+    if (engine == NULL || name == NULL || name[0] == '\0') {
+        return NULL;
+    }
+
+    /* "main" or "root" maps directly to the primary session */
+    if (strcmp(name, "main") == 0 || strcmp(name, "root") == 0) {
+        return &engine->session;
+    }
+
+    /* Check if secondary session with name already exists */
+    uint64_t hash = CelsHashKey(name);
+    for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
+        if (engine->secondarySessions[i].isUsed && engine->secondarySessions[i].nameHash == hash &&
+            strcmp(engine->secondarySessions[i].name, name) == 0) {
+            return engine->secondarySessions[i].session;
+        }
+    }
+
+    /* Find next free slot in secondarySessions */
+    for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
+        if (!engine->secondarySessions[i].isUsed) {
+            CelsEngineSessionEntry *entry = &engine->secondarySessions[i];
+            memset(entry, 0, sizeof(*entry));
+            entry->session = (CelsSession *)calloc(1, sizeof(CelsSession));
+            if (entry->session == NULL) {
+                return NULL;
+            }
+            entry->session->isHeapAllocated = true;
+            CelsSessionInitWithProfile(entry->session, profile);
+            entry->session->engine = engine;
+            strncpy(entry->name, name, sizeof(entry->name) - 1);
+            entry->nameHash = hash;
+            entry->isUsed = true;
+            engine->secondarySessionCount++;
+            return entry->session;
+        }
+    }
+
+    fprintf(stderr, "[CELS ERROR] Engine secondary session capacity full (%u / %u). Cannot create session '%s'.\n",
+            engine->secondarySessionCount, CELS_MAX_SECONDARY_SESSIONS, name);
+    return NULL;
+}
+
+/**
+ * Retrieves a session supervised by the engine by name.
+ */
+CelsSession *CelsEngineGetSession(CelsEngine *engine, const char *name)
+{
+    if (engine == NULL) {
+        return NULL;
+    }
+
+    /* Default / primary session */
+    if (name == NULL || name[0] == '\0' || strcmp(name, "main") == 0 || strcmp(name, "root") == 0) {
+        return &engine->session;
+    }
+
+    uint64_t hash = CelsHashKey(name);
+    for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
+        if (engine->secondarySessions[i].isUsed && engine->secondarySessions[i].nameHash == hash &&
+            strcmp(engine->secondarySessions[i].name, name) == 0) {
+            return engine->secondarySessions[i].session;
+        }
+    }
+
+    return NULL;
 }
 
 /**

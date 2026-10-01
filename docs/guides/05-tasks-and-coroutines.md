@@ -96,11 +96,11 @@ Notice what happens if `isDownloading` becomes `false` mid-execution:
 In [`examples/task/app/network_task.h`](file:///D:/cels-workspace/library/cels/examples/task/app/network_task.h), a complete 5-step network connection task demonstrates procedural state progression:
 
 ```c
-CEL_Task(NetworkConnectTask, const char*, server, int, port) {
+CEL_Task(NetworkConnectTask, NetworkState*, net, const char*, server, int, port) {
     cancel {
         printf("  [NetworkTask] Teardown triggered! Closing socket to %s:%d...\n",
                server, port);
-        cel_mutate(CelsGetCurrentSession(), CEL_NetworkState, NetworkState) {
+        cel_mutate(net) {
             this->status = NET_CANCELLED;
             this->isConnecting = false;
         }
@@ -108,19 +108,19 @@ CEL_Task(NetworkConnectTask, const char*, server, int, port) {
 
     run {
         /* Step 1: DNS Resolution */
-        cel_mutate(CelsGetCurrentSession(), CEL_NetworkState, NetworkState) {
+        cel_mutate(net) {
             this->status = NET_RESOLVING;
         }
         cel_wait(200);
 
         /* Step 2: TCP Socket */
-        cel_mutate(CelsGetCurrentSession(), CEL_NetworkState, NetworkState) {
+        cel_mutate(net) {
             this->status = NET_CONNECTING;
         }
         cel_wait(150);
 
         /* Step 3: Server Handshake */
-        cel_mutate(CelsGetCurrentSession(), CEL_NetworkState, NetworkState) {
+        cel_mutate(net) {
             this->status = NET_HANDSHAKE;
         }
         cel_wait(250);
@@ -128,7 +128,7 @@ CEL_Task(NetworkConnectTask, const char*, server, int, port) {
         /* Step 4: Steady-State Polling */
         while (1) {
             cel_wait(100);
-            cel_mutate(CelsGetCurrentSession(), CEL_NetworkState, NetworkState) {
+            cel_mutate(net) {
                 this->packetsReceived++;
             }
         }
@@ -146,6 +146,14 @@ CELS provides a rich suite of control operators and query macros:
 - **`cel_wait(ms)`**: Suspends the fiber until monotonic time advances by `ms` milliseconds. Other composables and frame updates continue running smoothly at 60+ FPS.
 - **`cel_yield()`**: Suspends the fiber until the very next engine frame tick.
 - **`cel_cancel()`**: Aborts execution from within the task and jumps directly into the `cancel { ... }` block.
+- **`cel_wait_for(Type, outPtr)`**: Suspends fiber execution until a child UI event of type `Type` bubbles up to this session. Automatically extracts payload into `*outPtr`.
+- **`cel_wait_signal(Type, outPtr)`**: Suspends fiber execution until an external or inter-session signal of type `Type` arrives on this session.
+- **`cel_wait_broadcast(Type, outPtr)`**: Suspends fiber execution until a global engine broadcast of type `Type` is published.
+- **`cel_wait_for_timeout(Type, outPtr, timeoutMs)`**: Suspends fiber execution until an event of `Type` arrives or `timeoutMs` expires. Returns `true` if event received, `false` on timeout.
+
+> [!TIP]
+> For a full walkthrough and architecture deep-dive of the three messaging channels and fiber waiting, see [08. Events, Signals & Broadcasts](08-events-signals-broadcasts.md).
+
 
 ### Outside the Task (UI & Callbacks)
 | Query / Command | Description | Example Use Case |

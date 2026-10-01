@@ -127,19 +127,28 @@ CEL_Evaluation(WindowEval) {
 }
 ```
 
-#### Mutating From Host Loop: `cel_mutate(session, Type)`
-From the host loop without needing an instance pointer or manual ID:
-```c
-cel_mutate(&engine.session, WindowState) {
-    this->showBadge = !this->showBadge;
-}
-```
+#### Cross-Session & Host Communication: Signals, Not Multi-Session Mutate
+> [!IMPORTANT]
+> **The Actor Model Principle**: Sessions **only mutate their own state** via `cel_mutate(ptr)`.
+> The host loop or external sessions must **never directly mutate** another session's state. To request a state change from the outside, dispatch a targeted signal via `cel_signal(targetSession, SignalType, ...)`. The target session handles the signal in its composition via `cel_connect()` and mutates its own state locally:
+> ```c
+> /* Host dispatch */
+> cel_signal(cel_get_session(&engine, "main"), WindowActionSignal, { .action = WINDOW_ACTION_CLOSE });
+> 
+> /* Session composition handler */
+> cel_connect(WindowActionSignal, sig) {
+>     cel_mutate(win) {
+>         this->isOpen = false;
+>     }
+> }
+> ```
 
-#### Dynamic Keyed State: `cel_remember_state_keyed(id, Type, ...)`
-When multiple dynamic entities of the same type exist and require external lookup by ID:
+#### Tier 3 Low-Level Plumbing: `cels_session_mutate`
+For raw test fixtures without composables:
 ```c
-cel_remember_state_keyed(playerId, PlayerState, { .health = 100 });
-cel_mutate_keyed(&engine.session, playerId, PlayerState) { this->health -= 10; }
+cels_session_mutate(&session, CEL_ID("FixtureState"), FixtureState) {
+    this->value = 42;
+}
 ```
 
 > [!IMPORTANT]
@@ -290,13 +299,12 @@ CEL_Composable(TextureViewer) {
 | `CEL_State(Name) { ... }` | Declares a reactive state struct | Header file (`.h`) |
 | `cel_state(Type, [init])` | Allocates hoisted reactive state instance (Zero string IDs) | Parent composable / composition |
 | `cel_watch(instancePtr)` | Subscribes to hoisted state instance | Child composable |
-| `cel_mutate(instancePtr) { this->... }` | Mutates hoisted state instance directly | Host tick, input callback, task |
+| `cel_mutate(instancePtr) { this->... }` | Mutates hoisted state instance directly (Sessions only mutate own state) | Host tick, input callback, task |
 | `cel_remember_state(Type, init)` | Registers/retrieves double-buffered state by Type | Inside `CEL_Composition` or root composable |
 | `cel_remember_state_keyed(id, Type, init)` | Registers/retrieves double-buffered state by ID | Inside `CEL_Composition` or root composable |
 | `cel_get_state(Type)` | Reads state without subscribing (ambient session) | Inside `CEL_Evaluation` predicates |
 | `cel_get_state(session, Type)` | Reads state without subscribing (explicit session) | Host checks, diagnostics |
-| `cel_mutate(session, Type) { this->... }` | Stages a Type-based state modification | Host event handler, input callback, tick loop |
-| `cel_mutate_keyed(session, id, Type) { this->... }` | Stages a keyed state modification | Entity handlers, network dispatcher |
+| `cels_session_mutate(session, id, Type)` | Tier 3 Low-Level Plumbing: Stages mutation directly for raw test fixtures | Test fixtures, engine internals |
 | `cel_remember(Type, init)` | Persistent local slot variable | Inside any `CEL_Composable` |
 | `CEL_Lifecycle(Name, data) { mount {...} unmount {...} }` | Defines mount/unmount resource handlers | Header or source file |
 | `cel_lifecycle(Name, data_ptr)` | Binds lifecycle handler to current composable | Inside `CEL_Composable` |

@@ -172,24 +172,48 @@ CEL_Evaluation(WindowEval) {
 }
 ```
 
-### Mutating From Host Loop: `cel_mutate(session, Type)`
-From the host tick loop outside the DLL, address the state cell directly by its Type:
+### Cross-Session Communication: Signals instead of Multi-Session Mutate
+
+> [!IMPORTANT]
+> **The Actor Model Principle**: Sessions **only mutate their own state** (`cel_mutate(ptr)`).
+> External callers (the host loop, other sessions, or background threads) must **never directly mutate** another session's state. Instead, send a targeted discrete signal via `cel_signal(session, SignalType, ...)`. The target session handles the signal via `cel_connect()` and mutates its own state locally:
+
 ```c
-cel_mutate(&engine.session, WindowState) {
-    this->isOpen = false;
+/* 1. Define discrete signal payload */
+typedef struct WindowActionSignal {
+    int action;
+} WindowActionSignal;
+
+/* 2. From host loop: send signal to session */
+CelsSession *session = cel_get_session(&engine, "main");
+cel_signal(session, WindowActionSignal, { .action = WINDOW_ACTION_CLOSE });
+
+/* 3. Inside session composition: connect to signal and mutate local state */
+CEL_Composition(WindowComposition) {
+    WindowState *win = cel_remember_state(WindowState, { .isOpen = true });
+
+    cel_connect(WindowActionSignal, sig) {
+        if (sig->action == WINDOW_ACTION_CLOSE) {
+            cel_mutate(win) {
+                this->isOpen = false;
+            }
+        }
+    }
+
+    WindowContent(win);
 }
 ```
 
-### Dynamic Keyed State: `cel_remember_state_keyed(id, Type, ...)`
-When you have **multiple dynamic instances** of the same struct type that external systems need to address by ID (e.g. entity network sync):
-```c
-uint64_t player101 = CEL_ID("player_101");
-PlayerState *p = cel_remember_state_keyed(player101, PlayerState, { .health = 100 });
+This preserves strict actor encapsulation, thread safety across concurrent sessions, and ensures the target session can validate, filter, and transition its state safely.
 
-cel_mutate_keyed(&engine.session, player101, PlayerState) {
-    this->health -= 25;
+### Tier 3 Internal Plumbing: `cels_session_mutate`
+For raw test fixtures or internal low-level engine harnesses operating without composables, CELS provides `cels_session_mutate`:
+```c
+cels_session_mutate(&session, CEL_ID("FixtureState"), FixtureState) {
+    this->testVal = 42;
 }
 ```
+In standard application code, always use hoisted `cel_mutate(ptr)` and signals.
 
 
 ---

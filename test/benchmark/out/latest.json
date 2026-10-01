@@ -1,102 +1,39 @@
 {
   "cels_version": {
     "string": "0.3.0",
-    "code": 196608,
+    "code": 262144,
     "major": 0,
-    "minor": 3,
+    "minor": 4,
     "patch": 0,
     "build": 0
   },
   "metadata": {
-    "timestamp": 1790757594,
-    "iso_date": "2026-09-30T08:39:54Z",
+    "timestamp": 1790815379,
+    "iso_date": "2026-10-01T00:42:59Z",
     "os": "Windows",
     "compiler": "GCC 15.2.0",
     "arch": "x86_64"
   },
   "benchmarks": [
     {
-      "name": "MultiSession_Scale",
-      "description": "Mount & recompose across 25 concurrent independent sessions",
-      "sessions": 25,
-      "iterations": 1000,
-      "total_time_ms": 1.288,
-      "ops_per_sec": 776578.4,
-      "latency_us": {
-        "min": 1.10,
-        "mean": 1.27,
-        "p50": 1.20,
-        "p90": 1.30,
-        "p95": 1.30,
-        "p99": 2.00,
-        "max": 7.70
-      },
-      "memory": {
-        "active_groups_peak": 22,
-        "data_arena_peak_bytes": 112
-      }
-    },
-    {
-      "name": "Lifecycle_AttachKillChurn",
-      "description": "Continuous attach, observer allocation, and cel_destroy() pruning",
+      "name": "Test_Workload",
+      "description": "Test description",
       "sessions": 1,
-      "iterations": 2000,
-      "total_time_ms": 0.141,
-      "ops_per_sec": 28388928.3,
+      "iterations": 100,
+      "total_time_ms": 1.250,
+      "ops_per_sec": 80000.0,
       "latency_us": {
-        "min": 0.00,
-        "mean": 0.05,
-        "p50": 0.10,
-        "p90": 0.10,
-        "p95": 0.10,
-        "p99": 0.10,
-        "max": 0.20
-      },
-      "memory": {
-        "active_groups_peak": 3,
-        "data_arena_peak_bytes": 32
-      }
-    },
-    {
-      "name": "LargeTree_DeepWideHierarchy",
-      "description": "Deep & wide composable tree with slot memories and reactive watchers",
-      "sessions": 1,
-      "iterations": 1000,
-      "total_time_ms": 2.097,
-      "ops_per_sec": 476826.2,
-      "latency_us": {
-        "min": 1.70,
-        "mean": 2.07,
-        "p50": 2.20,
-        "p90": 2.30,
-        "p95": 2.40,
-        "p99": 3.20,
-        "max": 7.80
-      },
-      "memory": {
-        "active_groups_peak": 25,
-        "data_arena_peak_bytes": 144
-      }
-    },
-    {
-      "name": "SteadyState_QuietSkipO1",
-      "description": "Unmutated steady-state recompose check with O(1) subtree skipping",
-      "sessions": 1,
-      "iterations": 5000,
-      "total_time_ms": 0.213,
-      "ops_per_sec": 23485204.3,
-      "latency_us": {
-        "min": 0.00,
+        "min": 0.01,
         "mean": 0.02,
-        "p50": 0.00,
-        "p90": 0.10,
-        "p95": 0.10,
-        "p99": 0.10,
-        "max": 0.20
+        "p50": 0.02,
+        "p90": 0.03,
+        "p95": 0.04,
+        "p99": 0.05,
+        "max": 0.10
       },
       "memory": {
-        "active_groups_peak": 22,
-        "data_arena_peak_bytes": 112
+        "active_groups_peak": 10,
+        "data_arena_peak_bytes": 128
       }
     }
   ]

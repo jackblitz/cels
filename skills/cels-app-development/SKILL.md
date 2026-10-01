@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility: ANSI C99, CMake 3.20+, GCC/Clang/MSVC
 metadata:
   author: CELS Authors
-  version: "0.3.0"
+  version: "0.4.0"
   last-updated: '2026-09-30'
   category: application-development
   keywords:
@@ -144,18 +144,27 @@ The host executable initializes the `CelsEngine`, runs the tick loop, forwards p
     #define SleepMs(ms) usleep((ms) * 1000)
 #endif
 
+/* Approach A: Standard Canonical Host (Recommended) */
+#include "host.h"
+
 int main(int argc, char **argv)
+{
+    return CelsRunHost(argc, argv);
+}
+
+/* Approach B: Custom Host Engine Loop */
+int custom_host_main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
 
     /*
-     * 1. Initialize engine with workload capacity profile:
+     * 1. Initialize engine with workload capacity profile and app target:
      * - CELS_PROFILE_1K: 128 KiB cache-aligned slab, up to 1,024 composables
      * - CELS_PROFILE_512: 64 KiB L1 cache-resident slab, up to 512 composables
      */
     CelsEngine engine;
-    if (CelsEngineInitWithProfile(&engine, NULL, CELS_PROFILE_1K) != CELS_OK) {
+    if (CelsEngineInitWithProfile(&engine, CELS_APP_TARGET, CELS_PROFILE_1K) != CELS_OK) {
         fprintf(stderr, "[Host] Failed to initialize engine\n");
         return 1;
     }
@@ -170,10 +179,8 @@ int main(int argc, char **argv)
         /* Recompose all active sessions */
         CelsEngineRecompose(&engine);
 
-        /* Example: Mutate state based on events / input */
-        // cel_mutate(&engine.session, WindowState) {
-        //     this->someField = newValue;
-        // }
+        /* Example: Send targeted signal based on input / events */
+        // cel_signal(cel_get_session(&engine, "main"), WindowActionSignal, { .action = WINDOW_ACTION_TOGGLE });
 
         SleepMs(16); /* ~60 FPS */
     }
@@ -220,8 +227,8 @@ cels_add_application(
 ```
 
 In CLion and IDEs, two standard run configurations are provided for each app:
-- **`**_host`**: Launches the main engine executable (`cel_host.exe`, `cel_task_host.exe`).
-- **`**_dll`**: Recompiles the dynamic application library (`cel_dll.dll`, `cel_task_dll.dll`) and displays hot-reload confirmation with exit code 0.
+- **`**_host`**: Launches the main engine executable (`cel_host.exe`, `cel_task_host.exe`, `cel_transition_host.exe`, `cel_event_host.exe`).
+- **`**_dll`**: Recompiles the dynamic application library (`cel_dll.dll`, `cel_task_dll.dll`, `cel_transition_dll.dll`, `cel_event_dll.dll`) and displays hot-reload confirmation with exit code 0.
 
 ---
 

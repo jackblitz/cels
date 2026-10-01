@@ -156,7 +156,7 @@ void *CelsStateMutate(CelsSession *session, CEL_Id id, size_t size)
 
     // Enforce DSL rule: cel_mutate cannot be called during composable/composition evaluation,
     // but IS permitted within CEL_Task coroutines, lifecycle hooks, event handlers, and simulation loops.
-    assert((!session->isRecomposing || session->isExecutingTask) &&
+    assert((!session->isRecomposing || session->isExecutingTask || session->isHandlingEvent) &&
            "cel_mutate cannot be called inside a Composable or Composition body. Perform mutations in event callbacks, input handlers, simulation loops, or CEL_Task coroutines.");
 
     CelsStateCell *cell = CelsStateRegistryFindCell(&session->stateRegistry, id);

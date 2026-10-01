@@ -11,7 +11,7 @@
 #include <stdint.h>
 
 #define CELS_VERSION_MAJOR 0
-#define CELS_VERSION_MINOR 3
+#define CELS_VERSION_MINOR 4
 #define CELS_VERSION_PATCH 0
 #define CELS_VERSION_BUILD 0
 

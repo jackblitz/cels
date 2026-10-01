@@ -115,6 +115,9 @@ void CelsTaskStep(CelsSession *session, CelsTaskState *state, uint64_t key, Cels
     if (CelsTaskShouldWait(session, state, key)) {
         return;
     }
+    if (CelsTaskEventShouldWait(session, state, key)) {
+        return;
+    }
 
     CelsFiberInitThread();
     if (state->taskFiber == NULL) {

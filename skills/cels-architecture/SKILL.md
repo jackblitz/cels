@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility: ANSI C99, CMake 3.20+, GCC/Clang/MSVC
 metadata:
   author: CELS Authors
-  version: "0.3.0"
+  version: "0.4.0"
   last-updated: '2026-09-30'
   category: architecture
   keywords:
@@ -87,7 +87,7 @@ CELS is a general-purpose reactive composition engine used not only for graphica
 ```c
 /* 1. Host Engine Initialization with Profile */
 CelsEngine engine;
-CelsEngineInitWithProfile(&engine, NULL, CELS_PROFILE_1K);
+CelsEngineInitWithProfile(&engine, CELS_APP_TARGET, CELS_PROFILE_1K);
 
 /* 2. Direct Session Initialization with Profile */
 CelsSession session;
@@ -299,6 +299,24 @@ CEL_Composable(Toolbar, const WindowState*, win) {
 }
 ```
 
+### Pattern 4: Cross-Session Actor Model (Signals vs Mutations)
+
+```c
+// WRONG: Mutating another session's state directly across session or thread boundaries
+// cel_mutate(&otherSession, State) // Forbidden! Violates Actor boundary and thread safety.
+
+// CORRECT: Send a targeted signal and let the target session mutate its own state locally
+CelsSession *hudSession = cel_get_session(&engine, "hud");
+cel_signal(hudSession, HealthSignal, { .delta = -25.0f });
+
+// Inside hudSession's composition:
+cel_connect(HealthSignal, sig) {
+    cel_mutate(gauge) {
+        this->currentHealth += sig->delta;
+    }
+}
+```
+
 ### Summary Cheat Sheet
 
 | Requirement | Entity Type | API Definition | Example |
@@ -308,3 +326,7 @@ CEL_Composable(Toolbar, const WindowState*, win) {
 | Dedicated Real-time Thread | **Session** | `CelsSession* session` | Audio thread session |
 | Persistent Local Value | **Slot Value** | `cel_remember(Type, init)` | `uint32_t *frame = cel_remember(uint32_t, 0)` |
 | Scoped Reactive Model | **Hoisted State** | `cel_state(Type, { ... })` | `WindowState *win = cel_state(...)` |
+| Local Tree Event | **Discrete Event** | `cel_event(Type, ...)` / `cel_listen(Type, ev)` | `cel_event(ClickEvent, { .id = 1 })` |
+| Cross-Session Signal | **Directed Signal** | `cel_signal(session, Type, ...)` / `cel_connect(Type, sig)` | `cel_signal(hudSession, DamageSignal, { .dmg = 10 })` |
+| Engine-Wide Broadcast | **Global Bus** | `cel_broadcast(Type, ...)` / `cel_bind(Type, bcast)` | `cel_broadcast(SoundBroadcast, { .sfx = "hit.wav" })` |
+| Fiber Task Wait | **Async Coroutine Wait** | `cel_wait_for` / `cel_wait_for_timeout` | `cel_wait_for(ClickEvent, &ev)` |

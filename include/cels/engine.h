@@ -41,6 +41,7 @@
 #include <stdint.h>
 
 #include "cels/runtime/session.h"
+#include "cels/runtime/thread.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -94,9 +95,23 @@ typedef struct CelsModuleBinding {
 /* Engine Instance (CelsEngine)                                              */
 /* ========================================================================= */
 
+#ifndef CELS_MAX_SECONDARY_SESSIONS
+#define CELS_MAX_SECONDARY_SESSIONS 7u
+#endif
+
+/**
+ * Record tracking a named secondary session managed by CelsEngine.
+ */
+typedef struct CelsEngineSessionEntry {
+    char         name[32];
+    uint64_t     nameHash;
+    CelsSession *session;
+    bool         isUsed;
+} CelsEngineSessionEntry;
+
 /**
  * Engine runtime context residing in the executable (.exe).
- * Owns system memory modules and the primary reactive session.
+ * Owns system memory modules, the primary reactive session, and supervised secondary sessions.
  */
 struct CelsEngine {
     uint32_t                      magic;        /**< CELS_ENGINE_MAGIC validation tag */
@@ -104,10 +119,38 @@ struct CelsEngine {
     struct CelsAppModule         *appModule;    /**< Dynamic application handle in Hot-Reload mode */
     CelsModuleBinding             modules[CELS_MAX_MODULES]; /**< Subsystem module bindings */
     uint32_t                      moduleCount;  /**< Number of active module bindings */
-    CelsSession                   session;      /**< Primary reactive session */
+    CelsSession                   session;      /**< Primary ("main") reactive session */
+    CelsEngineSessionEntry        secondarySessions[CELS_MAX_SECONDARY_SESSIONS]; /**< Supervised secondary sessions */
+    uint32_t                      secondarySessionCount; /**< Active secondary session count */
+    /* Global broadcast ring buffer */
+    CelsEventRecord               broadcastQueue[CELS_EVENT_QUEUE_CAPACITY];
+    uint32_t                      broadcastCount;
+    CelsMutex                     broadcastMutex;
     bool                          isStarted;    /**< True if engine and app are active */
     bool                          shouldQuit;   /**< True if exit has been requested */
 };
+
+/* ========================================================================= */
+/* Engine Broadcast Bus API                                                  */
+/* ========================================================================= */
+
+/**
+ * Thread-safe broadcast staging into the host engine bus.
+ *
+ * @param engine   Target host engine. Non-NULL.
+ * @param typeHash 64-bit type name hash.
+ * @param payload  Pointer to payload data.
+ * @param size     Payload size in bytes.
+ * @return True if staged successfully.
+ */
+bool CelsEngineBroadcast(CelsEngine *engine, uint64_t typeHash, const void *payload, size_t size);
+
+/**
+ * Drains all staged broadcasts and delivers them into the engine's primary session.
+ *
+ * @param engine Target host engine. Non-NULL.
+ */
+void CelsEngineDrainBroadcasts(CelsEngine *engine);
 
 /* ========================================================================= */
 /* Engine Lifecycle API                                                      */
@@ -161,6 +204,25 @@ void CelsEngineEnd(CelsEngine *engine);
  * @return CELS_OK on success, or CelsResult error code.
  */
 CelsResult CelsEngineRecompose(CelsEngine *engine);
+
+/**
+ * Creates and registers a named secondary session supervised by the engine.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param name    Unique session name (e.g. "audio", "physics", "hud"). Non-NULL.
+ * @param profile Workload capacity profile (e.g. CELS_PROFILE_256).
+ * @return Pointer to initialized CelsSession, or NULL on error / capacity reached.
+ */
+CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsSessionProfile profile);
+
+/**
+ * Retrieves a session supervised by the engine by name.
+ *
+ * @param engine Target host engine. Non-NULL.
+ * @param name   Session name. If NULL, "main", or "root", returns the primary session.
+ * @return Pointer to CelsSession, or NULL if not found.
+ */
+CelsSession *CelsEngineGetSession(CelsEngine *engine, const char *name);
 
 /**
  * Initializes the engine with explicit session configuration and loads the application module.

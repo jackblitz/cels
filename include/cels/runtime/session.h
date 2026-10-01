@@ -28,6 +28,7 @@
 #include "cels/runtime/slot_table.h"
 #include "cels/runtime/state.h"
 #include "cels/runtime/transaction.h"
+#include "cels/runtime/event.h"
 
 #ifndef CELS_MAX_DEPTH
 #define CELS_MAX_DEPTH 64u
@@ -205,6 +206,7 @@ struct CelsSession {
     bool hasComposedOnce;
     bool isRecomposing;
     bool isExecutingTask;
+    bool isHandlingEvent;
     bool isHotReloadPending;
     bool isHeapAllocated;
 
@@ -270,6 +272,9 @@ struct CelsSession {
     /* Double-buffered transaction batches (for lockless cross-thread bridge) */
     CelsTransactionBatch transactionBatches[2];
     uint32_t activeBatchIndex;
+
+    /* Discrete event queue (tree events, targeted signals, and global broadcasts) */
+    CelsEventQueue eventQueue;
 
     /* Generic user context pointer */
     void *userData;
@@ -624,6 +629,18 @@ void *CelsGetState(CelsSession *session, uint64_t key);
 void CelsSessionInvalidateKey(CelsSession *session, uint64_t key);
 
 /**
+ * Queues a 64-bit group key for immediate intra-frame recomposition if currently recomposing,
+ * or on the next pass if outside recomposition.
+ *
+ * Used for synchronous intra-frame event bubbling (cel_event) to deliver events to ancestors
+ * without a 1-frame latency.
+ *
+ * @param session Active session instance. Can be NULL (falls back to ambient session).
+ * @param key     Unique 64-bit group key to invalidate.
+ */
+void CelsSessionInvalidateKeyImmediate(CelsSession *session, uint64_t key);
+
+/**
  * Returns the 64-bit group key of the currently executing composable.
  *
  * @param session Active session instance. Can be NULL (falls back to ambient session).
@@ -788,6 +805,15 @@ static inline bool CelsIsFreshMount(CelsSession *s)
     }
     return (CelsGetGroup(s, s->currentGroupIndex)->flags
             & CELS_FLAG_FRESH_MOUNT) != 0;
+}
+
+static inline uint64_t CelsGetCurrentGroupKey(CelsSession *s)
+{
+    if (s == NULL || s->currentDepth == 0) {
+        return 0;
+    }
+    const CelsSlotGroup *g = CelsGetGroup(s, s->currentGroupIndex);
+    return g ? g->key : 0;
 }
 
 static inline size_t CelsGetSlabSize(const CelsSession *s)

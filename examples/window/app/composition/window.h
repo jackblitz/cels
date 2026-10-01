@@ -15,6 +15,15 @@ CEL_State(WindowState) {
     bool     showBadge;
 };
 
+typedef enum WindowAction {
+    WINDOW_ACTION_TOGGLE_BADGE,
+    WINDOW_ACTION_CLOSE
+} WindowAction;
+
+typedef struct WindowActionSignal {
+    WindowAction action;
+} WindowActionSignal;
+
 /**
  * Evaluates whether the window composition should remain active.
  * Returning false triggers composition teardown.

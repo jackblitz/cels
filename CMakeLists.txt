@@ -45,18 +45,25 @@ if(WIN32 AND CMAKE_C_COMPILER_ID MATCHES "GNU")
     add_link_options(-static-libgcc)
 endif()
 
-# Core CELS library (C99 modular implementation)
-add_library(cels_core STATIC
+# Core CELS library sources
+set(CELS_CORE_SOURCES
     src/runtime/slot_table.c
     src/runtime/session.c
     src/runtime/state.c
     src/runtime/task.c
     src/runtime/transition.c
+    src/runtime/event.c
     src/host/engine.c
     src/host/module.c
     src/platform/fiber.c
     src/platform/log.c
 )
+if(WIN32 AND CMAKE_C_COMPILER_ID MATCHES "GNU")
+    list(APPEND CELS_CORE_SOURCES src/platform/win32_compat.c)
+endif()
+
+# Core CELS library (C99 modular implementation)
+add_library(cels_core STATIC ${CELS_CORE_SOURCES})
 target_include_directories(cels_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -68,6 +75,21 @@ if(UNIX)
     else()
         target_link_libraries(cels_core PUBLIC pthread)
     endif()
+endif()
+
+# Link specification to statically embed libgcc and libwinpthread on MinGW Windows
+if(WIN32 AND CMAKE_C_COMPILER_ID MATCHES "GNU")
+    set(CELS_CORE_LINK
+        -Wl,--whole-archive
+        cels_core
+        -Wl,--no-whole-archive
+        -static-libgcc
+        -Wl,-Bstatic,--whole-archive
+        winpthread
+        -Wl,--no-whole-archive,-Bdynamic
+    )
+else()
+    set(CELS_CORE_LINK cels_core)
 endif()
 
 # Modern CMake target aliases
@@ -100,8 +122,36 @@ set_target_properties(cels_hot_reload_notifier PROPERTIES
 
 # =============================================================================
 # Canonical Example Applications (**_host + **_dll) via cels_add_application
-# =============================================================================
 if(CELS_BUILD_EXAMPLES)
+    # PDCurses static library for terminal TUI
+    file(GLOB PDCURSES_SRCS
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdcurses/pdcurses/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdcurses/wincon/*.c
+    )
+    add_library(pdcurses STATIC ${PDCURSES_SRCS})
+    target_compile_options(pdcurses PRIVATE -w)
+    target_include_directories(pdcurses PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdcurses
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdcurses/wincon
+    )
+    target_compile_definitions(pdcurses PUBLIC PDC_WIDE)
+    set_target_properties(pdcurses PROPERTIES
+        C_STANDARD 99
+        ARCHIVE_OUTPUT_DIRECTORY "${CELS_OUTPUT_LIBS_DIR}"
+    )
+
+    # Common terminal TUI and host runner library for all examples
+    add_library(cels_example_common STATIC
+        examples/common/terminal.c
+        examples/common/host.c
+    )
+    target_compile_definitions(cels_example_common PRIVATE CELS_NO_MAIN)
+    target_include_directories(cels_example_common PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/examples/common
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(cels_example_common PUBLIC cels_core pdcurses)
+
     # 1. Window Example (cel_host + cel_dll)
     cels_add_application(
         HOST cel_host
@@ -113,8 +163,11 @@ if(CELS_BUILD_EXAMPLES)
             examples/window/app/composition/window.c
             examples/window/app/composition/window_content.c
         INCLUDES
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/common
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/window/app
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/window/app/composition
+        LIBRARIES
+            cels_example_common
     )
 
     # 2. Task / Network Example (cel_task_host + cel_task_dll)
@@ -126,7 +179,10 @@ if(CELS_BUILD_EXAMPLES)
         APP_SOURCES
             examples/task/app/app.c
         INCLUDES
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/common
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/task/app
+        LIBRARIES
+            cels_example_common
     )
 
     # 3. Temporal Transition Example (cel_transition_host + cel_transition_dll)
@@ -138,7 +194,25 @@ if(CELS_BUILD_EXAMPLES)
         APP_SOURCES
             examples/transition/app/app.c
         INCLUDES
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/common
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/transition/app
+        LIBRARIES
+            cels_example_common
+    )
+
+    # 4. Events, Signals & Broadcasts Example (cel_event_host + cel_event_dll)
+    cels_add_application(
+        HOST cel_event_host
+        DLL cel_event_dll
+        HOST_SOURCES
+            examples/event/host.c
+        APP_SOURCES
+            examples/event/app/app.c
+        INCLUDES
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/common
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/event/app
+        LIBRARIES
+            cels_example_common
     )
 endif()
 
@@ -157,7 +231,7 @@ if(CELS_BUILD_TESTS)
     target_include_directories(test_fixture_app PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/test/hot_reload
     )
-    target_link_libraries(test_fixture_app PRIVATE cels_core)
+    target_link_libraries(test_fixture_app PRIVATE ${CELS_CORE_LINK})
     set_target_properties(test_fixture_app PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
     add_executable(test_cli
@@ -172,18 +246,13 @@ if(CELS_BUILD_TESTS)
         test/task/test_task.c
         test/transaction/test_transaction.c
         test/transition/test_transition.c
+        test/event/test_event.c
     )
     target_include_directories(test_cli PRIVATE
         ${TEST_COMMON_DIR}
         ${TEST_COMMON_DIR}/benchmark
     )
-    target_link_libraries(test_cli PRIVATE cels_core)
-    if(WIN32 AND CMAKE_C_COMPILER_ID MATCHES "GNU")
-        get_filename_component(MINGW_BIN_DIR "${CMAKE_C_COMPILER}" DIRECTORY)
-        if(EXISTS "${MINGW_BIN_DIR}/libwinpthread-1.dll")
-            file(COPY "${MINGW_BIN_DIR}/libwinpthread-1.dll" DESTINATION "${CELS_OUTPUT_DIR}")
-        endif()
-    endif()
+    target_link_libraries(test_cli PRIVATE ${CELS_CORE_LINK})
     set_target_properties(test_cli PROPERTIES OUTPUT_NAME test_cli)
     add_dependencies(test_cli test_fixture_app)
     add_test(NAME test_cli COMMAND test_cli)
@@ -199,7 +268,7 @@ if(CELS_BUILD_BENCHMARKS)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/test/benchmark
     )
-    target_link_libraries(benchmark PRIVATE cels_core)
+    target_link_libraries(benchmark PRIVATE ${CELS_CORE_LINK})
     set_target_properties(benchmark PROPERTIES OUTPUT_NAME benchmark)
 endif()
 

@@ -1,5 +1,6 @@
 #include "window.h"
 #include "window_content.h"
+#include "common_events.h"
 #include <stdio.h>
 
 CEL_Evaluation(WindowEval) {
@@ -16,6 +17,27 @@ CEL_Composition(WindowComposition) {
         .showBadge    = true
     });
 
+    /* 1. React to common keyboard signals from host */
+    cel_connect(CelsKeySignal, sig) {
+        if (sig->key == 'b' || sig->key == 'B') {
+            cel_mutate(win) {
+                this->showBadge = !this->showBadge;
+            }
+        }
+    }
+
+    /* 2. React to external window command signals */
+    cel_connect(WindowActionSignal, sig) {
+        if (sig->action == WINDOW_ACTION_TOGGLE_BADGE) {
+            cel_mutate(win) {
+                this->showBadge = !this->showBadge;
+            }
+        } else if (sig->action == WINDOW_ACTION_CLOSE) {
+            cel_mutate(win) {
+                this->isOpen = false;
+            }
+        }
+    }
+
     WindowContent(win);
 }
-

@@ -102,7 +102,7 @@ static void TestHotReloadStateRetention(void)
     assert(state->value == 10);
 
     /* Mutate state before hot reload */
-    cel_mutate(&session, HotState) {
+    cels_session_mutate(&session, HotState) {
         this->value = 999;
         this->revision = 5;
     }

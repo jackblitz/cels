@@ -62,6 +62,7 @@
 #include "cels/runtime/task.h"
 #include "cels/runtime/transaction.h"
 #include "cels/runtime/transition.h"
+#include "cels/runtime/event.h"
 #include "cels/runtime/version.h"
 
 #ifdef __cplusplus
@@ -885,9 +886,6 @@ extern "C" {
 /* ========================================================================= */
 /* State Mutation (cel_mutate)                                               */
 /* Hoisted syntax: cel_mutate(ptr) { this->field = val; }                    */
-/* Session type syntax: cel_mutate(session, Type) { this->field = val; }     */
-/* Keyed syntax: cel_mutate(session, id, Type) { this->field = val; }        */
-/* Value syntax: cel_mutate(session, id, Type, modifiedVal)                 */
 /* ========================================================================= */
 
 #if defined(__GNUC__) || defined(__clang__) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L)
@@ -898,105 +896,62 @@ extern "C" {
     #define _CEL_MUTATE_TYPE(ptr) void
 #endif
 
-#define _CEL_MUTATE_1(ptr) \
+/**
+ * @def cel_mutate
+ * @brief Modifies a reactive state instance and invalidates all observing composables.
+ *
+ * What it does:
+ * Accesses the double-buffered back-buffer of the specified state instance pointer
+ * (allocated via cel_state or cel_remember_state) and marks all composable groups
+ * that observed this cell via cel_watch() as dirty in the owning session's invalidation queue.
+ *
+ * Architectural Rule (Actor Model):
+ * Sessions only mutate their own state via cel_mutate(ptr).
+ * To communicate changes from outside the session (e.g. host loop, other sessions,
+ * background worker threads), send a discrete signal via cel_signal(&targetSession, SignalType, ...),
+ * and let the target session handle the signal and mutate its own state internally via cel_connect().
+ *
+ * Scoped block mutation (`this` pointer available inside block):
+ * @code
+ *     cel_mutate(win) {
+ *         this->isOpen = false;
+ *     }
+ * @endcode
+ */
+#define cel_mutate(ptr) \
     for (_CEL_MUTATE_TYPE(ptr) *this = (_CEL_MUTATE_TYPE(ptr)*)CelsMutateStateInstance((void*)(ptr)); \
          this != NULL; \
          this = NULL)
 
-#define _CEL_MUTATE_2(session, Type) \
+/* ========================================================================= */
+/* Tier 3 Low-Level / Internal Plumbing: Direct Session Mutation             */
+/* Used for raw test fixtures and engine internals.                          */
+/* ========================================================================= */
+
+#define _CELS_SESSION_MUTATE_2(session, Type) \
     for (Type *this = (Type*)CelsStateMutate((session), CelsHashKey(#Type), sizeof(Type)); \
          this != NULL; \
          this = NULL)
 
-#define _CEL_MUTATE_3(session, id, Type) \
+#define _CELS_SESSION_MUTATE_3(session, id, Type) \
     for (Type *this = (Type*)CelsStateMutate((session), (id), sizeof(Type)); \
          this != NULL; \
          this = NULL)
 
-#define _CEL_MUTATE_4(session, id, Type, val) \
-    do { \
-        Type *_cels_dst = (Type*)CelsStateMutate((session), (id), sizeof(Type)); \
-        if (_cels_dst != NULL) { \
-            *_cels_dst = (val); \
-        } \
-    } while (0)
-
-#define _CEL_GET_MUTATE_MACRO(_1, _2, _3, _4, NAME, ...) NAME
-
-#define cel_mutate(...) \
-    _CEL_GET_MUTATE_MACRO(__VA_ARGS__, _CEL_MUTATE_4, _CEL_MUTATE_3, _CEL_MUTATE_2, _CEL_MUTATE_1)(__VA_ARGS__)
-
-#define cel_mutate_keyed(session, id, Type) \
-    _CEL_MUTATE_3(session, id, Type)
-
-
+#define _CELS_GET_SESSION_MUTATE_MACRO(_1, _2, _3, NAME, ...) NAME
 
 /**
- * @def cel_mutate
- * @brief Modifies a reactive state cell and invalidates all observing composables.
+ * @def cels_session_mutate
+ * @brief Tier 3 Low-Level Plumbing: Mutates a state cell directly by session pointer and key.
  *
- * What it does:
- * Accesses the back-buffer of the specified state cell and marks all composable groups
- * that observed this cell via cel_watch() as dirty in the session invalidation queue.
- *
- * Expected outcome:
- * Commits the modified values into the back buffer. During the next frame sync point,
- * the buffers swap and all invalidated composables automatically recompose with the
- * updated data.
- *
- * Where to use:
- * Call from user interaction handlers, event callbacks, background task completion,
- * or host frame tick logic.
- *
- * Syntax forms:
- * 1. Scoped block mutation (`this` pointer available inside block):
- *    - cel_mutate(id, Type) { this->field = value; }
- *    - cel_mutate(session, id, Type) { this->field = value; }
- * 2. Direct value assignment:
- *    - cel_mutate(session, id, Type, newValue);
- *
- * Examples:
- * @code
- *     // Hoisted state instance mutation:
- *     cel_mutate(win) {
- *         this->isOpen = false;
- *     }
- *
- *     // Block mutation with 'this':
- *     cel_mutate(playerId, PlayerState) {
- *         this->health -= 15;
- *         this->isAlive = (this->health > 0);
- *     }
- *
- *     // Direct value assignment:
- *     cel_mutate(session, counterId, int, currentCount + 1);
- * @endcode
+ * NOTE: For standard application and composable development, use cel_mutate(ptr).
+ * Sessions only mutate their own state. For cross-session or external communication,
+ * use cel_signal(&session, Type, ...).
  */
+#define cels_session_mutate(...) \
+    _CELS_GET_SESSION_MUTATE_MACRO(__VA_ARGS__, _CELS_SESSION_MUTATE_3, _CELS_SESSION_MUTATE_2)(__VA_ARGS__)
 
-/**
- * @def cel_mutate_ptr
- * @brief Retrieves a direct mutable pointer to a state cell and invalidates observers.
- *
- * What it does:
- * Low-level accessor that calls CelsStateMutate() directly, returning a pointer to
- * the cell's mutable buffer and enqueueing all observers for recomposition.
- *
- * Expected outcome:
- * Returns a `Type*` pointer that can be written to directly.
- *
- * Where to use:
- * Use when integrating with third-party serialization, memcpy routines, or custom
- * in-place algorithms where block syntax is awkward.
- *
- * Example:
- * @code
- *     PlayerState *p = cel_mutate_ptr(session, playerId, PlayerState);
- *     if (p) {
- *         memcpy(p->name, newName, sizeof(p->name));
- *     }
- * @endcode
- */
-#define cel_mutate_ptr(session, id, Type) \
+#define cels_state_mutate_ptr(session, id, Type) \
     ((Type*)CelsStateMutate((session), (id), sizeof(Type)))
 
 /* ========================================================================= */
@@ -1024,6 +979,148 @@ extern "C" {
  * @brief Alias for cel_engine_quit(). Signals the host engine to terminate.
  */
 #define cel_quit()        CelsEngineQuit(NULL)
+
+/* ========================================================================= */
+/* Session Creation & Discovery (cel_create_session, cel_get_session)        */
+/* ========================================================================= */
+
+/**
+ * @def cel_create_session
+ * @brief Creates and registers a named secondary session managed by the host engine.
+ *
+ * Example:
+ * @code
+ *     CelsSession *audio = cel_create_session(&engine, "audio", CELS_PROFILE_256);
+ *     cel_attach(audio, AudioDSPComposition);
+ * @endcode
+ */
+#define cel_create_session(engine, name, profile) \
+    CelsEngineCreateSession((engine), (name), (profile))
+
+/**
+ * @def cel_get_session
+ * @brief Retrieves a named session managed by the host engine.
+ *
+ * Passing "main", "root", or NULL retrieves the engine's primary session.
+ *
+ * Example:
+ * @code
+ *     CelsSession *main = cel_get_session(&engine, "main");
+ *     cel_signal(main, WindowActionSignal, { .action = WINDOW_ACTION_CLOSE });
+ * @endcode
+ */
+#define cel_get_session(engine, name) \
+    CelsEngineGetSession((engine), (name))
+
+/* ========================================================================= */
+/* Discrete Events, Signals & Global Broadcasts                             */
+/* ========================================================================= */
+
+/**
+ * @def cel_event
+ * @brief Emits a local event that bubbles up the composable tree to ancestors.
+ *
+ * What it does:
+ * Stages a discrete event record in the active session's event queue and invalidates
+ * any ancestor composable groups currently listening for Type via cel_listen().
+ *
+ * Example:
+ * @code
+ *     cel_event(ButtonClicked, { .buttonId = BTN_CONFIRM });
+ * @endcode
+ */
+#define cel_event(Type, ...) \
+    CelsEventEmit(CelsGetCurrentSession(), CelsHashKey(#Type), (const Type[]){ __VA_ARGS__ }, sizeof(Type))
+
+/**
+ * @def cel_listen
+ * @brief Binds an inline handler loop for local tree events bubbling from descendants.
+ *
+ * What it does:
+ * Registers the calling composable as a listener for Type and iterates over any
+ * unconsumed events of that type emitted in the active tree.
+ *
+ * Example:
+ * @code
+ *     cel_listen(ButtonClicked, ev) {
+ *         printf("Button %d was clicked!\n", ev->buttonId);
+ *     }
+ * @endcode
+ */
+#define cel_listen(Type, var) \
+    for (const Type *var = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_LOCAL); \
+         var != NULL; \
+         var = (const Type*)CelsEventNext(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_LOCAL))
+
+/**
+ * @def cel_signal
+ * @brief Sends a targeted signal directly into another session's inbox.
+ *
+ * What it does:
+ * Stages a discrete signal payload directly in targetSession's event queue and marks
+ * that session for recomposition so its cel_connect() handlers process the signal.
+ *
+ * Example:
+ * @code
+ *     cel_signal(&hudSession, PlayerHealed, { .amount = 25 });
+ * @endcode
+ */
+#define cel_signal(targetSession, Type, ...) \
+    CelsEventSignal((targetSession), CelsHashKey(#Type), (const Type[]){ __VA_ARGS__ }, sizeof(Type))
+
+/**
+ * @def cel_connect
+ * @brief Binds an inline handler loop for targeted signals sent directly to this session.
+ *
+ * What it does:
+ * Iterates over any unconsumed targeted signals of Type received by this session.
+ *
+ * Example:
+ * @code
+ *     cel_connect(PlayerHealed, sig) {
+ *         SpawnFloatingNumbers(sig->amount);
+ *     }
+ * @endcode
+ */
+#define cel_connect(Type, var) \
+    for (const Type *var = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_SIGNAL); \
+         var != NULL; \
+         var = (const Type*)CelsEventNext(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_SIGNAL))
+
+/**
+ * @def cel_broadcast
+ * @brief Publishes a global broadcast across the engine, worker threads, and sessions.
+ *
+ * What it does:
+ * Enqueues a broadcast payload into the engine's thread-safe global queue. The payload
+ * is distributed to all active sessions at frame boundaries and processed by cel_bind().
+ *
+ * Example:
+ * @code
+ *     cel_broadcast(AudioTrigger, { .sound = "click.wav", .gain = 1.0f });
+ * @endcode
+ */
+#define cel_broadcast(Type, ...) \
+    CelsEventBroadcast(CelsGetCurrentSession(), CelsHashKey(#Type), (const Type[]){ __VA_ARGS__ }, sizeof(Type))
+
+/**
+ * @def cel_bind
+ * @brief Binds an inline handler loop for global engine broadcasts.
+ *
+ * What it does:
+ * Iterates over any unconsumed broadcasts of Type delivered to the calling session.
+ *
+ * Example:
+ * @code
+ *     cel_bind(AudioTrigger, bcast) {
+ *         PlaySound(bcast->sound, bcast->gain);
+ *     }
+ * @endcode
+ */
+#define cel_bind(Type, var) \
+    for (const Type *var = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_BROADCAST); \
+         var != NULL; \
+         var = (const Type*)CelsEventNext(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_BROADCAST))
 
 /* ========================================================================= */
 /* Procedural Tasks & Coroutines (CEL_Task)                                  */

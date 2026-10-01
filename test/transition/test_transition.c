@@ -53,7 +53,7 @@ static void TestTransitionStepAndSettle(void)
     assert(s_lastTransitionVal == 0.0f);
 
     // Mutate target reactively to 100.0
-    cel_mutate(&session, TargetState) {
+    cels_session_mutate(&session, TargetState) {
         this->target = 100.0f;
     }
 
@@ -84,7 +84,7 @@ static void TestTransitionRetargetMidFlight(void)
     assert(s_lastTransitionVal == 0.0f);
 
     // Mutate to 100.0
-    cel_mutate(&session, TargetState) {
+    cels_session_mutate(&session, TargetState) {
         this->target = 100.0f;
     }
     CelsSessionRecompose(&session);
@@ -95,7 +95,7 @@ static void TestTransitionRetargetMidFlight(void)
     const float midVal = s_lastTransitionVal;
 
     // Retarget to 500.0 mid-flight
-    cel_mutate(&session, TargetState) {
+    cels_session_mutate(&session, TargetState) {
         this->target = 500.0f;
     }
     CelsSessionRecompose(&session);

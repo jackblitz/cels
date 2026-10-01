@@ -292,7 +292,7 @@ static BenchmarkResult RunBenchMultiSession(size_t sessions, size_t iterations, 
         size_t sIdx = it % sessions;
 
         // Mutate session's local state
-        cel_mutate(&sessionPool[sIdx], CEL_ID("DashboardState"), DashboardState) {
+        cels_session_mutate(&sessionPool[sIdx], CEL_ID("DashboardState"), DashboardState) {
             this->activeTab = (int)(it % 4);
         }
         CelsSessionRecompose(&sessionPool[sIdx]);
@@ -346,7 +346,7 @@ static BenchmarkResult RunBenchLifecycleChurn(size_t iterations, bool showTree) 
         PrintCompositionTree(&session, "Lifecycle Active Goblin (HP = 100)");
 
         printf("  [Lifecycle Trigger] Setting Goblin HP = 0 -> triggers composition pruning...\n");
-        cel_mutate(&session, CEL_ID("EnemyState"), EnemyState) {
+        cels_session_mutate(&session, CEL_ID("EnemyState"), EnemyState) {
             this->hp = 0;
         }
         CelsSessionRecompose(&session);
@@ -359,14 +359,14 @@ static BenchmarkResult RunBenchLifecycleChurn(size_t iterations, bool showTree) 
         uint64_t t0 = BenchGetTimeNs();
 
         // 1. Mount entity
-        cel_mutate(&session, CEL_ID("EnemyState"), EnemyState) {
+        cels_session_mutate(&session, CEL_ID("EnemyState"), EnemyState) {
             this->hp = 100;
             this->isAlive = true;
         }
         CelsSessionRecompose(&session);
 
         // 2. Kill entity via evaluation predicate
-        cel_mutate(&session, CEL_ID("EnemyState"), EnemyState) {
+        cels_session_mutate(&session, CEL_ID("EnemyState"), EnemyState) {
             this->hp = 0;
         }
         CelsSessionRecompose(&session);
@@ -425,7 +425,7 @@ static BenchmarkResult RunBenchLargeTree(size_t iterations, bool showTree) {
         uint64_t t0 = BenchGetTimeNs();
 
         // Mutate middle node
-        cel_mutate(&session, CEL_ID("DashboardState"), DashboardState) {
+        cels_session_mutate(&session, CEL_ID("DashboardState"), DashboardState) {
             this->activeTab = (int)(it % 4);
             this->showSidePanel = ((it % 2) == 0);
         }

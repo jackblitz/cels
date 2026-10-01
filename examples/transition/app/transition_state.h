@@ -13,3 +13,7 @@ CEL_State(PlayerGaugeState) {
     bool  isAlive;
 };
 
+typedef struct HealthActionSignal {
+    float delta;
+} HealthActionSignal;
+

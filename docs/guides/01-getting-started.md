@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
 
     /* 1. Initialize engine (loads application manifest) */
     CelsEngine engine;
-    if (CelsEngineInit(&engine, NULL) != CELS_OK) {
+    if (CelsEngineInit(&engine, CELS_APP_TARGET) != CELS_OK) {
         fprintf(stderr, "[Host] Failed to initialize engine.\n");
         return 1;
     }

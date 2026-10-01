@@ -80,6 +80,20 @@ function(cels_add_application)
         message(FATAL_ERROR "cels_add_application: Neither 'cels::core' nor 'cels_core' target found. Ensure CELS is added before defining applications.")
     endif()
 
+    if(WIN32 AND CMAKE_C_COMPILER_ID MATCHES "GNU")
+        set(CELS_APP_CORE_LINK
+            -Wl,--whole-archive
+            ${CELS_CORE_LIB}
+            -Wl,--no-whole-archive
+            -static-libgcc
+            -Wl,-Bstatic,--whole-archive
+            winpthread
+            -Wl,--no-whole-archive,-Bdynamic
+        )
+    else()
+        set(CELS_APP_CORE_LINK ${CELS_CORE_LIB})
+    endif()
+
     # 2. Determine build mode (HOT_RELOAD vs SINGLE_BINARY)
     set(RESOLVED_MODE "")
 
@@ -135,7 +149,7 @@ function(cels_add_application)
             PREFIX ""
             OUTPUT_NAME "${PARSED_APP}"
         )
-        target_link_libraries(${PARSED_APP} PRIVATE ${CELS_CORE_LIB} ${PARSED_LIBRARIES} ${PARSED_APP_LIBRARIES})
+        target_link_libraries(${PARSED_APP} PRIVATE ${CELS_APP_CORE_LINK} ${PARSED_LIBRARIES} ${PARSED_APP_LIBRARIES})
         if(PARSED_INCLUDES OR PARSED_APP_INCLUDES)
             target_include_directories(${PARSED_APP} PRIVATE ${PARSED_INCLUDES} ${PARSED_APP_INCLUDES})
         endif()
@@ -145,7 +159,7 @@ function(cels_add_application)
 
         # Target 2: Host Engine Executable (.exe)
         add_executable(${PARSED_HOST} ${PARSED_HOST_SOURCES})
-        target_link_libraries(${PARSED_HOST} PRIVATE ${CELS_CORE_LIB} ${PARSED_LIBRARIES} ${PARSED_HOST_LIBRARIES})
+        target_link_libraries(${PARSED_HOST} PRIVATE ${CELS_APP_CORE_LINK} ${PARSED_LIBRARIES} ${PARSED_HOST_LIBRARIES})
         if(PARSED_INCLUDES OR PARSED_HOST_INCLUDES)
             target_include_directories(${PARSED_HOST} PRIVATE ${PARSED_INCLUDES} ${PARSED_HOST_INCLUDES})
         endif()
@@ -177,7 +191,7 @@ function(cels_add_application)
         # Single Monolithic Executable Target
         add_executable(${PARSED_HOST} ${PARSED_HOST_SOURCES} ${PARSED_APP_SOURCES})
         target_link_libraries(${PARSED_HOST} PRIVATE
-            ${CELS_CORE_LIB}
+            ${CELS_APP_CORE_LINK}
             ${PARSED_LIBRARIES}
             ${PARSED_HOST_LIBRARIES}
             ${PARSED_APP_LIBRARIES}
