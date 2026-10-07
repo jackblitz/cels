@@ -9,12 +9,28 @@
 
 #define CELS_ASSERT(cond) assert(cond)
 
+/**
+ * Initializes a session reactive state registry to an empty state.
+ *
+ * Clears cell count and zero-initializes all cell array storage.
+ *
+ * @param registry Target state registry pointer. Non-NULL.
+ */
 void CelsStateRegistryInit(CelsStateRegistry *registry)
 {
     CELS_ASSERT(registry != NULL);
     memset(registry, 0, sizeof(*registry));
 }
 
+/**
+ * Searches the registry for an active reactive state cell matching CEL_Id.
+ *
+ * Performs a linear scan over registered cells, matching on inUse and unique 64-bit ID.
+ *
+ * @param registry Target state registry pointer. Safe if NULL.
+ * @param id       Unique 64-bit state identifier.
+ * @return Pointer to matching CelsStateCell, or NULL if not found.
+ */
 CelsStateCell *CelsStateRegistryFindCell(CelsStateRegistry *registry, CEL_Id id)
 {
     if (registry == NULL || id == 0) {
@@ -28,6 +44,20 @@ CelsStateCell *CelsStateRegistryFindCell(CelsStateRegistry *registry, CEL_Id id)
     return NULL;
 }
 
+/**
+ * Resolves an existing reactive state cell or creates and allocates a new one.
+ *
+ * If cell exists, returns it immediately. Otherwise, allocates front buffer
+ * (preceded by CelsStateHeader) and staging back buffer from the session data slab.
+ * Initializes both buffers with defaultVal (or zeroes), records metadata, and registers
+ * the new cell in session->stateRegistry.
+ *
+ * @param session    Owning session providing slab storage. Non-NULL.
+ * @param id         Unique 64-bit state identifier.
+ * @param size       Size in bytes of user state structure.
+ * @param defaultVal Optional initial state payload buffer. Safe if NULL.
+ * @return Pointer to resolved CelsStateCell, or NULL on capacity/allocation failure.
+ */
 CelsStateCell *CelsStateGetOrCreateCell(CelsSession *session,
                                         CEL_Id id,
                                         size_t size,
@@ -91,6 +121,18 @@ CelsStateCell *CelsStateGetOrCreateCell(CelsSession *session,
     return cell;
 }
 
+/**
+ * Subscribes the active composable group to state ID and returns the published front buffer.
+ *
+ * Locates the state cell by ID, resolves the calling composable group key from session
+ * execution stacks, registers the key in the cell's watcher list, and returns a
+ * read-only pointer to the published front buffer.
+ *
+ * @param session Owning or active session. Safe if NULL (resolves current session).
+ * @param id      Unique 64-bit state identifier.
+ * @param size    Expected size in bytes for schema verification.
+ * @return Read-only pointer into published front buffer, or NULL if cell not found.
+ */
 const void *CelsStateWatch(CelsSession *session, CEL_Id id, size_t size)
 {
     if (session == NULL) {
@@ -131,6 +173,17 @@ const void *CelsStateWatch(CelsSession *session, CEL_Id id, size_t size)
     return cell->frontBuffer;
 }
 
+/**
+ * Reads the published snapshot of a state cell without establishing a dependency subscription.
+ *
+ * Unlike CelsStateWatch, does not register the calling composable as a watcher,
+ * avoiding recomposition triggers when the state is mutated.
+ *
+ * @param session Owning or active session. Safe if NULL.
+ * @param id      Unique 64-bit state identifier.
+ * @param size    Expected size in bytes.
+ * @return Read-only pointer to published front buffer, or NULL if not found.
+ */
 const void *CelsStateGet(CelsSession *session, CEL_Id id, size_t size)
 {
     if (session == NULL) {
@@ -145,6 +198,18 @@ const void *CelsStateGet(CelsSession *session, CEL_Id id, size_t size)
     return cell ? cell->frontBuffer : NULL;
 }
 
+/**
+ * Obtains a mutable pointer into the staging back buffer and schedules invalidations.
+ *
+ * Flags the state cell dirty so changes will be published at the frame boundary,
+ * and enqueues all subscribed watcher keys into the session's invalidationQueue.
+ * Enforces the architectural rule that mutations cannot occur inside active composables.
+ *
+ * @param session Owning or active session. Safe if NULL.
+ * @param id      Unique 64-bit state identifier.
+ * @param size    Expected size in bytes.
+ * @return Mutable pointer to staging back buffer, or NULL if cell not found.
+ */
 void *CelsStateMutate(CelsSession *session, CEL_Id id, size_t size)
 {
     if (session == NULL) {
@@ -156,7 +221,7 @@ void *CelsStateMutate(CelsSession *session, CEL_Id id, size_t size)
 
     // Enforce DSL rule: cel_mutate cannot be called during composable/composition evaluation,
     // but IS permitted within CEL_Task coroutines, lifecycle hooks, event handlers, and simulation loops.
-    assert((!session->isRecomposing || session->isExecutingTask) &&
+    assert((!session->isRecomposing || session->isExecutingTask || session->isHandlingEvent) &&
            "cel_mutate cannot be called inside a Composable or Composition body. Perform mutations in event callbacks, input handlers, simulation loops, or CEL_Task coroutines.");
 
     CelsStateCell *cell = CelsStateRegistryFindCell(&session->stateRegistry, id);
@@ -186,6 +251,15 @@ void *CelsStateMutate(CelsSession *session, CEL_Id id, size_t size)
     return cell->backBuffer;
 }
 
+/**
+ * Synchronizes staging back buffers to published front buffers across all dirty state cells.
+ *
+ * Iterates through all registered cells in the session. For every inUse and isDirty cell,
+ * copies backBuffer -> frontBuffer and clears the dirty flag. Invoked at frame boundaries
+ * by CelsSessionRecompose.
+ *
+ * @param session Target session. Safe if NULL.
+ */
 void CelsStatePublishDirty(CelsSession *session)
 {
     if (session == NULL) {
@@ -201,6 +275,16 @@ void CelsStatePublishDirty(CelsSession *session)
     }
 }
 
+/**
+ * Unsubscribes a composable group key from all reactive state cells in the registry.
+ *
+ * Scans all cells in the registry; if groupKey is found in a cell's watcherKeys array,
+ * removes it and shifts remaining keys down. Invoked when a composable node unmounts
+ * to prevent dead invalidation notifications.
+ *
+ * @param registry Target state registry pointer. Safe if NULL.
+ * @param groupKey 64-bit composable group key to unsubscribe.
+ */
 void CelsStateRegistryUnsubscribeKey(CelsStateRegistry *registry, uint64_t groupKey)
 {
     if (registry == NULL || groupKey == 0) {
@@ -225,6 +309,16 @@ void CelsStateRegistryUnsubscribeKey(CelsStateRegistry *registry, uint64_t group
     }
 }
 
+/**
+ * Subscribes the active composable group to a hoisted reactive state instance pointer.
+ *
+ * Resolves the preceding CelsStateHeader in O(1) to locate the cell ID, owning session,
+ * and struct size, registers the calling composable group as a watcher, and returns ptr.
+ *
+ * @param session Owning or active session. Safe if NULL (resolves active or header session).
+ * @param ptr     Pointer to reactive state struct payload. Safe if NULL.
+ * @return The same state pointer for chained expressions or pass-through.
+ */
 const void *CelsWatchStateInstance(CelsSession *session, const void *ptr)
 {
     if (ptr == NULL) {
@@ -246,6 +340,16 @@ const void *CelsWatchStateInstance(CelsSession *session, const void *ptr)
     return ptr;
 }
 
+/**
+ * Obtains a mutable pointer into the staging back buffer for a reactive state instance.
+ *
+ * Resolves the preceding CelsStateHeader in O(1) to identify the state cell and owning
+ * session, flags the state dirty, queues watchers for recomposition, and returns the
+ * back-buffer pointer. Must NOT be called during active composable evaluation.
+ *
+ * @param ptr Pointer to reactive state struct payload. Safe if NULL.
+ * @return Mutable pointer to staging back buffer, or NULL if header/session is invalid.
+ */
 void *CelsMutateStateInstance(void *ptr)
 {
     if (ptr == NULL) {
@@ -265,6 +369,15 @@ void *CelsMutateStateInstance(void *ptr)
     return CelsStateMutate(session, hdr->id, hdr->size);
 }
 
+/**
+ * Destructor callback invoked when a slot-managed reactive state instance is unmounted.
+ *
+ * Reads the CEL_Id stored in the slot memory, looks up the corresponding reactive state
+ * cell in the session state registry, and marks it unused, clearing all watchers and dirty flags.
+ *
+ * @param instance Pointer to the CEL_Id stored in slot memory. Safe if NULL.
+ * @param session  Target session. Safe if NULL.
+ */
 static void CelsStateInstanceCleanup(void *instance, CelsSession *session)
 {
     if (instance == NULL || session == NULL) {
@@ -282,6 +395,19 @@ static void CelsStateInstanceCleanup(void *instance, CelsSession *session)
     }
 }
 
+/**
+ * Allocates or resolves a persistent reactive state instance pinned to a composable slot.
+ *
+ * Allocates a 64-bit ID in the calling composable's slot table with an unmount cleanup hook.
+ * On first mount, generates a stable session-scoped unique ID, allocates the double-buffered
+ * cell in the session data slab, and copies initVal into both buffers. On subsequent passes,
+ * returns the front buffer in O(1). Automatically frees the cell if the composable unmounts.
+ *
+ * @param session Owning or active session. Safe if NULL (resolves current session).
+ * @param size    Size in bytes of the user state struct.
+ * @param initVal Initial values buffer to populate on mount. Safe if NULL.
+ * @return Pointer to published front-buffer user payload.
+ */
 void *CelsResolveStateInstance(CelsSession *session, size_t size, const void *initVal)
 {
     if (session == NULL) {

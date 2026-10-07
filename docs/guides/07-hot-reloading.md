@@ -68,7 +68,90 @@ int main(void) {
 
 ---
 
-## 3. Preserving State Across Swaps
+## 3. Host-to-App API & Multi-DLL Hosting
+
+In complex architectures, the host layer may host multiple dynamic libraries simultaneously (e.g., a main viewport application and a floating tool-palette or inspector DLL), or needs fine-grained programmatic control over when applications start, reload, or destroy.
+
+CELS provides the first-class `CelsApp` API:
+
+```c
+#include "cels.h"
+#include "cels/engine.h"
+#include "cels/runtime/module.h"
+
+int main(void) {
+    CelsEngine engine;
+    CelsEngineInit(&engine, NULL);
+
+    /* 1. Configure execution mode: Immediate (continuous) vs Retained (event-driven) */
+    CelsEngineSetMode(&engine, CELS_MODE_RETAINED);
+
+    /* 2. Create secondary session for auxiliary tool window */
+    CelsSession *toolSession = CelsEngineCreateSession(&engine, "inspector", CELS_PROFILE_512);
+
+    /* 3. Load independent application DLLs */
+    CelsApp mainApp;
+    CelsAppLoad(&mainApp, &engine, &engine.session, "main_app.dll");
+
+    CelsApp toolApp;
+    CelsAppLoad(&toolApp, &engine, toolSession, "tool_app.dll");
+
+    /* 4. Start applications (invokes onStart and performs initial composition) */
+    CelsAppStart(&mainApp);
+    CelsAppStart(&toolApp);
+
+    /* 5. Main loop */
+    while (!engine.shouldQuit) {
+        /* Check hot-reloading for each loaded application individually */
+        CelsAppCheckReload(&mainApp);
+        CelsAppCheckReload(&toolApp);
+
+        /* Only recompose if any session has pending mutations, events, or hot-swaps */
+        if (CelsEngineNeedsRecompose(&engine)) {
+            CelsEngineRecompose(&engine);
+        }
+
+        SleepMs(16);
+    }
+
+    /* 6. Clean teardown */
+    CelsAppDestroy(&toolApp);
+    CelsAppDestroy(&mainApp);
+    CelsEngineDestroy(&engine);
+    return 0;
+}
+```
+
+### Application Definition (`CEL_App_Def`)
+
+Applications define their lifecycle hooks and composition root without needing complex manifests:
+
+```c
+#include "cels.h"
+#include "cels/app.h"
+
+CEL_OnStart(MyApp_OnStart) {
+    /* Developers access host subsystem modules via CEL_GetModule */
+    MyRenderer *renderer = CEL_GetModule(MyRenderer);
+
+    /* Attach root composition to the bound session */
+    cel_attach(session, MyRootView);
+}
+
+CEL_OnEnd(MyApp_OnEnd) {
+    /* Cleanup application-specific state */
+}
+
+CEL_App_Def(MyApp,
+    .onStart = MyApp_OnStart,
+    .onReload = MyApp_OnStart, // Optional post-reload refresh hook
+    .onEnd   = MyApp_OnEnd
+);
+```
+
+---
+
+## 4. Preserving State Across Swaps
 
 Consider this composable with a click counter:
 
@@ -98,7 +181,7 @@ CEL_Composable(CounterWidget) {
 
 ---
 
-## 4. Lifecycle Pointer Safety
+## 5. Lifecycle Pointer Safety
 
 When a shared library is reloaded, function code is mapped to new memory addresses. If your slot table held pointers to old unmount destructors, executing them would trigger a segmentation fault or access violation.
 
@@ -109,7 +192,7 @@ CELS eliminates this problem via `CelsSessionUpdateLifecycle`:
 
 ---
 
-## 5. Build Modes: Development vs. Release
+## 6. Build Modes: Development vs. Release
 
 CELS uses CMake options to switch between dynamic hot-reloading and monolithic release binaries:
 
@@ -127,7 +210,7 @@ option(CELS_HOT_RELOAD "Enable dynamic hot-reload mode" ON)
 
 ---
 
-## 6. Developer Workflow (CLion / VS Code / Command Line)
+## 7. Developer Workflow (CLion / VS Code / Command Line)
 
 ### Command-Line Iteration
 In terminal 1, run the host:
@@ -148,7 +231,7 @@ The host instantly reloads the code.
 
 ---
 
-## 7. Best Practices & Pitfalls
+## 8. Best Practices & Pitfalls
 
 ### Do This
 - **Keep Subsystem Singletons in the Host**: Store heavy host resources (like `SDL_Window`, `GLFWwindow`, Vulkan devices, or audio device contexts) in the host or register them via `CEL_Module`.

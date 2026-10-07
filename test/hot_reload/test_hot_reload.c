@@ -102,7 +102,7 @@ static void TestHotReloadStateRetention(void)
     assert(state->value == 10);
 
     /* Mutate state before hot reload */
-    cel_mutate(&session, HotState) {
+    cels_session_mutate(&session, HotState) {
         this->value = 999;
         this->revision = 5;
     }
@@ -326,13 +326,148 @@ static void TestDynamicAppLoader(void)
     CelsEngineDestroy(&engine);
 }
 
+static int s_staticAppStartFired = 0;
+static int s_staticAppEndFired = 0;
+
+CEL_OnStart(StaticTestApp_OnStart)
+{
+    (void)engine;
+    (void)session;
+    s_staticAppStartFired++;
+}
+
+CEL_OnEnd(StaticTestApp_OnEnd)
+{
+    (void)engine;
+    (void)session;
+    s_staticAppEndFired++;
+}
+
+static const CelsAppDef s_staticAppDef = {
+    .name = "StaticTestApp",
+    .onStart = StaticTestApp_OnStart,
+    .onEnd = StaticTestApp_OnEnd
+};
+
+static void TestStaticAppBinding(void)
+{
+    s_staticAppStartFired = 0;
+    s_staticAppEndFired = 0;
+
+    CelsEngine engine;
+    CelsEngineInit(&engine, NULL);
+
+    CelsApp app;
+    assert(CelsAppBindStatic(&app, &engine, &engine.session, &s_staticAppDef) == CELS_OK);
+    assert(app.isStatic);
+    assert(app.module.isLoaded);
+    assert(!app.isStarted);
+
+    assert(CelsAppStart(&app) == CELS_OK);
+    assert(app.isStarted);
+    assert(s_staticAppStartFired == 1);
+
+    CelsAppDestroy(&app);
+    assert(!app.isStarted);
+    assert(s_staticAppEndFired == 1);
+
+    CelsEngineDestroy(&engine);
+}
+
+static void TestMultiDllAppHosting(void)
+{
+    char resolvedPath[CELS_PATH_MAX] = {0};
+    const char *foundPath = NULL;
+
+    if (CelsResolveModulePath("test_fixture_app", resolvedPath, sizeof(resolvedPath))) {
+        foundPath = resolvedPath;
+    } else {
+        const char *const modulePaths[] = {
+            "build/debug/windows/libtest_fixture_app.dll",
+            "build/debug/linux/libtest_fixture_app.so",
+            "build/debug/macos/libtest_fixture_app.dylib",
+            "../build/debug/windows/libtest_fixture_app.dll",
+            "../build/debug/linux/libtest_fixture_app.so",
+            "../build/debug/macos/libtest_fixture_app.dylib",
+            "libtest_fixture_app.dll"
+        };
+        for (size_t i = 0; i < sizeof(modulePaths) / sizeof(modulePaths[0]); ++i) {
+            FILE *f = fopen(modulePaths[i], "rb");
+            if (f != NULL) {
+                fclose(f);
+                foundPath = modulePaths[i];
+                break;
+            }
+        }
+    }
+
+    if (foundPath == NULL) {
+        return;
+    }
+
+    CelsEngine engine;
+    CelsEngineInit(&engine, NULL);
+
+    /* Test mode query and switching */
+    assert(CelsEngineGetMode(&engine) == CELS_MODE_IMMEDIATE);
+    CelsEngineSetMode(&engine, CELS_MODE_RETAINED);
+    assert(CelsEngineGetMode(&engine) == CELS_MODE_RETAINED);
+    CelsEngineSetMode(&engine, CELS_MODE_IMMEDIATE);
+    assert(CelsEngineGetMode(&engine) == CELS_MODE_IMMEDIATE);
+
+    /* Create a secondary named session on the engine */
+    CelsSession *toolSession = CelsEngineCreateSession(&engine, "tool_window", CELS_PROFILE_DEFAULT);
+    assert(toolSession != NULL);
+
+    /* Host App 1 in primary session */
+    CelsApp app1;
+    assert(CelsAppLoad(&app1, &engine, &engine.session, foundPath) == CELS_OK);
+    assert(app1.module.isLoaded);
+    assert(!app1.isStarted);
+    assert(CelsAppStart(&app1) == CELS_OK);
+    assert(app1.isStarted);
+    assert(engine.session.hasComposedOnce);
+
+    /* Host App 2 in secondary session (multi-DLL hosting on same engine) */
+    CelsApp app2;
+    assert(CelsAppLoad(&app2, &engine, toolSession, foundPath) == CELS_OK);
+    assert(app2.module.isLoaded);
+    assert(!app2.isStarted);
+    assert(CelsAppStart(&app2) == CELS_OK);
+    assert(app2.isStarted);
+    assert(toolSession->hasComposedOnce);
+
+    /* Test CelsEngineNeedsRecompose in both modes */
+    CelsEngineSetMode(&engine, CELS_MODE_IMMEDIATE);
+    assert(CelsEngineNeedsRecompose(&engine) == true);
+    CelsEngineSetMode(&engine, CELS_MODE_RETAINED);
+    assert(CelsEngineNeedsRecompose(&engine) == false);
+
+    /* Test check reload on both apps */
+    assert(!CelsAppCheckReload(&app1));
+    assert(!CelsAppCheckReload(&app2));
+
+    /* Destroy hosted apps */
+    CelsAppDestroy(&app1);
+    assert(!app1.isStarted);
+    assert(!app1.module.isLoaded);
+
+    CelsAppDestroy(&app2);
+    assert(!app2.isStarted);
+    assert(!app2.module.isLoaded);
+
+    CelsEngineDestroy(&engine);
+}
+
 static const TestCase s_hotReloadTests[] = {
     { "TestHotReloadInvalidation", "Verify hot reload invalidation flags and recomposition re-run", TestHotReloadInvalidation },
     { "TestHotReloadStateRetention", "Verify cel_remember and reactive state retention across reload", TestHotReloadStateRetention },
     { "TestHotReloadSchemaEvolution", "Verify slot schema size change recovery during reload", TestHotReloadSchemaEvolution },
     { "TestModuleRegistry", "Verify CEL_Module registration, retrieval, and survival across session restarts", TestModuleRegistry },
     { "TestAppLifecycleAndReturnComposition", "Verify CEL_App onStart/onEnd hooks, returning CEL_COMPOSITION, and custom module", TestAppLifecycleAndReturnComposition },
-    { "TestDynamicAppLoader", "Verify loading, shadow copying, and unloading a dynamic CELS application module", TestDynamicAppLoader }
+    { "TestDynamicAppLoader", "Verify loading, shadow copying, and unloading a dynamic CELS application module", TestDynamicAppLoader },
+    { "TestStaticAppBinding", "Verify CelsAppBindStatic with monolithic CelsAppDef lifecycle hooks", TestStaticAppBinding },
+    { "TestMultiDllAppHosting", "Verify multi-DLL hosting across primary and secondary sessions, mode switching, and recompose predicate", TestMultiDllAppHosting }
 };
 
 static const TestSuite s_hotReloadSuite = {

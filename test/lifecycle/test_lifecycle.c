@@ -61,7 +61,7 @@ static void ResetLifecycleState(CelsSession *s) {
     g_texturesRemembered = 0;
     g_texturesForgotten = 0;
     CelsSessionRememberState(s, CEL_ID("Goblin"), sizeof(Enemy), &((Enemy){ .hp = 100, .isAlive = true }));
-    cel_mutate(s, CEL_ID("Goblin"), Enemy) {
+    cels_session_mutate(s, CEL_ID("Goblin"), Enemy) {
         this->hp = 100;
         this->isAlive = true;
     }
@@ -95,7 +95,7 @@ static void TestNonFatalMutation(void) {
     CelsResult res1 = CelsSessionRecompose(&session);
     assert(res1 == CELS_OK);
 
-    cel_mutate(&session, CEL_ID("Goblin"), Enemy) {
+    cels_session_mutate(&session, CEL_ID("Goblin"), Enemy) {
         this->hp = 50;
     }
 
@@ -116,7 +116,7 @@ static void TestFatalMutationAndDestroy(void) {
 
     assert(CelsSessionRecompose(&session) == CELS_OK);
 
-    cel_mutate(&session, CEL_ID("Goblin"), Enemy) {
+    cels_session_mutate(&session, CEL_ID("Goblin"), Enemy) {
         this->hp = 0;
     }
 
@@ -137,7 +137,7 @@ static void TestSubsequentQuietRecompose(void) {
 
     assert(CelsSessionRecompose(&session) == CELS_OK);
 
-    cel_mutate(&session, CEL_ID("Goblin"), Enemy) {
+    cels_session_mutate(&session, CEL_ID("Goblin"), Enemy) {
         this->hp = 0;
     }
 
@@ -164,7 +164,7 @@ static void TestFullLifecycleProgression(void) {
     assert(g_texturesForgotten == 0);
 
     /* Step 2: Non-fatal Mutation */
-    cel_mutate(&session, CEL_ID("Goblin"), Enemy) {
+    cels_session_mutate(&session, CEL_ID("Goblin"), Enemy) {
         this->hp = 50;
     }
 
@@ -175,7 +175,7 @@ static void TestFullLifecycleProgression(void) {
     assert(g_texturesForgotten == 0);
 
     /* Step 3: Fatal Mutation */
-    cel_mutate(&session, CEL_ID("Goblin"), Enemy) {
+    cels_session_mutate(&session, CEL_ID("Goblin"), Enemy) {
         this->hp = 0;
     }
 
@@ -206,7 +206,7 @@ static void TestEngineEvaluationTeardownTriggerQuit(void) {
     assert(!engine.shouldQuit);
 
     /* Mutate state to trigger evaluation failure (teardown) */
-    cel_mutate(&engine.session, CEL_ID("Goblin"), Enemy) {
+    cels_session_mutate(&engine.session, CEL_ID("Goblin"), Enemy) {
         this->hp = 0;
     }
 
@@ -288,7 +288,7 @@ static void TestChildLifecycleDecoupledFromRootEvaluation(void) {
     assert(!engine.shouldQuit);
 
     /* 2. Toggle showBadge = false. Badge unmounts via lifecycle, but window stays open! */
-    cel_mutate(&engine.session, AppWindowTestState) {
+    cels_session_mutate(&engine.session, AppWindowTestState) {
         this->showBadge = false;
     }
 
@@ -298,7 +298,7 @@ static void TestChildLifecycleDecoupledFromRootEvaluation(void) {
     assert(!engine.shouldQuit);
 
     /* 3. Re-enable showBadge = true. Badge mounts again */
-    cel_mutate(&engine.session, AppWindowTestState) {
+    cels_session_mutate(&engine.session, AppWindowTestState) {
         this->showBadge = true;
     }
 
@@ -308,7 +308,7 @@ static void TestChildLifecycleDecoupledFromRootEvaluation(void) {
     assert(!engine.shouldQuit);
 
     /* 4. Close window: isOpen = false. WindowEval returns false -> root window destroyed -> engine.shouldQuit = true */
-    cel_mutate(&engine.session, AppWindowTestState) {
+    cels_session_mutate(&engine.session, AppWindowTestState) {
         this->isOpen = false;
     }
 

@@ -26,10 +26,10 @@ CELS implements a **production-grade, zero-restart dynamic hot-reload engine**:
 |                        (Lock Evasion)            v                                                |
 |  DYNAMIC APPLICATION LIBRARY (.dll)              |                                                |
 |  +--------------------------------------------+  |                                                |
-|  | app.hot_18420_2.tmp.dll                    |<--+ (Copied from game_app.dll)                    |
-|  |  |-- CelsGetAppManifest()                   |                                                  |
-|  |  |-- manifest->setSession(session)         | (Synchronizes TLS ambient session pointer)       |
-|  |  |-- manifest->onStart(engine, session)    | (Refreshes root composition function pointers)   |
+|  | app.hot_18420_1_2.tmp.dll                  |<--+ (Copied from game_app.dll)                    |
+|  |  |-- CelsGetAppDef()                       |                                                  |
+|  |  |-- def->setSession(session)              | (Synchronizes TLS ambient session pointer)       |
+|  |  |-- def->onStart(engine, session)         | (Attaches root compositions via cel_attach)      |
 |  |  `-- Declarative UI & Gameplay Logic       |                                                  |
 |  +--------------------------------------------+                                                   |
 +===================================================================================================+
@@ -43,34 +43,28 @@ CELS supports two distinct compilation modes via the `CELS_HOT_RELOAD` preproces
 
 | Mode | `CELS_HOT_RELOAD` | Target Binary | Behavior |
 |---|---|---|---|
-| **Monolithic Release** | `0` | Single `.exe` | Application code links statically into the executable. `CelsAppRuntimeCheck` compiles to a no-op (`return false`). Zero overhead, zero dynamic symbols, deterministic shipping binary. |
-| **Dynamic Debug** | `1` | `.exe` + `.dll` | Host engine compiles as a lightweight shell runner. Application logic compiles into a reloadable shared library. Polls file timestamps and hot-reloads on disk writes. |
+| **Monolithic Release** | `0` | Single `.exe` | Application code links statically into the executable. `CelsAppCheckReload` compiles to a no-op (`return false`). Zero overhead, zero dynamic symbols, deterministic shipping binary. |
+| **Dynamic Debug** | `1` | `.exe` + `.dll` | Host engine compiles as a shell or multi-app orchestrator. Application logic compiles into one or more reloadable shared libraries. Polls file timestamps and hot-reloads on disk writes. |
 
-### 2.1 The Manifest Handshake (`CelsAppManifest`)
+### 2.1 The Application Definition Handshake (`CelsAppDef`)
 
-Communication across the host-module boundary is governed by an ABI-stable manifest declared via the `CEL_App` macro:
+Communication across the host-module boundary is governed by an ABI-stable application definition declared via `CEL_App` or `CEL_App_Def`:
 
 ```c
-typedef struct CelsCompositionRef {
-    CEL_Id key;
-    void (*body)(void *userData);
-    void *userData;
-    bool (*lifecycleEval)(void *evalCtx);
-    void *evalCtx;
-} CelsCompositionRef;
+struct CelsAppDef {
+    uint32_t version;                               /**< App definition version (defaults to 1) */
+    const char *name;                               /**< Application identifier / display name */
+    void (*setSession)(CelsSession *s);             /**< Internal session synchronization across DLL boundary */
+    void (*onStart)(CelsEngine *engine, CelsSession *session);  /**< Setup callback: attach compositions via cel_attach */
+    void (*onReload)(CelsEngine *engine, CelsSession *session); /**< Optional callback fired after code hot-swap */
+    void (*onEnd)(CelsEngine *engine, CelsSession *session);    /**< Teardown callback on shutdown / unload */
+};
 
-typedef struct CelsAppManifest {
-    const char *appName;
-    const char *version;
-    size_t      slabSize;
-    uint32_t    maxGroups;
-    CelsCompositionRef (*onStart)(struct CelsEngine *engine, struct CelsSession *session);
-    void               (*onEnd)(struct CelsEngine *engine, struct CelsSession *session);
-    void               (*setSession)(struct CelsSession *session);
-} CelsAppManifest;
-
-#define CELS_APP_ENTRY_SYMBOL "CelsGetAppManifest"
-typedef const CelsAppManifest *(*CelsAppEntryFn)(void);
+#define CELS_APP_ENTRY_SYMBOL "CelsGetAppDef"
+#define CELS_APP_LEGACY_ENTRY_SYMBOL "CelsGetAppManifest"
+typedef const CelsAppDef *(*CelsAppEntryFn)(void);
+typedef struct CelsAppDef CelsAppDef;
+typedef struct CelsAppDef CelsAppManifest; /* Backwards compatibility alias */
 ```
 
 ---
@@ -96,9 +90,9 @@ CELS evades this OS lock entirely by never loading `game_app.dll` directly. Inst
          |
          | 2. Valid PE Image Check (IsValidPEImage)
          v
-[ Shadow Copy: game_app.hot_<PID>_<reloadCount>.tmp.dll ]
+[ Shadow Copy: game_app.hot_<PID>_<instanceId>_<reloadCount>.tmp.dll ]
          |
-         | 3. Copy PDB Symbols: game_app.hot_<PID>_<reloadCount>.tmp.pdb
+         | 3. Copy PDB Symbols: game_app.hot_<PID>_<instanceId>_<reloadCount>.tmp.pdb
          v
 [ PlatformLoadLibrary(shadowPath) ]
 ```
@@ -180,15 +174,16 @@ static bool IsValidPEImage(const char *path)
 }
 ```
 
-### 3.4 Step 3: Atomic Shadow Copy & PDB Symbol Retention
+### 3.4 Step 3: Atomic Shadow Copy & Multi-DLL Isolation
 
-Once verified, the file is copied to a unique PID- and iteration-stamped shadow path:
+Once verified, the file is copied to a unique PID-, instance-, and iteration-stamped shadow path:
 
 ```c
 snprintf(candidatePath, sizeof(candidatePath),
-         "%.440s.hot_%lu_%u.tmp.dll",
+         "%.440s.hot_%lu_%u_%u.tmp.dll",
          app->originalPath,
          (unsigned long)GetCurrentProcessId(),
+         app->instanceId,
          nextReload);
 PlatformCopyFile(app->originalPath, candidatePath);
 
@@ -198,8 +193,8 @@ snprintf(pdbSrc, sizeof(pdbSrc), "%s", app->originalPath);
 char *dot = strrchr(pdbSrc, '.');
 if (dot != NULL) {
     *dot = '\0';
-    snprintf(pdbDst, sizeof(pdbDst), "%.440s.hot_%lu_%u.tmp.pdb",
-             pdbSrc, (unsigned long)GetCurrentProcessId(), nextReload);
+    snprintf(pdbDst, sizeof(pdbDst), "%.440s.hot_%lu_%u_%u.tmp.pdb",
+             pdbSrc, (unsigned long)GetCurrentProcessId(), app->instanceId, nextReload);
     strncat(pdbSrc, ".pdb", sizeof(pdbSrc) - strlen(pdbSrc) - 1u);
     if (IsPathReadable(pdbSrc)) {
         PlatformCopyFile(pdbSrc, pdbDst);
@@ -207,7 +202,7 @@ if (dot != NULL) {
 }
 ```
 
-Because the OS loads `candidatePath` instead of `originalPath`, **`game_app.dll` is never locked**. Developers can recompile continuously while the game is running.
+Because the OS loads `candidatePath` instead of `originalPath`, **`game_app.dll` is never locked**. Developers can recompile continuously while the host is running. Furthermore, the inclusion of `app->instanceId` ensures that multiple host applications (`CelsApp`) running in the same process never collide on shadow filenames or share Windows dynamic loader ref-counts.
 
 ### 3.5 Step 4: Graceful File Cleanup
 
@@ -226,27 +221,30 @@ When code is split across a host executable and a dynamic library on Windows:
 - Each binary has its own copy of C Runtime (CRT) state and **Thread-Local Storage (TLS)** variables.
 - The host's `s_currentSession` thread-local variable is **not** shared with the DLL.
 
-CELS bridges this gap via the manifest's `setSession` callback:
+CELS bridges this gap via the application definition's `setSession` callback:
 
 ```c
-/* Generated inside the DLL by CEL_App macro: */
-static void _CelsSetAmbientSession(CelsSession *session) {
+/* Generated inside the DLL by CEL_App or CEL_App_Def macro: */
+static void _cels_app_set_session_MyApp(CelsSession *session) {
     CelsSetCurrentSession(session);
 }
 
-const CelsAppManifest *CelsGetAppManifest(void) {
-    static const CelsAppManifest manifest = {
-        .setSession = _CelsSetAmbientSession,
-        ...
+CELS_APP_EXPORT const CelsAppDef *CelsGetAppDef(void) {
+    static const CelsAppDef def = {
+        .name = "MyApp",
+        .setSession = _cels_app_set_session_MyApp,
+        .onStart = MyApp_OnStart,
+        .onReload = MyApp_OnReload,
+        .onEnd = MyApp_OnEnd
     };
-    return &manifest;
+    return &def;
 }
 ```
 
-Immediately after loading the new DLL:
+Immediately after loading the dynamic module:
 ```c
-if (app->manifest->setSession != NULL) {
-    app->manifest->setSession(session); /* Passes host session pointer into DLL's TLS */
+if (app->module.def->setSession != NULL) {
+    app->module.def->setSession(app->session); /* Passes host session pointer into DLL's TLS */
 }
 ```
 

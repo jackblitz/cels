@@ -43,7 +43,7 @@ static void TestHighKeys(void) {
     assert(CelsSessionRecompose(&s) == CELS_OK);
     assert(childRuns == 1 && siblingRuns == 1);
 
-    cel_mutate(&s, CEL_ID("ChildState"), ChildState) {
+    cels_session_mutate(&s, CEL_ID("ChildState"), ChildState) {
         this->value++;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -146,7 +146,7 @@ static void TestEditsPreserveResources(void) {
     int *savedAfter = afterChildren;
 
     for (int mode = 1; mode <= 3; ++mode) {
-        cel_mutate(&s, CEL_ID("LayoutState"), LayoutState) {
+        cels_session_mutate(&s, CEL_ID("LayoutState"), LayoutState) {
             this->mode = mode;
         }
         assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -159,7 +159,7 @@ static void TestEditsPreserveResources(void) {
 
     /* Mutate child state */
     uint64_t childKey = CelsKeyIndex(CEL_ID("node-val"), 1);
-    cel_mutate(&s, childKey, int) {
+    cels_session_mutate(&s, childKey, int) {
         *this = 321;
     }
     *savedValue = 321;
@@ -217,7 +217,7 @@ static void TestChildBeforeParent(void) {
     assert(CelsSessionRecompose(&s) == CELS_OK);
     int start = destroys;
 
-    cel_mutate(&s, CEL_ID("ShowParent"), ShowParent) {
+    cels_session_mutate(&s, CEL_ID("ShowParent"), ShowParent) {
         this->show = false;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -225,7 +225,7 @@ static void TestChildBeforeParent(void) {
     /* Child resource (id 0) destroyed before parent resource (id 9) */
     assert(destroyedIds[start] == 0 && destroyedIds[start + 1] == 9);
 
-    cel_mutate(&s, CEL_ID("ShowParent"), ShowParent) {
+    cels_session_mutate(&s, CEL_ID("ShowParent"), ShowParent) {
         this->show = true;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -298,7 +298,7 @@ static void TestNestedEditsKeepSubscriptions(void) {
     int *value = values[1];
 
     for (int mode = 1; mode <= 3; ++mode) {
-        cel_mutate(&s, CEL_ID("NestedLayout"), NestedLayout) {
+        cels_session_mutate(&s, CEL_ID("NestedLayout"), NestedLayout) {
             this->mode = mode;
         }
         assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -307,7 +307,7 @@ static void TestNestedEditsKeepSubscriptions(void) {
         int siblingBefore = parentRuns[0];
 
         uint64_t childKey = CelsKeyIndex(CEL_ID("node-val"), 1);
-        cel_mutate(&s, childKey, int) {
+        cels_session_mutate(&s, childKey, int) {
             (*this)++;
         }
         assert(CelsSessionRecompose(&s) == CELS_OK);

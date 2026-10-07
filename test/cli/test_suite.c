@@ -116,7 +116,8 @@ int main(int argc, char **argv) {
         GetHotReloadTestSuite(),
         GetTaskTestSuite(),
         GetTransactionTestSuite(),
-        GetTransitionTestSuite()
+        GetTransitionTestSuite(),
+        GetEventTestSuite()
     };
     const size_t suiteCount = sizeof(suites) / sizeof(suites[0]);
     return TestCliRunAll(suites, suiteCount, argc, argv);

@@ -86,19 +86,113 @@ extern "C" {
 typedef struct CelsAppModule {
     char originalPath[CELS_PATH_MAX];
     char loadedPath[CELS_PATH_MAX];
+    char entrySymbol[64];
     void *handle;
     uint64_t lastWriteTime;
+    uint32_t instanceId;
     uint32_t reloadCount;
-    const CelsAppManifest *manifest;
+    const struct CelsAppDef *def;
+    const struct CelsAppDef *manifest;
     uint64_t attachedKey;
     bool isLoaded;
 } CelsAppModule;
+
+struct CelsEngine;
+
+/**
+ * Handle representing an application hosted by the host layer.
+ * Encapsulates dynamic library loading, session binding, hot-reloading, and lifecycle.
+ */
+struct CelsApp {
+    CelsAppModule        module;
+    struct CelsEngine   *engine;
+    struct CelsSession  *session;
+    bool                 isStarted;
+    bool                 isStatic;
+};
+
+#ifndef CELS_APP_TYPEDEF_DEFINED
+#define CELS_APP_TYPEDEF_DEFINED
+typedef struct CelsApp CelsApp;
+#endif
+
+/**
+ * Loads an application dynamic library and binds it to an engine and target session.
+ *
+ * @param app      Pointer to uninitialized CelsApp handle. Non-NULL.
+ * @param engine   Owning host engine. Non-NULL.
+ * @param session  Target session for this application. Non-NULL.
+ * @param dllPath  Path or target name of the dynamic library. Non-NULL.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult CelsAppLoad(CelsApp *app, struct CelsEngine *engine, struct CelsSession *session, const char *dllPath);
+
+/**
+ * Loads an application dynamic library with a specific entry symbol.
+ *
+ * Allows multiple apps compiled into the same DLL to be loaded independently.
+ *
+ * @param app         Pointer to uninitialized CelsApp handle. Non-NULL.
+ * @param engine      Owning host engine. Non-NULL.
+ * @param session     Target session. Non-NULL.
+ * @param dllPath     Path or target name of the dynamic library. Non-NULL.
+ * @param entrySymbol Exported entry symbol (defaults to "CelsGetAppDef" if NULL).
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult CelsAppLoadEntry(CelsApp *app, struct CelsEngine *engine, struct CelsSession *session, const char *dllPath, const char *entrySymbol);
+
+/**
+ * Binds a static application definition for monolithic / non-reloadable builds.
+ *
+ * @param app     Pointer to uninitialized CelsApp handle. Non-NULL.
+ * @param engine  Owning host engine. Non-NULL.
+ * @param session Target session. Non-NULL.
+ * @param def     Static application definition. Non-NULL.
+ * @return CELS_OK on success.
+ */
+CelsResult CelsAppBindStatic(CelsApp *app, struct CelsEngine *engine, struct CelsSession *session, const struct CelsAppDef *def);
+
+/**
+ * Starts execution of a loaded application.
+ *
+ * Synchronizes ambient session across the binary boundary, invokes the app's onStart hook
+ * passing (engine, session), and executes the initial composition pass.
+ *
+ * @param app Target application handle. Non-NULL.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult CelsAppStart(CelsApp *app);
+
+/**
+ * Checks if the application dynamic library was modified on disk and hot-reloads it.
+ *
+ * @param app Target application handle. Safe if NULL.
+ * @return True if a reload occurred; false otherwise.
+ */
+bool CelsAppCheckReload(CelsApp *app);
+
+/**
+ * Forces an immediate reload of the application dynamic library.
+ *
+ * @param app Target application handle. Safe if NULL.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult CelsAppReload(CelsApp *app);
+
+/**
+ * Stops execution, unloads the dynamic library, and cleans up shadow copy files.
+ *
+ * Invokes the app's onEnd hook passing (engine, session) and detaches its root composition.
+ *
+ * @param app Target application handle. Safe if NULL.
+ */
+void CelsAppDestroy(CelsApp *app);
 
 /**
  * Loads a CELS application dynamically from disk.
  *
  * Copies libraryPath to a temporary shadow file on Windows to prevent file locking,
- * loads the library, queries CelsGetAppManifest, initializes ambient session,
+ * loads the library, queries CelsGetAppDef, initializes ambient session,
  * invokes manifest->onStart, and attaches the returned composition.
  *
  * @param app         Target application module struct. Non-NULL.
@@ -107,6 +201,18 @@ typedef struct CelsAppModule {
  * @return true on success, false on failure.
  */
 bool CelsAppModuleLoad(CelsAppModule *app, const char *libraryPath, CelsSession *session);
+
+/**
+ * Loads a CELS application dynamically from disk with custom entry symbol and autoStart control.
+ *
+ * @param app         Target application module struct. Non-NULL.
+ * @param libraryPath Path to .dll / .so file. Non-NULL.
+ * @param session     Target session. Non-NULL.
+ * @param entrySymbol Symbol name (or NULL for default).
+ * @param autoStart   If true, invokes onStart immediately.
+ * @return true on success, false on failure.
+ */
+bool CelsAppModuleLoadEntryInternal(CelsAppModule *app, const char *libraryPath, CelsSession *session, const char *entrySymbol, bool autoStart);
 
 /**
  * Checks if libraryPath has been modified on disk and reloads it if newer.

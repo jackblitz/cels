@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility: ANSI C99, CMake 3.20+, GCC/Clang/MSVC
 metadata:
   author: CELS Authors
-  version: "0.3.0"
+  version: "0.4.0"
   last-updated: '2026-09-30'
   category: application-development
   keywords:
@@ -42,8 +42,8 @@ CELS cleanly separates the **Host** (the native runtime harness and loop) from t
                                   v
 +--------------------------------------------------------------------+
 |  APPLICATION (cel_app)                                             |
-|  - Declares CEL_App manifest                                       |
-|  - Implements onStart / onEnd hooks                                |
+|  - Declares CEL_App or CEL_App_Def application definition          |
+|  - Implements onStart / onReload / onEnd hooks                     |
 |  - Defines Compositions & Composable UI trees                      |
 +--------------------------------------------------------------------+
 ```
@@ -54,8 +54,8 @@ CELS cleanly separates the **Host** (the native runtime harness and loop) from t
 
 An application requires:
 1. One or more Compositions (e.g. `WindowComposition`).
-2. The `CEL_App` declarative macro binding the root composition directly.
-3. Optional evaluation predicate (e.g. `WindowEval`) or custom manifest hooks via `CEL_App_Manifest`.
+2. The `CEL_App` declarative macro binding the root composition directly (or `CEL_App_Def` for custom hooks).
+3. Optional evaluation predicate (e.g. `WindowEval`) or custom lifecycle callbacks via `CEL_App_Def`.
 
 ### Minimal Application Example (`app.c`)
 ```c
@@ -70,7 +70,8 @@ CEL_App(WindowApp, WindowComposition, WindowEval);
 - `CEL_App(AppName, RootComp)`: Direct 1-line root attachment.
 - `CEL_App(AppName, RootComp, EvalPred)`: Direct root attachment with lifecycle evaluation predicate.
 - `CEL_App(AppName, RootComp, EvalPred, UserData)`: Direct root attachment with evaluation and injected instance context.
-- `CEL_App_Manifest(AppName, ...)`: Low-level designated initializers for custom manifests (`.continuousCompose = true`, custom `.onEnd`, etc.).
+- `CEL_App_Def(AppName, ...)`: Clean designated initializers for application definition (`.onStart = OnStart, .onReload = OnReload, .onEnd = OnEnd`). Exported automatically as `CelsGetAppDef` and `CelsGetAppManifest`.
+- `CEL_App_Manifest(AppName, ...)`: Legacy alias for `CEL_App_Def`.
 
 ### Root Compositions and `userData`: How, When, and Why
 
@@ -144,18 +145,27 @@ The host executable initializes the `CelsEngine`, runs the tick loop, forwards p
     #define SleepMs(ms) usleep((ms) * 1000)
 #endif
 
+/* Approach A: Standard Canonical Host (Recommended) */
+#include "host.h"
+
 int main(int argc, char **argv)
+{
+    return CelsRunHost(argc, argv);
+}
+
+/* Approach B: Custom Host Engine Loop */
+int custom_host_main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
 
     /*
-     * 1. Initialize engine with workload capacity profile:
+     * 1. Initialize engine with workload capacity profile and app target:
      * - CELS_PROFILE_1K: 128 KiB cache-aligned slab, up to 1,024 composables
      * - CELS_PROFILE_512: 64 KiB L1 cache-resident slab, up to 512 composables
      */
     CelsEngine engine;
-    if (CelsEngineInitWithProfile(&engine, NULL, CELS_PROFILE_1K) != CELS_OK) {
+    if (CelsEngineInitWithProfile(&engine, CELS_APP_TARGET, CELS_PROFILE_1K) != CELS_OK) {
         fprintf(stderr, "[Host] Failed to initialize engine\n");
         return 1;
     }
@@ -170,10 +180,8 @@ int main(int argc, char **argv)
         /* Recompose all active sessions */
         CelsEngineRecompose(&engine);
 
-        /* Example: Mutate state based on events / input */
-        // cel_mutate(&engine.session, WindowState) {
-        //     this->someField = newValue;
-        // }
+        /* Example: Send targeted signal based on input / events */
+        // cel_signal(cel_get_session(&engine, "main"), WindowActionSignal, { .action = WINDOW_ACTION_TOGGLE });
 
         SleepMs(16); /* ~60 FPS */
     }
@@ -183,6 +191,50 @@ int main(int argc, char **argv)
     CelsEngineEnd(&engine);
     CelsEngineDestroy(&engine);
 
+    return 0;
+}
+
+/* Approach C: Programmatic Host-to-App API & Multi-DLL Hosting */
+int multi_dll_host_main(void)
+{
+    CelsEngine engine;
+    CelsEngineInit(&engine, NULL);
+
+    /* 1. Host chooses execution mode: Immediate (continuous) vs Retained (event-driven) */
+    CelsEngineSetMode(&engine, CELS_MODE_RETAINED);
+
+    /* 2. Create secondary session for auxiliary tool/inspector window */
+    CelsSession *toolSession = CelsEngineCreateSession(&engine, "inspector", CELS_PROFILE_512);
+
+    /* 3. Bind and load independent application DLLs */
+    CelsApp mainApp;
+    CelsAppLoad(&mainApp, &engine, &engine.session, "main_app.dll");
+
+    CelsApp toolApp;
+    CelsAppLoad(&toolApp, &engine, toolSession, "tool_app.dll");
+
+    /* 4. Start applications (runs onStart and initial composition) */
+    CelsAppStart(&mainApp);
+    CelsAppStart(&toolApp);
+
+    /* 5. Main tick loop */
+    while (!engine.shouldQuit) {
+        /* Check hot-reloading for each loaded application */
+        CelsAppCheckReload(&mainApp);
+        CelsAppCheckReload(&toolApp);
+
+        /* Only recompose if any session has pending mutations, events, or hot-swaps */
+        if (CelsEngineNeedsRecompose(&engine)) {
+            CelsEngineRecompose(&engine);
+        }
+
+        SleepMs(16);
+    }
+
+    /* 6. Clean teardown */
+    CelsAppDestroy(&toolApp);
+    CelsAppDestroy(&mainApp);
+    CelsEngineDestroy(&engine);
     return 0;
 }
 ```
@@ -220,8 +272,8 @@ cels_add_application(
 ```
 
 In CLion and IDEs, two standard run configurations are provided for each app:
-- **`**_host`**: Launches the main engine executable (`cel_host.exe`, `cel_task_host.exe`).
-- **`**_dll`**: Recompiles the dynamic application library (`cel_dll.dll`, `cel_task_dll.dll`) and displays hot-reload confirmation with exit code 0.
+- **`**_host`**: Launches the main engine executable (`cel_host.exe`, `cel_task_host.exe`, `cel_transition_host.exe`, `cel_event_host.exe`).
+- **`**_dll`**: Recompiles the dynamic application library (`cel_dll.dll`, `cel_task_dll.dll`, `cel_transition_dll.dll`, `cel_event_dll.dll`) and displays hot-reload confirmation with exit code 0.
 
 ---
 
@@ -281,7 +333,7 @@ while (!engine.shouldQuit) {
 }
 ```
 
-### Pattern 3: Application Manifest Export
+### Pattern 3: Application Definition Export
  
 ```c
 // WRONG: Using manual symbol exports, custom structs, or boilerplate onStart
@@ -290,7 +342,9 @@ __declspec(dllexport) void* MyCustomInit() { ... }
 // CORRECT: Declarative root composition attachment
 CEL_App(WindowApp, WindowComposition, WindowEval);
 
-// Or when custom manifest hooks are needed:
-// CEL_App_Manifest(WindowApp, .onStart = App_OnStart, .continuousCompose = true);
+// Or when custom application hooks are needed:
+// CEL_OnStart(App_OnStart) { cel_attach(session, WindowComposition); }
+// CEL_OnEnd(App_OnEnd) { /* teardown */ }
+// CEL_App_Def(WindowApp, .onStart = App_OnStart, .onReload = App_OnStart, .onEnd = App_OnEnd);
 ```
 

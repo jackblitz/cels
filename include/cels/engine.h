@@ -41,6 +41,7 @@
 #include <stdint.h>
 
 #include "cels/runtime/session.h"
+#include "cels/runtime/thread.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,11 +56,28 @@ extern "C" {
 #ifndef CELS_MAX_MODULES
 #define CELS_MAX_MODULES 16u
 #endif
+/**
+ * Host execution mode controlling composition evaluation frequency.
+ */
+typedef enum CelsEngineMode {
+    CELS_MODE_IMMEDIATE = 0, /**< Continuous frame loop (recomposes every tick; ideal for games/simulations) */
+    CELS_MODE_RETAINED  = 1  /**< Reactive event-driven mode (recomposes only when dirty, signals arrive, or on code reload) */
+} CelsEngineMode;
 
 /* Forward declarations */
 struct CelsEngine;
-struct CelsAppManifest;
+struct CelsAppDef;
+#ifndef CELS_APP_DEF_TYPEDEF_DEFINED
+#define CELS_APP_DEF_TYPEDEF_DEFINED
+typedef struct CelsAppDef CelsAppDef;
+typedef struct CelsAppDef CelsAppManifest;
+#endif
 struct CelsAppModule;
+struct CelsApp;
+#ifndef CELS_APP_TYPEDEF_DEFINED
+#define CELS_APP_TYPEDEF_DEFINED
+typedef struct CelsApp CelsApp;
+#endif
 
 /* ========================================================================= */
 /* Engine Module Binding Record                                              */
@@ -94,20 +112,63 @@ typedef struct CelsModuleBinding {
 /* Engine Instance (CelsEngine)                                              */
 /* ========================================================================= */
 
+#ifndef CELS_MAX_SECONDARY_SESSIONS
+#define CELS_MAX_SECONDARY_SESSIONS 7u
+#endif
+
+/**
+ * Record tracking a named secondary session managed by CelsEngine.
+ */
+typedef struct CelsEngineSessionEntry {
+    char         name[32];
+    uint64_t     nameHash;
+    CelsSession *session;
+    bool         isUsed;
+} CelsEngineSessionEntry;
+
 /**
  * Engine runtime context residing in the executable (.exe).
- * Owns system memory modules and the primary reactive session.
+ * Owns system memory modules, the primary reactive session, and supervised secondary sessions.
  */
 struct CelsEngine {
     uint32_t                      magic;        /**< CELS_ENGINE_MAGIC validation tag */
-    const struct CelsAppManifest *manifest;     /**< Application manifest from DLL or static */
+    const struct CelsAppDef      *manifest;     /**< Application manifest from DLL or static */
     struct CelsAppModule         *appModule;    /**< Dynamic application handle in Hot-Reload mode */
     CelsModuleBinding             modules[CELS_MAX_MODULES]; /**< Subsystem module bindings */
     uint32_t                      moduleCount;  /**< Number of active module bindings */
-    CelsSession                   session;      /**< Primary reactive session */
+    CelsSession                   session;      /**< Primary ("main") reactive session */
+    CelsEngineSessionEntry        secondarySessions[CELS_MAX_SECONDARY_SESSIONS]; /**< Supervised secondary sessions */
+    uint32_t                      secondarySessionCount; /**< Active secondary session count */
+    /* Global broadcast ring buffer */
+    CelsEventRecord               broadcastQueue[CELS_EVENT_QUEUE_CAPACITY];
+    uint32_t                      broadcastCount;
+    CelsMutex                     broadcastMutex;
+    CelsEngineMode                mode;         /**< Host execution mode (CELS_MODE_IMMEDIATE / CELS_MODE_RETAINED) */
     bool                          isStarted;    /**< True if engine and app are active */
     bool                          shouldQuit;   /**< True if exit has been requested */
 };
+
+/* ========================================================================= */
+/* Engine Broadcast Bus API                                                  */
+/* ========================================================================= */
+
+/**
+ * Thread-safe broadcast staging into the host engine bus.
+ *
+ * @param engine   Target host engine. Non-NULL.
+ * @param typeHash 64-bit type name hash.
+ * @param payload  Pointer to payload data.
+ * @param size     Payload size in bytes.
+ * @return True if staged successfully.
+ */
+bool CelsEngineBroadcast(CelsEngine *engine, uint64_t typeHash, const void *payload, size_t size);
+
+/**
+ * Drains all staged broadcasts and delivers them into the engine's primary session.
+ *
+ * @param engine Target host engine. Non-NULL.
+ */
+void CelsEngineDrainBroadcasts(CelsEngine *engine);
 
 /* ========================================================================= */
 /* Engine Lifecycle API                                                      */
@@ -155,12 +216,61 @@ CelsResult CelsEngineStart(CelsEngine *engine);
 void CelsEngineEnd(CelsEngine *engine);
 
 /**
+ * Sets the host execution mode (Immediate vs Retained).
+ *
+ * In Immediate mode, CelsEngineRecompose always processes frame ticks (for games/simulations).
+ * In Retained mode, CelsEngineRecompose evaluates only when dirty state, events, or reload flags exist.
+ *
+ * @param engine Target host engine. Non-NULL.
+ * @param mode   Desired execution mode.
+ */
+void CelsEngineSetMode(CelsEngine *engine, CelsEngineMode mode);
+
+/**
+ * Gets the current host execution mode.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ * @return Active CelsEngineMode (defaults to CELS_MODE_IMMEDIATE).
+ */
+CelsEngineMode CelsEngineGetMode(const CelsEngine *engine);
+
+/**
+ * Queries whether any active session in the engine requires recomposition.
+ *
+ * In Retained mode, host loops can call this to determine if rendering / presentation
+ * is necessary on the current frame.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ * @return True if one or more sessions have pending dirty state, signals, or invalidations.
+ */
+bool CelsEngineNeedsRecompose(const CelsEngine *engine);
+
+/**
  * Triggers a recomposition pass on the engine's primary session and all active sessions.
  *
  * @param engine Target host engine. Non-NULL.
  * @return CELS_OK on success, or CelsResult error code.
  */
 CelsResult CelsEngineRecompose(CelsEngine *engine);
+
+/**
+ * Creates and registers a named secondary session supervised by the engine.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param name    Unique session name (e.g. "audio", "physics", "hud"). Non-NULL.
+ * @param profile Workload capacity profile (e.g. CELS_PROFILE_256).
+ * @return Pointer to initialized CelsSession, or NULL on error / capacity reached.
+ */
+CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsSessionProfile profile);
+
+/**
+ * Retrieves a session supervised by the engine by name.
+ *
+ * @param engine Target host engine. Non-NULL.
+ * @param name   Session name. If NULL, "main", or "root", returns the primary session.
+ * @return Pointer to CelsSession, or NULL if not found.
+ */
+CelsSession *CelsEngineGetSession(CelsEngine *engine, const char *name);
 
 /**
  * Initializes the engine with explicit session configuration and loads the application module.
@@ -190,8 +300,8 @@ static inline CelsResult CelsEngineInitWithOptions(CelsEngine *engine, const cha
     if (res != CELS_OK) {
         return res;
     }
-    extern const struct CelsAppManifest *CelsGetAppManifest(void);
-    const struct CelsAppManifest *manifest = CelsGetAppManifest();
+    extern const struct CelsAppDef *CelsGetAppManifest(void);
+    const struct CelsAppDef *manifest = CelsGetAppManifest();
     if (manifest != NULL) {
         engine->manifest = manifest;
         return CelsEngineStart(engine);
@@ -268,7 +378,7 @@ static inline CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appNa
     if (engine == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
     }
-    extern const struct CelsAppManifest *CelsGetAppManifest(void);
+    extern const struct CelsAppDef *CelsGetAppManifest(void);
     engine->manifest = CelsGetAppManifest();
     return CelsEngineStart(engine);
 }
@@ -353,7 +463,7 @@ static inline void CelsEngineQuit(CelsEngine *engine)
  * @param config   Optional session configuration, or NULL for defaults.
  * @return CELS_OK on success, or CelsResult error code.
  */
-CelsResult CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessionConfig *config);
+CelsResult CelsEngineRunStandalone(const struct CelsAppDef *manifest, const CelsSessionConfig *config);
 
 /* ========================================================================= */
 /* Module Access Dispatch Helpers                                            */
@@ -411,15 +521,6 @@ void _cels_dispatch_register_module(void *ctx, uint64_t key, const char *name, v
 /* ========================================================================= */
 
 #define CELS_APP_MAGIC            CELS_ENGINE_MAGIC
-#define CelsAppInit               CelsEngineInit
-#define CelsAppDestroy            CelsEngineDestroy
-#define CelsAppStart              CelsEngineStart
-#define CelsAppEnd                CelsEngineEnd
-#define CelsAppRegisterModule     CelsEngineRegisterModule
-#define CelsAppGetModule          CelsEngineGetModule
-#define CelsGetCurrentApp         CelsGetCurrentEngine
-#define CelsSetCurrentApp         CelsSetCurrentEngine
-#define CelsAppRunStandalone      CelsEngineRunStandalone
 
 #ifdef __cplusplus
 }

@@ -14,7 +14,6 @@
  */
 CEL_Task(NetworkConnectTask, NetworkState*, net, const char*, server) {
     cancel {
-        printf("  [NetworkTask] CANCEL: Teardown triggered! Closing socket to %s...\n", server);
         cel_mutate(net) {
             this->status = NET_CANCELLED;
             this->isConnecting = false;
@@ -23,28 +22,24 @@ CEL_Task(NetworkConnectTask, NetworkState*, net, const char*, server) {
 
     run {
         /* Step 1: DNS Resolution */
-        printf("  [NetworkTask] Step 1: Resolving hostname '%s'...\n", server);
         cel_mutate(net) {
             this->status = NET_RESOLVING;
         }
         cel_wait(200); /* 200ms non-blocking DNS delay */
 
         /* Step 2: Socket Connection */
-        printf("  [NetworkTask] Step 2: Connecting TCP socket to '%s'...\n", server);
         cel_mutate(net) {
             this->status = NET_CONNECTING;
         }
         cel_wait(150); /* 150ms connection handshake */
 
         /* Step 3: Server Handshake & Auth */
-        printf("  [NetworkTask] Step 3: Sending handshake & authentication token...\n");
         cel_mutate(net) {
             this->status = NET_HANDSHAKE;
         }
         cel_wait(250); /* 250ms auth roundtrip */
 
         /* Step 4: Successfully Connected */
-        printf("  [NetworkTask] Step 4: Handshake approved! Session active on %s.\n", server);
         cel_mutate(net) {
             this->packetsReceived = 0;
             this->pingMs = 24;

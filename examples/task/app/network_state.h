@@ -27,3 +27,12 @@ CEL_State(NetworkState) {
     bool      isConnecting;
 };
 
+typedef enum NetworkCommand {
+    NET_CMD_CONNECT,
+    NET_CMD_CANCEL
+} NetworkCommand;
+
+typedef struct NetworkCommandSignal {
+    NetworkCommand command;
+} NetworkCommandSignal;
+

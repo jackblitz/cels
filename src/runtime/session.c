@@ -228,6 +228,16 @@ typedef struct CelsSessionRegistryEntry {
 static CelsSessionRegistryEntry s_sessionRegistry[CELS_MAX_SESSIONS];
 static uint32_t s_sessionRegistryCount = 0;
 
+/**
+ * Dynamically allocates and initializes a new heap-backed CEL_Session.
+ *
+ * Configures the session slab according to options, assigns sessionId, marks
+ * the session as heap-allocated, and records it in the global session registry.
+ *
+ * @param sessionId Unique 64-bit session identifier.
+ * @param options   Optional capacity profile and memory sizing overrides. Safe if NULL.
+ * @return Pointer to initialized CEL_Session instance.
+ */
 CEL_Session *CelSessionCreate(CEL_Id sessionId, const CelSessionOptions *options)
 {
     CEL_Session *session = (CEL_Session *)calloc(1, sizeof(CEL_Session));
@@ -252,6 +262,13 @@ CEL_Session *CelSessionCreate(CEL_Id sessionId, const CelSessionOptions *options
     return session;
 }
 
+/**
+ * Creates and initializes a heap-backed CEL_Session dimensioned for a workload capacity profile.
+ *
+ * @param sessionId Unique 64-bit session identifier.
+ * @param profile   Target capacity profile (e.g. CELS_PROFILE_1K, CELS_PROFILE_512).
+ * @return Pointer to initialized CEL_Session instance.
+ */
 CEL_Session *CelSessionCreateWithProfile(CEL_Id sessionId, CelsSessionProfile profile)
 {
     CelSessionOptions opts = {
@@ -262,6 +279,12 @@ CEL_Session *CelSessionCreateWithProfile(CEL_Id sessionId, CelsSessionProfile pr
     return CelSessionCreate(sessionId, &opts);
 }
 
+/**
+ * Looks up an active session from the global session registry by its 64-bit identifier.
+ *
+ * @param sessionId Unique 64-bit session identifier.
+ * @return Pointer to matching CEL_Session, or NULL if not found.
+ */
 CEL_Session *cel_session(CEL_Id sessionId)
 {
     for (uint32_t i = 0; i < s_sessionRegistryCount; ++i) {
@@ -272,11 +295,24 @@ CEL_Session *cel_session(CEL_Id sessionId)
     return NULL;
 }
 
+/**
+ * Resolves the currently active ambient session bound to the calling thread.
+ *
+ * @return Pointer to active CEL_Session, or NULL if none is active.
+ */
 CEL_Session *cel_active_session(void)
 {
     return CelsGetCurrentSession();
 }
 
+/**
+ * Destroys a session, releasing all slot memory, subscriptions, and registered modules.
+ *
+ * Removes the session from the global registry, destroys the session slab and slot table,
+ * and frees the session structure if it was heap-allocated.
+ *
+ * @param session Target session to destroy. Safe if NULL.
+ */
 void CelSessionDestroy(CEL_Session *session)
 {
     if (session == NULL) return;
@@ -296,16 +332,27 @@ void CelSessionDestroy(CEL_Session *session)
     }
 }
 
+/**
+ * Executes a recomposition pass over the specified session.
+ *
+ * @param session Target session. Non-NULL.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
 CelsResult CelSessionRecompose(CEL_Session *session)
 {
     return CelsSessionRecompose(session);
 }
 
+/**
+ * Triggers a recomposition pass across all active sessions in the global registry.
+ *
+ * @return CELS_OK if all sessions recomposed successfully; otherwise returns the last error code.
+ */
 CelsResult CelsRecomposeAllSessions(void)
 {
     CelsResult lastRes = CELS_OK;
     for (uint32_t i = 0; i < s_sessionRegistryCount; ++i) {
-        if (s_sessionRegistry[i].session != NULL) {
+        if (s_sessionRegistry[i].session != NULL && s_sessionRegistry[i].session->attachedCount > 0) {
             CelsResult res = CelsSessionRecompose(s_sessionRegistry[i].session);
             if (res != CELS_OK) {
                 lastRes = res;
@@ -315,6 +362,15 @@ CelsResult CelsRecomposeAllSessions(void)
     return lastRes;
 }
 
+/**
+ * Allocates a 64-byte cache-aligned raw memory buffer from the session slab's high-water data arena.
+ *
+ * Moves dataGapEnd downward in O(1) time without heap allocation.
+ *
+ * @param s    Target session. Safe if NULL.
+ * @param size Byte size of memory requested.
+ * @return Cache-aligned pointer to allocated memory in slab, or NULL on arena overflow.
+ */
 void *CelsSessionAllocData(CelsSession *s, size_t size)
 {
     if (s == NULL || size == 0) return NULL;
@@ -327,6 +383,15 @@ void *CelsSessionAllocData(CelsSession *s, size_t size)
     return &s->dataArena[s->dataGapEnd];
 }
 
+/**
+ * Double-buffered reactive state lookup/allocation helper for legacy macros.
+ *
+ * @param s          Target session. Safe if NULL (resolves ambient session).
+ * @param id         Unique 64-bit state identifier.
+ * @param size       State struct size in bytes.
+ * @param defaultVal Optional initial state payload. Safe if NULL.
+ * @return Pointer to published front buffer payload.
+ */
 void *CelsSessionRememberState(CEL_Session *s, CEL_Id id, size_t size, const void *defaultVal)
 {
     if (s == NULL) {
@@ -337,6 +402,12 @@ void *CelsSessionRememberState(CEL_Session *s, CEL_Id id, size_t size, const voi
     return cell ? cell->frontBuffer : NULL;
 }
 
+/**
+ * Returns the recommended slab byte capacity for a session capacity profile.
+ *
+ * @param profile Target workload capacity profile.
+ * @return Total slab size in bytes (e.g. 16 KiB, 64 KiB, 512 KiB).
+ */
 size_t CelsSlabSizeFromProfile(CelsSessionProfile profile)
 {
     switch (profile) {
@@ -353,6 +424,12 @@ size_t CelsSlabSizeFromProfile(CelsSessionProfile profile)
     }
 }
 
+/**
+ * Returns the maximum composable group limit for a session capacity profile.
+ *
+ * @param profile Target workload capacity profile.
+ * @return Maximum supported composable node count.
+ */
 uint32_t CelsMaxComposablesFromProfile(CelsSessionProfile profile)
 {
     switch (profile) {
@@ -369,6 +446,12 @@ uint32_t CelsMaxComposablesFromProfile(CelsSessionProfile profile)
     }
 }
 
+/**
+ * Generates a pre-dimensioned CelsSessionConfig matching a workload capacity profile.
+ *
+ * @param profile Target workload capacity profile.
+ * @return Populated CelsSessionConfig struct with optimal slab size and group limits.
+ */
 CelsSessionConfig CelsSessionProfileConfig(CelsSessionProfile profile)
 {
     CelsSessionConfig cfg = {0};
@@ -379,6 +462,14 @@ CelsSessionConfig CelsSessionProfileConfig(CelsSessionProfile profile)
     return cfg;
 }
 
+/**
+ * Generates an auto-scaled CelsSessionConfig dimensioned for a target composable count.
+ *
+ * Selects the smallest capacity profile that fits maxComposables to minimize memory footprint.
+ *
+ * @param maxComposables Estimated or required composable count.
+ * @return Populated CelsSessionConfig struct.
+ */
 CelsSessionConfig CelsSessionCapacityConfig(uint32_t maxComposables)
 {
     CelsSessionConfig cfg = {0};
@@ -412,6 +503,12 @@ CelsSessionConfig CelsSessionCapacityConfig(uint32_t maxComposables)
     return cfg;
 }
 
+/**
+ * Initializes a CelsSession instance configured for a specific capacity profile.
+ *
+ * @param session Target session struct. Non-NULL.
+ * @param profile Target workload capacity profile.
+ */
 void CelsSessionInitWithProfile(CelsSession *session, CelsSessionProfile profile)
 {
     CelsSessionConfig cfg = CelsSessionProfileConfig(profile);
@@ -518,6 +615,7 @@ void CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
         : CELS_MAX_DRAIN_ITERATIONS;
 
     CelsStateRegistryInit(&s->stateRegistry);
+    CelsEventQueueInit(&s->eventQueue);
 }
 
 /**
@@ -557,6 +655,7 @@ void CelsSessionDestroy(CelsSession *s)
         CelsFreeAlignedSlab(s->slab);
     }
 
+    CelsEventQueueClear(&s->eventQueue);
     s->magic = 0;
     memset(s, 0, sizeof(*s));
 }
@@ -608,6 +707,18 @@ void CelsSessionAttachComposition(CEL_Session *s,
     };
 }
 
+/**
+ * Associates lifecycle callback hooks with the currently active composable group.
+ *
+ * Records the group key, group ID, instance pointer, and destructor callback into
+ * the session's cleanup array. If onCreate is non-NULL, invokes it immediately.
+ * When the group is later pruned or destroyed, onDestroy will be executed to reclaim resources.
+ *
+ * @param s         Active session instance. Safe if NULL or outside composition.
+ * @param instance  User state or resource instance to manage with lifecycle callbacks. Safe if NULL.
+ * @param onCreate  Optional constructor callback invoked immediately upon registration. May be NULL.
+ * @param onDestroy Optional destructor callback invoked when the associated group is unmounted. May be NULL.
+ */
 void CelsSessionRegisterLifecycle(CelsSession *s, void *instance, void (*onCreate)(void *, CelsSession *), void (*onDestroy)(void *, CelsSession *))
 {
     if (s == NULL || s->currentDepth == 0) return;
@@ -633,6 +744,18 @@ void CelsSessionRegisterLifecycle(CelsSession *s, void *instance, void (*onCreat
     }
 }
 
+/**
+ * Updates the destructor callback and instance pointer for an active lifecycle hook.
+ *
+ * Searches existing cleanup entries matching the current group's ID or key and refreshes
+ * their instance and onDestroy function pointers. This prevents stale code addresses after
+ * dynamic module hot-reload without re-triggering constructors. If no matching entry exists,
+ * registers a new lifecycle hook without invoking onCreate.
+ *
+ * @param s         Active session instance. Safe if NULL or outside composition.
+ * @param instance  Updated user state or resource instance pointer.
+ * @param onDestroy Updated destructor callback pointer to execute when the group unmounts. May be NULL.
+ */
 void CelsSessionUpdateLifecycle(CelsSession *s, void *instance, void (*onDestroy)(void *, CelsSession *))
 {
     if (s == NULL || s->currentDepth == 0) return;
@@ -677,6 +800,31 @@ void CelsSessionDetachComposition(CelsSession *s, uint64_t key)
     }
 }
 
+bool CelsSessionNeedsRecompose(const CelsSession *s)
+{
+    if (s == NULL) {
+        return false;
+    }
+    if (!s->hasComposedOnce) {
+        return true;
+    }
+    if (s->queueCount > 0 || s->nextFrameQueueCount > 0) {
+        return true;
+    }
+    if (s->isHotReloadPending) {
+        return true;
+    }
+    if (s->eventQueue.count > 0) {
+        return true;
+    }
+    for (uint32_t i = 0; i < s->stateRegistry.cellCount; ++i) {
+        if (s->stateRegistry.cells[i].inUse && s->stateRegistry.cells[i].isDirty) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /**
  * Executes a recomposition pass over the session tree.
  *
@@ -694,6 +842,11 @@ CelsResult CelsSessionRecompose(CelsSession *s)
         return CELS_ERROR_INVALID_STATE;
     }
 
+    /* Transfer next-frame task/external invalidations to active invalidation queue */
+    while (s->nextFrameQueueCount > 0 && s->queueCount < CELS_MAX_QUEUE) {
+        s->invalidationQueue[s->queueCount++] = s->nextFrameQueue[--s->nextFrameQueueCount];
+    }
+
     bool hasDirtyState = false;
     for (uint32_t i = 0; i < s->stateRegistry.cellCount; ++i) {
         if (s->stateRegistry.cells[i].inUse && s->stateRegistry.cells[i].isDirty) {
@@ -702,10 +855,7 @@ CelsResult CelsSessionRecompose(CelsSession *s)
         }
     }
 
-    if (s->hasComposedOnce && s->queueCount == 0 && !s->isHotReloadPending) {
-        if (hasDirtyState) {
-            CelsStatePublishDirty(s);
-        }
+    if (s->hasComposedOnce && s->queueCount == 0 && !s->isHotReloadPending && !hasDirtyState) {
         return CELS_OK;
     }
     s->isHotReloadPending = false;
@@ -715,16 +865,18 @@ CelsResult CelsSessionRecompose(CelsSession *s)
 
     uint32_t iterations = 0;
     s->isRecomposing = true;
-
-    /* Publish double-buffered state snapshots at frame boundary before evaluation */
-    CelsStatePublishDirty(s);
+    s->isHandlingEvent = false;
 
     do {
         if (++iterations > s->maxDrainIterations) {
             s->isRecomposing = false;
+            s->isHandlingEvent = false;
             s_currentSession = prevSession;
             return CELS_ERROR_RECOMPOSE_DID_NOT_CONVERGE;
         }
+
+        /* Publish double-buffered state snapshots before each evaluation pass */
+        CelsStatePublishDirty(s);
 
         DrainInvalidationQueue(s);
 
@@ -784,8 +936,12 @@ CelsResult CelsSessionRecompose(CelsSession *s)
         s->postRecomposeHook(s, s->postRecomposeUserData);
     }
 
+    /* Retire consumed events at frame completion */
+    CelsEventRetireConsumed(s);
+
     s->hasComposedOnce = true;
     s->isRecomposing = false;
+    s->isHandlingEvent = false;
     if (prevSession) {
         s_currentSession = prevSession;
     }
@@ -821,6 +977,16 @@ void CelsSessionHotReload(CelsSession *s)
 
 /**
  * Registers an engine subsystem module (SDL, Flecs, Audio, etc.) with the session.
+ *
+ * If the session belongs to a host CelsEngine, delegates registration to CelsEngineRegisterModule.
+ * Otherwise, records or updates the binding in the session's internal fallback module table.
+ *
+ * @param s         Target session. Non-NULL.
+ * @param key       Unique 64-bit type or subsystem identifier (e.g. CELS_TYPE_KEY(SDL_Renderer)).
+ * @param name      Human-readable name of the module for diagnostics. Safe if NULL.
+ * @param instance  Subsystem module instance pointer to bind. Non-NULL.
+ * @param onReload  Optional callback invoked during module hot-reload. May be NULL.
+ * @param onDestroy Optional destructor callback invoked when the session or module is torn down. May be NULL.
  */
 void CelsSessionRegisterModule(CelsSession *s, uint64_t key, const char *name,
                                void *instance,
@@ -857,6 +1023,13 @@ void CelsSessionRegisterModule(CelsSession *s, uint64_t key, const char *name,
 
 /**
  * Retrieves a registered subsystem module pointer by its 64-bit key.
+ *
+ * If the session is associated with an engine host, queries CelsEngineGetModule.
+ * Otherwise, searches the session's fallback module table.
+ *
+ * @param s   Target session. Safe if NULL.
+ * @param key Unique 64-bit subsystem or component identifier.
+ * @return Pointer to registered subsystem module instance, or NULL if not found or session is NULL.
  */
 void *CelsSessionGetModule(const CelsSession *s, uint64_t key)
 {
@@ -1395,6 +1568,9 @@ void *CelsGetState(CelsSession *s, uint64_t key)
  */
 void CelsSessionInvalidateKey(CelsSession *session, uint64_t key)
 {
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
     if (session == NULL) return;
     for (uint32_t i = 0; i < session->nextFrameQueueCount; ++i) {
         if (session->nextFrameQueue[i] == key) return;
@@ -1404,6 +1580,43 @@ void CelsSessionInvalidateKey(CelsSession *session, uint64_t key)
     }
 }
 
+/**
+ * Queues a 64-bit group key for immediate invalidation in the active recomposition pass.
+ *
+ * If recomposition is actively in progress, pushes the key directly to the active invalidation
+ * queue to schedule another drain iteration in the current frame. Otherwise, delegates to
+ * CelsSessionInvalidateKey to schedule it for the next frame.
+ *
+ * @param session Target session. Can be NULL (falls back to ambient session).
+ * @param key     Unique 64-bit group key to invalidate immediately.
+ */
+void CelsSessionInvalidateKeyImmediate(CelsSession *session, uint64_t key)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL) return;
+    if (session->isRecomposing) {
+        for (uint32_t i = 0; i < session->queueCount; ++i) {
+            if (session->invalidationQueue[i] == key) return;
+        }
+        if (session->queueCount < CELS_MAX_QUEUE) {
+            session->invalidationQueue[session->queueCount++] = key;
+        }
+        return;
+    }
+    CelsSessionInvalidateKey(session, key);
+}
+
+/**
+ * Returns the stable 64-bit key of the currently executing composable group.
+ *
+ * Inspects the current composition stack depth and returns the callsites or synthesized
+ * key of the active composable group in the session hierarchy.
+ *
+ * @param session Target session. Can be NULL (falls back to ambient session).
+ * @return Unique 64-bit key of the current group, or 0 if outside any composition or session is NULL.
+ */
 uint64_t CelsSessionGetCurrentGroupKey(const CelsSession *session)
 {
     if (session == NULL) {

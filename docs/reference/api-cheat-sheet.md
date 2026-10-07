@@ -68,9 +68,17 @@ Operations invoked inside composable functions, tasks, or event handlers to inte
 | [`cel_remember`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L797) | `cel_remember(Type, Init)`<br>`cel_remember(Type, Init, OnDestroy)` | `COMPOSABLE`, `COMPOSITION` | `Type*` | Allocates or retrieves private slot memory pinned across frames with cleanup. |
 | [`cel_remember_state`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L710) | `cel_remember_state(Type, { .field = val, ... })`<br>`cel_remember_state_keyed(id, Type, { ... })` | `COMPOSABLE`, `COMPOSITION`, `HOST_LOOP` | `Type*` | Allocates/resolves persistent double-buffered state in ambient session slab (auto-hashes Type name). |
 | [`cel_watch`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L848) | `cel_watch(instancePtr)`<br>`cel_watch(Type, id)`<br>`cel_watch(session, Type, id)` | `COMPOSABLE` | `const Type*` | Reads published state snapshot and registers calling composable as observer. |
-| [`cel_get_state`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L860) | `cel_get_state(Type)`<br>`cel_get_state(session, Type)`<br>`cel_get_state(session, id, Type)` | `COMPOSABLE`, `COMPOSITION`, `HOST_LOOP` | `const Type*` | Passive read of published state snapshot without subscribing for recomposition. |
-| [`cel_mutate`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L920) | `cel_mutate(ptr) { this->... }`<br>`cel_mutate(session, Type) { this->... }`<br>`cel_mutate(session, id, Type) { this->... }`<br>`cel_mutate(session, id, Type, val)` | `HOST_LOOP`, `TASK_RUN`, Event Callbacks | Scoped block / statement | Modifies staging back buffer and schedules observers for recomposition. |
-| [`cel_mutate_ptr`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L986) | `cel_mutate_ptr(session, id, Type)` | `HOST_LOOP`, `TASK_RUN`, Event Callbacks | `Type*` | Low-level direct back-buffer pointer retrieval; marks observers dirty. |
+| [`cel_mutate`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L920) | `cel_mutate(ptr) { this->... }` | `TASK_RUN`, Event Callbacks, Composable Handlers | Scoped block | Modifies state instance back buffer and schedules observers for recomposition. Sessions only mutate their own state! |
+| [`cel_event`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1046) | `cel_event(Type, ...)` | `COMPOSABLE`, `TASK_RUN`, Callbacks | `bool` | Emits a local tree event that bubbles up to ancestor composables with zero frame delay. |
+| [`cel_listen`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1060) | `cel_listen(Type) { ... }`<br>`cel_listen(Type, var) { ... }` | `COMPOSABLE` | Scoped loop | Iterates over unconsumed local events bubbling from descendants within current frame. 1-arg form eliminates unused variable warnings. |
+| [`cel_signal`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1078) | `cel_signal(targetSession, Type, ...)` | `ANY_SCOPE` | `bool` | Sends targeted discrete signal directly into another session's inbox. |
+| [`cel_connect`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1110) | `cel_connect(Type) { ... }`<br>`cel_connect(Type, var) { ... }` | `COMPOSABLE` | Scoped loop | Iterates over unconsumed targeted signals received by this session. 1-arg form eliminates unused variable warnings. |
+| [`cel_broadcast`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1127) | `cel_broadcast(Type, ...)` | `ANY_THREAD`, `ANY_SCOPE` | `bool` | Publishes global thread-safe engine broadcast distributed across all sessions. |
+| [`cel_bind`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1155) | `cel_bind(Type) { ... }`<br>`cel_bind(Type, var) { ... }` | `COMPOSABLE` | Scoped loop | Binds to unconsumed engine-wide broadcasts matching Type. 1-arg form eliminates unused variable warnings. |
+| [`cel_wait_for`](file:///D:/cels-workspace/library/cels/include/cels/runtime/task.h#L292) | `cel_wait_for(Type, outPtr)` | `TASK_RUN` | `void` | Suspends task fiber non-blockingly until local event, signal, or broadcast of Type arrives. |
+| [`cel_wait_signal`](file:///D:/cels-workspace/library/cels/include/cels/runtime/task.h#L305) | `cel_wait_signal(Type, outPtr)` | `TASK_RUN` | `void` | Suspends task fiber non-blockingly until targeted signal of Type arrives. |
+| [`cel_wait_broadcast`](file:///D:/cels-workspace/library/cels/include/cels/runtime/task.h#L318) | `cel_wait_broadcast(Type, outPtr)` | `TASK_RUN` | `void` | Suspends task fiber non-blockingly until engine broadcast of Type arrives. |
+| [`cel_wait_for_timeout`](file:///D:/cels-workspace/library/cels/include/cels/runtime/task.h#L336) | `cel_wait_for_timeout(Type, outPtr, timeoutMs)` | `TASK_RUN` | `bool` | Suspends task fiber until event arrives or timeoutMs elapses; returns true if received. |
 | [`cel_lifecycle`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L654) | `cel_lifecycle(Name)`<br>`cel_lifecycle(Name, argument)` | `COMPOSABLE` | `void` | Attaches a declared `CEL_Lifecycle` controller instance to the current composable. |
 | [`cel_transition`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1495) | `cel_transition(target, durationMs)`<br>`cel_transition(target, durationMs, easing)` | `COMPOSABLE` | `float` | Declaratively eases a scalar value toward target over time with auto-invalidation. |
 | [`cel_task`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1153) | `cel_task(Name, ...)` | `COMPOSABLE`, `COMPOSITION` | `void` | Schedules and advances a declared `CEL_Task` inside composition hierarchy. |
@@ -92,6 +100,8 @@ Operations invoked inside composable functions, tasks, or event handlers to inte
 | [`cel_engine_get`](file:///D:/cels-workspace/library/cels/include/cels/engine.h#L348) | `cel_engine_get(Type)` | `COMPOSABLE`, `COMPOSITION`, `HOST_LOOP` | `Type*` | Alias for `CEL_GetModule(Type)`. |
 | [`cel_quit`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1013) | `cel_quit()` | `COMPOSABLE`, `HOST_LOOP`, Callbacks | `void` | Requests host engine to terminate frame loop at next boundary. |
 | [`cel_engine_quit`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1007) | `cel_engine_quit()` | `COMPOSABLE`, `HOST_LOOP`, Callbacks | `void` | Alias for `cel_quit()`. |
+| [`cel_create_session`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L998) | `cel_create_session(engine, name, profile)` | `HOST_LOOP` | `CelsSession*` | Creates and registers a named secondary session supervised by the engine. |
+| [`cel_get_session`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1015) | `cel_get_session(engine, name)` | `HOST_LOOP`, `ANY_THREAD` | `CelsSession*` | Retrieves an engine-managed session by name ("main", "root", or secondary). |
 | [`cel_session`](file:///D:/cels-workspace/library/cels/include/cels/runtime/session.h#L269) | `cel_session(CEL_Id sessionId)` | `HOST_LOOP`, `ANY_THREAD` | `CEL_Session*` | Retrieves a registered session by its 64-bit identifier. |
 | [`cel_active_session`](file:///D:/cels-workspace/library/cels/include/cels/runtime/session.h#L276) | `cel_active_session()` | `COMPOSABLE`, `COMPOSITION` | `CEL_Session*` | Returns current ambient session bound to calling thread. |
 | [`cel_recompose_all`](file:///D:/cels-workspace/library/cels/include/cels/runtime/session.h#L391) | `cel_recompose_all()` | `HOST_LOOP` | `CelsResult` | Recomposes all registered active sessions across the runtime. |
@@ -107,21 +117,22 @@ Direct C functions, engine coordinators, slot table dual gap buffers, and intern
 
 | Function | Exact Signature | Allowed Scope | Return | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `CelsEngineInit` | `CelsResult CelsEngineInit(CelsEngine *engine, const char *appName)` | `HOST_LOOP` | `CelsResult` | Initializes engine runtime, loads app DLL or binds static manifest. |
+| `CelsEngineInit` | `CelsResult CelsEngineInit(CelsEngine *engine, const char *appName)` | `HOST_LOOP` | `CelsResult` | Initializes engine runtime, loads app DLL or binds static app definition. |
 | `CelsEngineInitWithOptions` | `CelsResult CelsEngineInitWithOptions(CelsEngine *engine, const char *appName, const CelsSessionConfig *config)` | `HOST_LOOP` | `CelsResult` | Initializes engine with explicit session slab/profile configuration. |
 | `CelsEngineInitWithProfile` | `CelsResult CelsEngineInitWithProfile(CelsEngine *engine, const char *appName, CelsSessionProfile profile)` | `HOST_LOOP` | `CelsResult` | Initializes engine with named workload capacity profile (e.g. `CELS_PROFILE_1K`). |
 | `CelsEngineDestroy` | `void CelsEngineDestroy(CelsEngine *engine)` | `HOST_LOOP` | `void` | Tears down engine, destroying modules, primary session, and app DLL. |
 | `CelsEngineStart` | `CelsResult CelsEngineStart(CelsEngine *engine)` | `HOST_LOOP` | `CelsResult` | Starts execution and performs initial composition mount. |
 | `CelsEngineEnd` | `void CelsEngineEnd(CelsEngine *engine)` | `HOST_LOOP` | `void` | Stops execution and invokes teardown hooks. |
 | `CelsEngineRecompose` | `CelsResult CelsEngineRecompose(CelsEngine *engine)` | `HOST_LOOP` | `CelsResult` | Triggers a recomposition pass on primary session and active sessions. |
-| `CelsEngineLoadApp` | `CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appName)` | `HOST_LOOP` | `CelsResult` | Discovers, shadow-copies, and links app DLL (Debug) or manifest (Release). |
+| `CelsEngineLoadApp` | `CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appName)` | `HOST_LOOP` | `CelsResult` | Discovers, shadow-copies, and links app DLL (Debug) or app definition (Release). |
 | `CelsEnginePollReload` | `bool CelsEnginePollReload(CelsEngine *engine)` | `HOST_LOOP` | `bool` | Polls disk for modified app binary and hot-reloads symbols without restart. |
 | `CelsEngineRegisterModule` | `void CelsEngineRegisterModule(CelsEngine *e, uint64_t k, const char *n, void *inst, void (*onDestroy)(void*))` | `HOST_LOOP` | `void` | Registers a subsystem module binding in engine surviving DLL reloads. |
 | `CelsEngineGetModule` | `void *CelsEngineGetModule(const CelsEngine *engine, uint64_t key)` | `HOST_LOOP`, `COMPOSABLE` | `void*` | Retrieves subsystem module instance pointer by 64-bit key. |
 | `CelsGetCurrentEngine` | `CelsEngine *CelsGetCurrentEngine(void)` | `HOST_LOOP`, `ANY_THREAD` | `CelsEngine*` | Returns ambient host engine bound to calling thread. |
-| `CelsSetCurrentEngine` | `void CelsSetCurrentEngine(CelsEngine *engine)` | `HOST_LOOP` | `void` | Binds host engine instance to calling thread. |
+| `CelsEngineCreateSession` | `CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsSessionProfile profile)` | `HOST_LOOP` | `CelsSession*` | Creates and registers named secondary session supervised by engine. |
+| `CelsEngineGetSession` | `CelsSession *CelsEngineGetSession(CelsEngine *engine, const char *name)` | `HOST_LOOP`, `ANY_THREAD` | `CelsSession*` | Retrieves supervised session by name ("main", "root", or secondary). |
 | `CelsEngineQuit` | `void CelsEngineQuit(CelsEngine *engine)` | `HOST_LOOP`, `COMPOSABLE` | `void` | Requests engine to terminate main loop (`engine->shouldQuit = true`). |
-| `CelsEngineRunStandalone` | `CelsResult CelsEngineRunStandalone(const CelsAppManifest *m, const CelsSessionConfig *c)` | `HOST_LOOP` | `CelsResult` | Runs complete monolithic standalone runtime loop until exit. |
+| `CelsEngineRunStandalone` | `CelsResult CelsEngineRunStandalone(const CelsAppDef *m, const CelsSessionConfig *c)` | `HOST_LOOP` | `CelsResult` | Runs complete monolithic standalone runtime loop until exit. |
 
 ### 3.2 Session Coordinator & Workload Capacity Profiles (`include/cels/runtime/session.h`)
 
@@ -176,6 +187,7 @@ Direct C functions, engine coordinators, slot table dual gap buffers, and intern
 | `CelsStateWatch` | `const void *CelsStateWatch(CelsSession *s, CEL_Id id, size_t size)` | `COMPOSABLE` | `const void*` | Subscribes active composable and returns front-buffer pointer. |
 | `CelsStateGet` | `const void *CelsStateGet(CelsSession *s, CEL_Id id, size_t size)` | `COMPOSABLE`, `HOST_LOOP` | `const void*` | Passively reads front-buffer snapshot without subscribing. |
 | `CelsStateMutate` | `void *CelsStateMutate(CelsSession *s, CEL_Id id, size_t size)` | `HOST_LOOP`, Callbacks | `void*` | Retrieves mutable back-buffer pointer and queues observers dirty. |
+| `cels_session_mutate` | `cels_session_mutate(session, Type)`<br>`cels_session_mutate(session, id, Type)` | `TEST_FIXTURE`, Internal | Scoped block | Tier 3 Low-Level: Directly stages a mutation on a session cell by key for raw unit tests. |
 | `CelsStatePublishDirty` | `void CelsStatePublishDirty(CelsSession *s)` | `HOST_LOOP` | `void` | Copies modified back buffers to front buffers and resets dirty flags. |
 | `CelsStateRegistryUnsubscribeKey` | `void CelsStateRegistryUnsubscribeKey(CelsStateRegistry *r, uint64_t groupKey)` | Internal, Unmount | `void` | Unsubscribes group key from all observed reactive state cells. |
 | `CelsWatchStateInstance` | `const void *CelsWatchStateInstance(CelsSession *s, const void *ptr)` | `COMPOSABLE` | `const void*` | Subscribes active composable to a hoisted state instance pointer. |
@@ -285,3 +297,20 @@ Direct C functions, engine coordinators, slot table dual gap buffers, and intern
 | `CelsFlushLogs` | `void CelsFlushLogs(void)` | `HOST_LOOP` | `void` | Flushes accumulated ring buffer logs to stdout/stderr. |
 | `CelsGetVersionString` | `const char *CelsGetVersionString(void)` | `ANY_THREAD` | `const char*` | Returns static semantic version string (e.g. `"0.1.2"`). |
 | `CelsGetVersionCode` | `uint32_t CelsGetVersionCode(void)` | `ANY_THREAD` | `uint32_t` | Returns packed 32-bit integer version code (`0xMMmmPPbb`). |
+
+### 3.9 Application Management & Multi-DLL Hosting (`include/cels/runtime/module.h` & `engine.h`)
+
+| Function | Exact Signature | Allowed Scope | Return | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `CelsAppLoad` | `CelsResult CelsAppLoad(CelsApp *app, CelsEngine *engine, CelsSession *session, const char *dllPath)` | `HOST_LOOP` | `CelsResult` | Loads dynamic application module and binds it to engine and target session. |
+| `CelsAppLoadEntry` | `CelsResult CelsAppLoadEntry(CelsApp *app, CelsEngine *engine, CelsSession *session, const char *dllPath, const char *entrySymbol)` | `HOST_LOOP` | `CelsResult` | Loads dynamic library with specific entry symbol for multiple apps per DLL. |
+| `CelsAppBindStatic` | `CelsResult CelsAppBindStatic(CelsApp *app, CelsEngine *engine, CelsSession *session, const CelsAppDef *def)` | `HOST_LOOP` | `CelsResult` | Binds static application definition for monolithic builds. |
+| `CelsAppStart` | `CelsResult CelsAppStart(CelsApp *app)` | `HOST_LOOP` | `CelsResult` | Synchronizes ambient session, calls `onStart(engine, session)`, runs initial composition pass. |
+| `CelsAppCheckReload` | `bool CelsAppCheckReload(CelsApp *app)` | `HOST_LOOP` | `bool` | Detects disk modifications, shadow-copies new binary, re-links symbols, calls `onReload`. |
+| `CelsAppReload` | `CelsResult CelsAppReload(CelsApp *app)` | `HOST_LOOP` | `CelsResult` | Forces immediate hot-swap reload of the application dynamic library. |
+| `CelsAppDestroy` | `void CelsAppDestroy(CelsApp *app)` | `HOST_LOOP` | `void` | Calls `onEnd(engine, session)`, detaches composition tree, frees DLL, sweeps shadow files. |
+| `CelsEngineSetMode` | `void CelsEngineSetMode(CelsEngine *engine, CelsEngineMode mode)` | `HOST_LOOP` | `void` | Sets engine execution mode (`CELS_MODE_IMMEDIATE` vs `CELS_MODE_RETAINED`). |
+| `CelsEngineGetMode` | `CelsEngineMode CelsEngineGetMode(const CelsEngine *engine)` | `HOST_LOOP` | `CelsEngineMode` | Returns current engine execution mode. |
+| `CelsEngineNeedsRecompose` | `bool CelsEngineNeedsRecompose(const CelsEngine *engine)` | `HOST_LOOP` | `bool` | In retained mode, checks if primary or any secondary session requires recomposition. |
+| `CelsSessionNeedsRecompose` | `bool CelsSessionNeedsRecompose(const CelsSession *session)` | `HOST_LOOP` | `bool` | Checks if session has uncomposed root, dirty state cells, pending events, or hot-reload. |
+

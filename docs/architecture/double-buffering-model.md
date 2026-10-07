@@ -176,10 +176,10 @@ CELS strictly prohibits calling `cel_mutate` from within an active composable du
 ```c
 void *CelsStateMutate(CelsSession *session, CEL_Id id, size_t size)
 {
-    /* Enforce DSL rule: composables must remain pure functions of state */
-    assert((!session->isRecomposing || session->isExecutingTask) &&
-           "cel_mutate cannot be called inside a Composable or Composition body. "
-           "Perform mutations in event callbacks, input handlers, simulation loops, or CEL_Task coroutines.");
+    /* Enforce DSL rule: composables must remain pure functions of state, unless handling events */
+    assert((!session->isRecomposing || session->isExecutingTask || session->isHandlingEvent) &&
+           "cel_mutate cannot be called inside a plain Composable or Composition body. "
+           "Perform mutations in cel_listen/cel_connect handlers, input handlers, simulation loops, or CEL_Task coroutines.");
 
     CelsStateCell *cell = CelsStateRegistryFindCell(&session->stateRegistry, id);
     if (cell == NULL) return NULL;

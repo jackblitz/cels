@@ -105,7 +105,19 @@ void CelsTaskWait(CelsSession *session, CelsTaskState *state, uint64_t key, int 
 }
 
 /**
- * Advances a task fiber by one frame step.
+ * Advances a task fiber by executing one step during recomposition.
+ *
+ * Checks whether the task is eligible to run (verifying not cancelled, not done,
+ * timer deadline elapsed via CelsTaskShouldWait, and event conditions satisfied via
+ * CelsTaskEventShouldWait). If eligible, creates the dedicated fiber if not yet
+ * allocated, captures the current caller fiber as return target, switches execution
+ * into the fiber, and upon return cleans up the fiber if the task completed or cancelled.
+ *
+ * @param session Active session owning the task. Safe if NULL.
+ * @param state   Pointer to task state structure. Safe if NULL.
+ * @param key     Unique 64-bit key of the task composable group for invalidation.
+ * @param fiberFn Fiber entry trampoline function.
+ * @param param   Context parameter forwarded to the fiber entry function.
  */
 void CelsTaskStep(CelsSession *session, CelsTaskState *state, uint64_t key, CelsFiberFn fiberFn, void *param)
 {
@@ -113,6 +125,9 @@ void CelsTaskStep(CelsSession *session, CelsTaskState *state, uint64_t key, Cels
         return;
     }
     if (CelsTaskShouldWait(session, state, key)) {
+        return;
+    }
+    if (CelsTaskEventShouldWait(session, state, key)) {
         return;
     }
 
@@ -144,7 +159,12 @@ void CelsTaskStep(CelsSession *session, CelsTaskState *state, uint64_t key, Cels
 }
 
 /**
- * Completes a task fiber and switches execution back to the session caller.
+ * Completes a task fiber and switches execution back to the caller fiber.
+ *
+ * Invoked at the end of a task fiber's run block. Marks the task as completed
+ * (if not cancelled) and switches CPU context back to the session's calling fiber.
+ *
+ * @param state Pointer to task state structure. Safe if NULL.
  */
 void CelsTaskFinishFiber(CelsTaskState *state)
 {
@@ -161,7 +181,12 @@ void CelsTaskFinishFiber(CelsTaskState *state)
 }
 
 /**
- * Destroys any active fiber associated with a task state.
+ * Destroys any active stackful fiber associated with a task state.
+ *
+ * Deallocates the fiber and stack memory when a task unmounts from the composable
+ * tree or is explicitly cancelled. Resets the taskFiber pointer to NULL.
+ *
+ * @param state Pointer to task state structure. Safe if NULL.
  */
 void CelsTaskCleanup(CelsTaskState *state)
 {

@@ -3,10 +3,10 @@
   <p align="center"><strong>Declarative, Reactive Composition for Pure ANSI C99.</strong></p>
   <p align="center">Describe <strong>what</strong> should exist. CELS handles creation, destruction, state changes, and reconciliation automatically.</p>
   <p align="center">
-    <img src="https://img.shields.io/badge/version-v0.3.0-blue" alt="version">
+    <img src="https://img.shields.io/badge/version-v0.4.0-blue" alt="version">
     <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="license">
     <img src="https://img.shields.io/badge/standard-C99-orange?logo=c" alt="C99">
-    <img src="https://img.shields.io/badge/tests-61%20passing-brightgreen" alt="tests">
+    <img src="https://img.shields.io/badge/tests-73%20passing-brightgreen" alt="tests">
     <img src="https://img.shields.io/badge/allocations-0%20runtime%20heap-blueviolet" alt="zero-alloc">
   </p>
 </p>
@@ -62,6 +62,7 @@ Think React's or Jetpack Compose's component and slot-table model, engineered fo
 
 - ⚡ **Zero Runtime Heap Allocations**: All component structural groups, remembered variables, and reactive slots live inside an L1/L2 cache-aligned dual gap-buffer slab. Zero calls to `malloc()` or `free()` during frame recomposition.
 - ⏭️ **$\mathcal{O}(1)$ Subtree Skipping**: If a parent state changes but a child's watched dependencies remain untouched, CELS skips entire subtrees in constant time.
+- 📬 **Discrete Events, Signals & Global Broadcasts**: Communicate up the tree (`cel_event`/`cel_listen`), across sessions (`cel_signal`/`cel_connect`), and across threads/engine (`cel_broadcast`/`cel_bind`), with non-blocking task awaiting (`cel_wait_for`, `cel_wait_for_timeout`).
 - 🔥 **Sub-50ms Hot-Reloading in Development**: Run your host engine while editing application code live in CLion or your favorite IDE. Rebuilds swap in `<50ms` with **zero Windows DLL file locks** and full state retention.
 - 📦 **Single Monolithic Binary in Production**: Switch to Release mode to compile host and app into a single standalone `.exe` with **zero `.dll` dependencies**.
 - 🎯 **Type-Safe State Hoisting**: Pass state instances down component trees with standard C arguments—zero global string IDs or hash map lookups.
@@ -76,7 +77,7 @@ Think React's or Jetpack Compose's component and slot-table model, engineered fo
 ### 1. Add to CMake
 ```cmake
 include(FetchContent)
-FetchContent_Declare(cels GIT_REPOSITORY https://github.com/jackblitz/cels.git GIT_TAG v0.3.0)
+FetchContent_Declare(cels GIT_REPOSITORY https://github.com/jackblitz/cels.git GIT_TAG v0.4.0)
 FetchContent_MakeAvailable(cels)
 
 # In Debug: builds cel_host (.exe) and cel_dll (.dll) with sub-50ms live hot-reloading
@@ -105,7 +106,7 @@ CEL_OnStart(App_OnStart) {
     cel_attach(session, AppRoot);
 }
 
-CEL_App(MyApp,
+CEL_App_Def(MyApp,
     .onStart = App_OnStart
 );
 ```
@@ -127,9 +128,10 @@ In CLion or your IDE, select **`cel_dll`** and hit **Run** (<kbd>Shift</kbd>+<kb
 ## Examples & Documentation
 
 Explore the included example applications:
-- **[`examples/window`](examples/window)**: Multi-component desktop window with state hoisting and resource lifecycles.
+- **[`examples/window`](examples/window)**: Multi-component desktop window with state hoisting, local tree events, and resource lifecycles.
 - **[`examples/task`](examples/task)**: Async fiber coroutines, non-blocking delays, and network simulation.
-- **[`examples/transition`](examples/transition)**: Smooth declarative transitions and easing curves.
+- **[`examples/transition`](examples/transition)**: Smooth declarative transitions, easing curves, and child-to-parent event bubbling.
+- **[`examples/event`](examples/event)**: Unified messaging subsystem: tree event bubbling (`cel_event` / `cel_listen`), targeted session signals (`cel_signal` / `cel_connect`), global engine broadcasts (`cel_broadcast` / `cel_bind`), and task fiber awaiting.
 
 Comprehensive guides and technical documentation are available in the **[`docs/`](docs/)** directory:
 - [Developer Guides](docs/guides/): Step-by-step guides for getting started, state, tasks, and motion.
@@ -141,7 +143,7 @@ Comprehensive guides and technical documentation are available in the **[`docs/`
 ## Testing & Verification
 
 ```bash
-# Run all 63 tests across 11 architectural features
+# Run all 73 tests across 12 architectural features
 ./build/windows/test_cli.exe all
 
 # Run performance benchmark suite

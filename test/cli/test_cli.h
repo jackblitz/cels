@@ -50,6 +50,7 @@ const TestSuite *GetHotReloadTestSuite(void);
 const TestSuite *GetTaskTestSuite(void);
 const TestSuite *GetTransactionTestSuite(void);
 const TestSuite *GetTransitionTestSuite(void);
+const TestSuite *GetEventTestSuite(void);
 
 /**
  * Case-insensitive string comparison helper.

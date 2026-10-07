@@ -255,7 +255,7 @@ static void TestCelRememberWithUnmount(void)
     assert(s_unmountCount == 0);
 
     /* Frame 3: Gate closes -> Child unmounts */
-    cel_mutate(&s, CEL_ID("GateState"), GateState) {
+    cels_session_mutate(&s, CEL_ID("GateState"), GateState) {
         this->open = false;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -316,7 +316,7 @@ static void TestLifecycleTransactionStaging(void)
     assert(s_capturedCount == 0);
 
     /* Frame 3: Gate closes -> node is pruned from tree -> unmount stages Delete */
-    cel_mutate(&s, CEL_ID("GateState"), GateState) {
+    cels_session_mutate(&s, CEL_ID("GateState"), GateState) {
         this->open = false;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);

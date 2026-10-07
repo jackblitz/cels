@@ -200,7 +200,7 @@ static void ResetTreeState(CelsSession *session) {
         .showOptionalSidebar = true,
         .showSubMenu = true
     }));
-    cel_mutate(session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(session, CEL_ID("AppState"), AppState) {
         this->showOptionalSidebar = true;
         this->showSubMenu = true;
     }
@@ -232,7 +232,7 @@ static void TestTreeToggleSubMenu(void) {
     assert(CelsSessionRecompose(&session) == CELS_OK);
     assert(GetActiveCount(&session) == 10);
 
-    cel_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showSubMenu = false;
     }
 
@@ -250,7 +250,7 @@ static void TestTreeToggleOptionalSidebar(void) {
     assert(CelsSessionRecompose(&session) == CELS_OK);
     assert(GetActiveCount(&session) == 10);
 
-    cel_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showOptionalSidebar = false;
     }
 
@@ -267,13 +267,13 @@ static void TestTreeReenableOptionalSidebar(void) {
 
     assert(CelsSessionRecompose(&session) == CELS_OK);
 
-    cel_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showOptionalSidebar = false;
     }
     assert(CelsSessionRecompose(&session) == CELS_OK);
     assert(GetActiveCount(&session) == 6);
 
-    cel_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showOptionalSidebar = true;
         this->showSubMenu = false;
     }
@@ -294,7 +294,7 @@ static void TestTreeFullPassSequence(void) {
     CelsDumpTree(&session);
 
     /* PASS 2: Toggling showSubMenu = false */
-    cel_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showSubMenu = false;
     }
     assert(CelsSessionRecompose(&session) == CELS_OK);
@@ -302,7 +302,7 @@ static void TestTreeFullPassSequence(void) {
     CelsDumpTree(&session);
 
     /* PASS 3: Toggling showOptionalSidebar = false */
-    cel_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showOptionalSidebar = false;
     }
     assert(CelsSessionRecompose(&session) == CELS_OK);
@@ -310,7 +310,7 @@ static void TestTreeFullPassSequence(void) {
     CelsDumpTree(&session);
 
     /* PASS 4: Re-enabling showOptionalSidebar = true */
-    cel_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
         this->showOptionalSidebar = true;
         this->showSubMenu = false;
     }

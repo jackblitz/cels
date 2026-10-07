@@ -1,37 +1,29 @@
 #pragma once
 
 #include "cels.h"
-#include <stdio.h>
 
 /**
- * Data associated with the status badge component.
+ * Discrete event emitted by the StatusBadge child composable
+ * that bubbles up the component tree to WindowContent.
  */
-typedef struct BadgeData {
-    const char *label;
-} BadgeData;
+typedef struct BadgeNotificationEvent {
+    int         badgeId;
+    const char *message;
+} BadgeNotificationEvent;
 
-/**
- * Child lifecycle demonstrating pure mount / unmount topology tracking.
- * Mounts when showBadge is enabled, and unmounts when showBadge is toggled off,
- * all while the root window remains open.
- */
-CEL_Lifecycle(StatusBadgeLifecycle, BadgeData *badge) {
+CEL_Lifecycle(BadgeLifecycle) {
     mount {
-        printf("    [BadgeLifecycle] MOUNT: Status badge mounted ('%s')\n", badge->label);
+        cel_event(BadgeNotificationEvent, {
+            .badgeId = 101,
+            .message = "Badge mounted into window tree"
+        });
     }
-    unmount {
-        printf("    [BadgeLifecycle] UNMOUNT: Status badge unmounted\n");
-    }
+    unmount {}
 }
 
 /**
- * Leaf composable rendering a badge when showBadge is enabled.
+ * Child Composable demonstrating lifecycle mount notification.
  */
 CEL_Composable(StatusBadge) {
-    BadgeData *badge = cel_remember(BadgeData, { .label = "Connected / Active" });
-    cel_lifecycle(StatusBadgeLifecycle, badge);
-    printf("    [Badge] Status: %s\n", badge->label);
+    cel_lifecycle(BadgeLifecycle);
 }
-
-
-

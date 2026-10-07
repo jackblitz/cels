@@ -285,6 +285,60 @@ bool CelsTaskIsCancelled(const CelsTaskState *state);
 #endif
 
 /**
+ * @def cel_wait_for
+ * @brief Suspends task fiber non-blockingly until an event/signal/broadcast of Type arrives.
+ */
+#ifndef cel_wait_for
+#define cel_wait_for(Type, outPtr) \
+    do { \
+        CelsTaskWaitForEvent(CelsGetCurrentSession(), _cels_task_state, _cels_task_key, \
+                             CelsHashKey(#Type), CELS_EVENT_SCOPE_ANY, (outPtr), sizeof(Type), 0); \
+        CelsFiberSwitch((CelsFiber*)_cels_task_state->callerFiber); \
+    } while(0)
+#endif
+
+/**
+ * @def cel_wait_signal
+ * @brief Suspends task fiber non-blockingly until a targeted signal of Type arrives.
+ */
+#ifndef cel_wait_signal
+#define cel_wait_signal(Type, outPtr) \
+    do { \
+        CelsTaskWaitForEvent(CelsGetCurrentSession(), _cels_task_state, _cels_task_key, \
+                             CelsHashKey(#Type), CELS_EVENT_SCOPE_SIGNAL, (outPtr), sizeof(Type), 0); \
+        CelsFiberSwitch((CelsFiber*)_cels_task_state->callerFiber); \
+    } while(0)
+#endif
+
+/**
+ * @def cel_wait_broadcast
+ * @brief Suspends task fiber non-blockingly until a global broadcast of Type arrives.
+ */
+#ifndef cel_wait_broadcast
+#define cel_wait_broadcast(Type, outPtr) \
+    do { \
+        CelsTaskWaitForEvent(CelsGetCurrentSession(), _cels_task_state, _cels_task_key, \
+                             CelsHashKey(#Type), CELS_EVENT_SCOPE_BROADCAST, (outPtr), sizeof(Type), 0); \
+        CelsFiberSwitch((CelsFiber*)_cels_task_state->callerFiber); \
+    } while(0)
+#endif
+
+/**
+ * @def cel_wait_for_timeout
+ * @brief Suspends task fiber until an event of Type arrives or timeoutMs elapses.
+ *
+ * @param Type      Event/signal struct type name.
+ * @param outPtr    Target pointer to write received event data to.
+ * @param timeoutMs Timeout duration in milliseconds.
+ * @return True if event was received; false if timed out.
+ */
+#ifndef cel_wait_for_timeout
+#define cel_wait_for_timeout(Type, outPtr, timeoutMs) \
+    CelsTaskWaitForTimeout(CelsGetCurrentSession(), _cels_task_state, _cels_task_key, \
+                           CelsHashKey(#Type), CELS_EVENT_SCOPE_ANY, (outPtr), sizeof(Type), (uint32_t)(timeoutMs))
+#endif
+
+/**
  * @def cel_cancel
  * @brief Cancels task execution from within the task body and executes teardown.
  *
@@ -494,25 +548,25 @@ bool CelsTaskIsCancelled(const CelsTaskState *state);
 
 #define _CEL_TASK_1(Name, Type1, Arg1) \
     typedef struct _CelsTaskBox_##Name { \
-        CelsTaskState state; \
+        CelsTaskState _cels_state; \
         Type1 Arg1; \
     } _CelsTaskBox_##Name; \
     static void _cels_task_body_##Name(int _cels_task_phase, CelsTaskState *_cels_task_state, uint64_t _cels_task_key, Type1 Arg1); \
     static CELS_THREAD_LOCAL CelsTaskState *_cels_task_last_##Name = NULL; \
     static void _cels_task_fiber_proc_##Name(void *param) { \
         _CelsTaskBox_##Name *box = (_CelsTaskBox_##Name*)param; \
-        _cels_task_body_##Name(CEL_TASK_PHASE_RUN, &box->state, CelsHashKey(#Name), box->Arg1); \
-        CelsTaskFinishFiber(&box->state); \
+        _cels_task_body_##Name(CEL_TASK_PHASE_RUN, &box->_cels_state, CelsHashKey(#Name), box->Arg1); \
+        CelsTaskFinishFiber(&box->_cels_state); \
     } \
     static void _cels_task_clean_##Name(void *instance, CelsSession *session) { \
         _CelsTaskBox_##Name *box = (_CelsTaskBox_##Name*)instance; \
-        if (box != NULL && !box->state.isDone && !box->state.isCancelled) { \
-            CelsTaskCancel(&box->state); \
+        if (box != NULL && !box->_cels_state.isDone && !box->_cels_state.isCancelled) { \
+            CelsTaskCancel(&box->_cels_state); \
             if (session != NULL) session->isExecutingTask = true; \
-            _cels_task_body_##Name(CEL_TASK_PHASE_CANCEL, &box->state, CelsHashKey(#Name), box->Arg1); \
+            _cels_task_body_##Name(CEL_TASK_PHASE_CANCEL, &box->_cels_state, CelsHashKey(#Name), box->Arg1); \
             if (session != NULL) session->isExecutingTask = false; \
         } \
-        if (box != NULL) CelsTaskCleanup(&box->state); \
+        if (box != NULL) CelsTaskCleanup(&box->_cels_state); \
     } \
     static inline void _cels_task_cancel_##Name(CelsSession *sess) { \
         if (sess == NULL) sess = CelsGetCurrentSession(); \
@@ -544,18 +598,18 @@ bool CelsTaskIsCancelled(const CelsTaskState *state);
         const uint64_t key = CelsHashKey(#Name); \
         if (CelsEnterComposable(sess, key)) { \
             _CelsTaskBox_##Name *box = cel_remember(_CelsTaskBox_##Name, \
-                ((_CelsTaskBox_##Name){ .state = { .step = 0, .waitTimerMs = 0, .isRunning = true, .isCancelled = false, .isDone = false, .taskFiber = NULL, .callerFiber = NULL }, .Arg1 = Arg1 }), \
+                ((_CelsTaskBox_##Name){ ._cels_state = { .step = 0, .waitTimerMs = 0, .isRunning = true, .isCancelled = false, .isDone = false, .taskFiber = NULL, .callerFiber = NULL }, .Arg1 = Arg1 }), \
                 _cels_task_clean_##Name \
             ); \
             box->Arg1 = Arg1; \
-            _cels_task_last_##Name = &box->state; \
+            _cels_task_last_##Name = &box->_cels_state; \
             if (CelsIsFreshMount(sess)) { \
-                CelsTaskInit(&box->state); \
+                CelsTaskInit(&box->_cels_state); \
                 CelsSessionRegisterLifecycle(sess, box, NULL, _cels_task_clean_##Name); \
             } else { \
                 CelsSessionUpdateLifecycle(sess, box, _cels_task_clean_##Name); \
             } \
-            CelsTaskStep(sess, &box->state, key, _cels_task_fiber_proc_##Name, box); \
+            CelsTaskStep(sess, &box->_cels_state, key, _cels_task_fiber_proc_##Name, box); \
         } \
         CelsExitGroup(sess); \
     } \
@@ -567,7 +621,7 @@ bool CelsTaskIsCancelled(const CelsTaskState *state);
 
 #define _CEL_TASK_2(Name, Type1, Arg1, Type2, Arg2) \
     typedef struct _CelsTaskBox_##Name { \
-        CelsTaskState state; \
+        CelsTaskState _cels_state; \
         Type1 Arg1; \
         Type2 Arg2; \
     } _CelsTaskBox_##Name; \
@@ -575,18 +629,18 @@ bool CelsTaskIsCancelled(const CelsTaskState *state);
     static CELS_THREAD_LOCAL CelsTaskState *_cels_task_last_##Name = NULL; \
     static void _cels_task_fiber_proc_##Name(void *param) { \
         _CelsTaskBox_##Name *box = (_CelsTaskBox_##Name*)param; \
-        _cels_task_body_##Name(CEL_TASK_PHASE_RUN, &box->state, CelsHashKey(#Name), box->Arg1, box->Arg2); \
-        CelsTaskFinishFiber(&box->state); \
+        _cels_task_body_##Name(CEL_TASK_PHASE_RUN, &box->_cels_state, CelsHashKey(#Name), box->Arg1, box->Arg2); \
+        CelsTaskFinishFiber(&box->_cels_state); \
     } \
     static void _cels_task_clean_##Name(void *instance, CelsSession *session) { \
         _CelsTaskBox_##Name *box = (_CelsTaskBox_##Name*)instance; \
-        if (box != NULL && !box->state.isDone && !box->state.isCancelled) { \
-            CelsTaskCancel(&box->state); \
+        if (box != NULL && !box->_cels_state.isDone && !box->_cels_state.isCancelled) { \
+            CelsTaskCancel(&box->_cels_state); \
             if (session != NULL) session->isExecutingTask = true; \
-            _cels_task_body_##Name(CEL_TASK_PHASE_CANCEL, &box->state, CelsHashKey(#Name), box->Arg1, box->Arg2); \
+            _cels_task_body_##Name(CEL_TASK_PHASE_CANCEL, &box->_cels_state, CelsHashKey(#Name), box->Arg1, box->Arg2); \
             if (session != NULL) session->isExecutingTask = false; \
         } \
-        if (box != NULL) CelsTaskCleanup(&box->state); \
+        if (box != NULL) CelsTaskCleanup(&box->_cels_state); \
     } \
     static inline void _cels_task_cancel_##Name(CelsSession *sess) { \
         if (sess == NULL) sess = CelsGetCurrentSession(); \
@@ -618,19 +672,19 @@ bool CelsTaskIsCancelled(const CelsTaskState *state);
         const uint64_t key = CelsHashKey(#Name); \
         if (CelsEnterComposable(sess, key)) { \
             _CelsTaskBox_##Name *box = cel_remember(_CelsTaskBox_##Name, \
-                ((_CelsTaskBox_##Name){ .state = { .step = 0, .waitTimerMs = 0, .isRunning = true, .isCancelled = false, .isDone = false, .taskFiber = NULL, .callerFiber = NULL }, .Arg1 = Arg1, .Arg2 = Arg2 }), \
+                ((_CelsTaskBox_##Name){ ._cels_state = { .step = 0, .waitTimerMs = 0, .isRunning = true, .isCancelled = false, .isDone = false, .taskFiber = NULL, .callerFiber = NULL }, .Arg1 = Arg1, .Arg2 = Arg2 }), \
                 _cels_task_clean_##Name \
             ); \
             box->Arg1 = Arg1; \
             box->Arg2 = Arg2; \
-            _cels_task_last_##Name = &box->state; \
+            _cels_task_last_##Name = &box->_cels_state; \
             if (CelsIsFreshMount(sess)) { \
-                CelsTaskInit(&box->state); \
+                CelsTaskInit(&box->_cels_state); \
                 CelsSessionRegisterLifecycle(sess, box, NULL, _cels_task_clean_##Name); \
             } else { \
                 CelsSessionUpdateLifecycle(sess, box, _cels_task_clean_##Name); \
             } \
-            CelsTaskStep(sess, &box->state, key, _cels_task_fiber_proc_##Name, box); \
+            CelsTaskStep(sess, &box->_cels_state, key, _cels_task_fiber_proc_##Name, box); \
         } \
         CelsExitGroup(sess); \
     } \
