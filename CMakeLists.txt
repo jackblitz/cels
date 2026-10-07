@@ -289,10 +289,12 @@ if(CELS_BUILD_TESTS)
         test/transaction/test_transaction.c
         test/transition/test_transition.c
         test/event/test_event.c
+        test/input/test_input.c
     )
     target_include_directories(test_cli PRIVATE
         ${TEST_COMMON_DIR}
         ${TEST_COMMON_DIR}/benchmark
+        ${CMAKE_CURRENT_SOURCE_DIR}/examples/common
     )
     target_link_libraries(test_cli PRIVATE ${CELS_CORE_LINK})
     set_target_properties(test_cli PROPERTIES OUTPUT_NAME test_cli)

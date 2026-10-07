@@ -54,6 +54,7 @@
  */
 
 #include "cels.h"
+#include "common_events.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -251,6 +252,127 @@ static inline bool cel_key_consume(int key) {
     return false;
 }
 
+/* ========================================================================= */
+/* Application Input Driver Context (PDCurses / Terminal Polling Pattern)    */
+/* ========================================================================= */
+
+#ifndef _CELS_TERMINAL_POLL_KEY_DECLARED
+#define _CELS_TERMINAL_POLL_KEY_DECLARED
+int CelsTerminalPollKey(void);
+#endif
+
+/**
+ * @struct PdcursesInputContext
+ * @brief Application-level input driver context for PDCurses / terminal event polling.
+ *
+ * Demonstrates an application-level pattern decoupling physical input hardware/terminal
+ * polling from CELS session state. Uses readKey to poll the backend and publishKey
+ * to synchronize with double-buffered reactive state and automatic 1-frame pulse decay.
+ */
+typedef struct PdcursesInputContext {
+    int      currentKey;    /**< Pending key code staged for publication. */
+    uint32_t frameId;       /**< Monotonically increasing input event counter. */
+    bool     pulseActive;   /**< True if an active key pulse was published and awaits decay. */
+} PdcursesInputContext;
+
+/**
+ * @brief Initializes an input driver context to a clean resting state.
+ *
+ * @param ctx Pointer to the input driver context to initialize.
+ */
+static inline void PdcursesInputInit(PdcursesInputContext *ctx) {
+    if (ctx != NULL) {
+        ctx->currentKey = 0;
+        ctx->frameId = 0;
+        ctx->pulseActive = false;
+    }
+}
+
+/**
+ * @brief Reads/polls a physical key code from the terminal/PDCurses subsystem.
+ *
+ * If a valid key code is detected, it is staged in ctx->currentKey.
+ *
+ * @param ctx Pointer to the input driver context.
+ * @return Polled key character code, or 0 if no key was pressed.
+ */
+static inline int PdcursesInputReadKey(PdcursesInputContext *ctx) {
+    if (ctx == NULL) return 0;
+    int key = CelsTerminalPollKey();
+    if (key > 0) {
+        ctx->currentKey = key;
+    }
+    return key;
+}
+
+/**
+ * @brief Explicitly stages a key code into the input context.
+ *
+ * Useful for automated scripted playback, headless unit testing, or mock drivers.
+ *
+ * @param ctx Pointer to the input driver context.
+ * @param key Key character code to stage (e.g. 'W', '\t', 27).
+ */
+static inline void PdcursesInputSetKey(PdcursesInputContext *ctx, int key) {
+    if (ctx != NULL) {
+        ctx->currentKey = key;
+    }
+}
+
+/**
+ * @brief Publishes staged input to the CELS session's reactive state and signals.
+ *
+ * If a key was staged (currentKey > 0):
+ * - Mutates double-buffered CelsInputState (rawKey = currentKey, handled = false, frameId = ++ctx->frameId).
+ * - Dispatches discrete CelsKeySignal to the session.
+ * - Flags pulseActive = true and resets currentKey = 0.
+ * - Marks watching composables dirty for recomposition.
+ *
+ * If no key is staged but pulseActive is true:
+ * - Mutates CelsInputState to decay the pulse (rawKey = 0, handled = false).
+ * - Clears pulseActive = false, causing watching composables to recompose back to idle.
+ *
+ * @param ctx     Pointer to the input driver context.
+ * @param session Target CELS session to mutate and signal.
+ * @return True if reactive state was mutated (pulse or decay); false if idle.
+ */
+static inline bool PdcursesInputPublishKey(PdcursesInputContext *ctx, CelsSession *session) {
+    if (ctx == NULL || session == NULL) return false;
+
+    CelsSetCurrentSession(session);
+    CelsInputState *input = cel_remember_state(CelsInputState, {0});
+    if (input == NULL) return false;
+
+    if (ctx->currentKey > 0) {
+        int key = ctx->currentKey;
+        cel_mutate(input) {
+            this->rawKey = key;
+            this->handled = false;
+            this->frameId = ++ctx->frameId;
+        }
+        cel_signal(session, CelsKeySignal, { .key = key });
+        ctx->pulseActive = true;
+        ctx->currentKey = 0;
+        return true;
+    } else if (ctx->pulseActive) {
+        cel_mutate(input) {
+            this->rawKey = 0;
+            this->handled = false;
+        }
+        ctx->pulseActive = false;
+        return true;
+    }
+    return false;
+}
+
+/**
+ * @brief Semantic alias for PdcursesInputPublishKey.
+ */
+static inline bool PdcursesInputCommitKey(PdcursesInputContext *ctx, CelsSession *session) {
+    return PdcursesInputPublishKey(ctx, session);
+}
+
 #ifdef __cplusplus
 }
 #endif
+

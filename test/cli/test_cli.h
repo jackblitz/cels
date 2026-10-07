@@ -51,6 +51,7 @@ const TestSuite *GetTaskTestSuite(void);
 const TestSuite *GetTransactionTestSuite(void);
 const TestSuite *GetTransitionTestSuite(void);
 const TestSuite *GetEventTestSuite(void);
+const TestSuite *GetInputTestSuite(void);
 
 /**
  * Case-insensitive string comparison helper.
