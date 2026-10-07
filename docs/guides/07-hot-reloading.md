@@ -83,10 +83,7 @@ int main(void) {
     CelsEngine engine;
     CelsEngineInit(&engine, NULL);
 
-    /* 1. Configure execution mode: Immediate (continuous) vs Retained (event-driven) */
-    CelsEngineSetMode(&engine, CELS_MODE_RETAINED);
-
-    /* 2. Create secondary session for auxiliary tool window */
+    /* 1. Create secondary session for auxiliary tool window */
     CelsSession *toolSession = CelsEngineCreateSession(&engine, "inspector", CELS_PROFILE_512);
 
     /* 3. Load independent application DLLs */

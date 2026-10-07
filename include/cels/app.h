@@ -110,7 +110,7 @@ struct CelsAppDef {
     void (*onReload)(CelsEngine *engine, CelsSession *session); /**< Optional callback fired after code hot-swap */
     void (*onEnd)(CelsEngine *engine, CelsSession *session);    /**< Teardown callback on shutdown / unload */
     /* Deprecated fields retained for backwards compatibility */
-    bool continuousCompose;                         /**< Deprecated: Host manages mode via CelsEngineSetMode */
+    bool _reserved;                                 /**< Reserved for ABI alignment */
     size_t slabSize;                                /**< Deprecated: Host sizes slabs via CelsSessionProfile */
     uint32_t maxGroups;                             /**< Deprecated: Auto-calculated by host */
     void (*onPrintTree)(const CelsSession *session);/**< Optional tree inspection callback */
@@ -136,10 +136,6 @@ CELS_APP_EXPORT const CelsAppDef *CelsGetAppManifest(void);
 /* Declarative App Registration Macro (CEL_App)                              */
 /* ========================================================================= */
 
-#ifndef NUCLEUS_DEFAULT_CONTINUOUS_COMPOSE
-    #define NUCLEUS_DEFAULT_CONTINUOUS_COMPOSE false
-#endif
-
 #define _CEL_APP_2(AppName, Comp) \
     static void _cels_app_set_session_##AppName(CelsSession *s) { \
         CelsSetCurrentSession(s); \
@@ -150,7 +146,6 @@ CELS_APP_EXPORT const CelsAppDef *CelsGetAppManifest(void);
     static const CelsAppDef _cels_app_def_##AppName = { \
         .version = 1, \
         .name = #AppName, \
-        .continuousCompose = NUCLEUS_DEFAULT_CONTINUOUS_COMPOSE, \
         .setSession = _cels_app_set_session_##AppName, \
         .onStart = _cels_app_onstart_##AppName, \
         .onReload = NULL, \
@@ -175,7 +170,6 @@ CELS_APP_EXPORT const CelsAppDef *CelsGetAppManifest(void);
     static const CelsAppDef _cels_app_def_##AppName = { \
         .version = 1, \
         .name = #AppName, \
-        .continuousCompose = NUCLEUS_DEFAULT_CONTINUOUS_COMPOSE, \
         .setSession = _cels_app_set_session_##AppName, \
         .onStart = _cels_app_onstart_##AppName, \
         .onReload = NULL, \
@@ -200,7 +194,6 @@ CELS_APP_EXPORT const CelsAppDef *CelsGetAppManifest(void);
     static const CelsAppDef _cels_app_def_##AppName = { \
         .version = 1, \
         .name = #AppName, \
-        .continuousCompose = NUCLEUS_DEFAULT_CONTINUOUS_COMPOSE, \
         .setSession = _cels_app_set_session_##AppName, \
         .onStart = _cels_app_onstart_##AppName, \
         .onReload = NULL, \
@@ -235,7 +228,6 @@ CELS_APP_EXPORT const CelsAppDef *CelsGetAppManifest(void);
     static const CelsAppDef _cels_app_def_##AppName = { \
         .version = 1, \
         .name = #AppName, \
-        .continuousCompose = NUCLEUS_DEFAULT_CONTINUOUS_COMPOSE, \
         .setSession = _cels_app_set_session_##AppName, \
         __VA_ARGS__ \
     }; \

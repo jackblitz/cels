@@ -342,25 +342,10 @@ void CelsEngineDrainBroadcasts(CelsEngine *engine)
     CelsMutexUnlock(&engine->broadcastMutex);
 }
 
-void CelsEngineSetMode(CelsEngine *engine, CelsEngineMode mode)
-{
-    if (engine != NULL) {
-        engine->mode = mode;
-    }
-}
-
-CelsEngineMode CelsEngineGetMode(const CelsEngine *engine)
-{
-    return engine ? engine->mode : CELS_MODE_IMMEDIATE;
-}
-
 bool CelsEngineNeedsRecompose(const CelsEngine *engine)
 {
     if (engine == NULL) {
         return false;
-    }
-    if (engine->mode == CELS_MODE_IMMEDIATE) {
-        return true;
     }
     if (engine->broadcastCount > 0) {
         return true;

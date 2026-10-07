@@ -200,10 +200,7 @@ int multi_dll_host_main(void)
     CelsEngine engine;
     CelsEngineInit(&engine, NULL);
 
-    /* 1. Host chooses execution mode: Immediate (continuous) vs Retained (event-driven) */
-    CelsEngineSetMode(&engine, CELS_MODE_RETAINED);
-
-    /* 2. Create secondary session for auxiliary tool/inspector window */
+    /* 1. Create secondary session for auxiliary tool/inspector window */
     CelsSession *toolSession = CelsEngineCreateSession(&engine, "inspector", CELS_PROFILE_512);
 
     /* 3. Bind and load independent application DLLs */

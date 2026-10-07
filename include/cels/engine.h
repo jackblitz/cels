@@ -56,13 +56,6 @@ extern "C" {
 #ifndef CELS_MAX_MODULES
 #define CELS_MAX_MODULES 16u
 #endif
-/**
- * Host execution mode controlling composition evaluation frequency.
- */
-typedef enum CelsEngineMode {
-    CELS_MODE_IMMEDIATE = 0, /**< Continuous frame loop (recomposes every tick; ideal for games/simulations) */
-    CELS_MODE_RETAINED  = 1  /**< Reactive event-driven mode (recomposes only when dirty, signals arrive, or on code reload) */
-} CelsEngineMode;
 
 /* Forward declarations */
 struct CelsEngine;
@@ -143,7 +136,6 @@ struct CelsEngine {
     CelsEventRecord               broadcastQueue[CELS_EVENT_QUEUE_CAPACITY];
     uint32_t                      broadcastCount;
     CelsMutex                     broadcastMutex;
-    CelsEngineMode                mode;         /**< Host execution mode (CELS_MODE_IMMEDIATE / CELS_MODE_RETAINED) */
     bool                          isStarted;    /**< True if engine and app are active */
     bool                          shouldQuit;   /**< True if exit has been requested */
 };
@@ -216,29 +208,11 @@ CelsResult CelsEngineStart(CelsEngine *engine);
 void CelsEngineEnd(CelsEngine *engine);
 
 /**
- * Sets the host execution mode (Immediate vs Retained).
- *
- * In Immediate mode, CelsEngineRecompose always processes frame ticks (for games/simulations).
- * In Retained mode, CelsEngineRecompose evaluates only when dirty state, events, or reload flags exist.
- *
- * @param engine Target host engine. Non-NULL.
- * @param mode   Desired execution mode.
- */
-void CelsEngineSetMode(CelsEngine *engine, CelsEngineMode mode);
-
-/**
- * Gets the current host execution mode.
- *
- * @param engine Target host engine. Safe if NULL.
- * @return Active CelsEngineMode (defaults to CELS_MODE_IMMEDIATE).
- */
-CelsEngineMode CelsEngineGetMode(const CelsEngine *engine);
-
-/**
  * Queries whether any active session in the engine requires recomposition.
  *
- * In Retained mode, host loops can call this to determine if rendering / presentation
- * is necessary on the current frame.
+ * Returns true if any active session has pending dirty state, signals, or invalidations,
+ * or if there are unprocessed global engine broadcasts. Host loops can call this to determine
+ * whether CelsEngineRecompose() needs to be invoked.
  *
  * @param engine Target host engine. Safe if NULL.
  * @return True if one or more sessions have pending dirty state, signals, or invalidations.

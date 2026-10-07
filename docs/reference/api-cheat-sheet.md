@@ -328,9 +328,6 @@ Direct C functions, engine coordinators, slot table dual gap buffers, and intern
 | `CelsAppStart` | `CelsResult CelsAppStart(CelsApp *app)` | `HOST_LOOP` | `CelsResult` | Synchronizes ambient session, calls `onStart(engine, session)`, runs initial composition pass. |
 | `CelsAppCheckReload` | `bool CelsAppCheckReload(CelsApp *app)` | `HOST_LOOP` | `bool` | Detects disk modifications, shadow-copies new binary, re-links symbols, calls `onReload`. |
 | `CelsAppReload` | `CelsResult CelsAppReload(CelsApp *app)` | `HOST_LOOP` | `CelsResult` | Forces immediate hot-swap reload of the application dynamic library. |
-| `CelsAppDestroy` | `void CelsAppDestroy(CelsApp *app)` | `HOST_LOOP` | `void` | Calls `onEnd(engine, session)`, detaches composition tree, frees DLL, sweeps shadow files. |
-| `CelsEngineSetMode` | `void CelsEngineSetMode(CelsEngine *engine, CelsEngineMode mode)` | `HOST_LOOP` | `void` | Sets engine execution mode (`CELS_MODE_IMMEDIATE` vs `CELS_MODE_RETAINED`). |
-| `CelsEngineGetMode` | `CelsEngineMode CelsEngineGetMode(const CelsEngine *engine)` | `HOST_LOOP` | `CelsEngineMode` | Returns current engine execution mode. |
-| `CelsEngineNeedsRecompose` | `bool CelsEngineNeedsRecompose(const CelsEngine *engine)` | `HOST_LOOP` | `bool` | In retained mode, checks if primary or any secondary session requires recomposition. |
+| `CelsEngineNeedsRecompose` | `bool CelsEngineNeedsRecompose(const CelsEngine *engine)` | `HOST_LOOP` | `bool` | Checks if primary session, secondary sessions, or global broadcasts require recomposition. |
 | `CelsSessionNeedsRecompose` | `bool CelsSessionNeedsRecompose(const CelsSession *session)` | `HOST_LOOP` | `bool` | Checks if session has uncomposed root, dirty state cells, pending events, or hot-reload. |
 

@@ -408,13 +408,6 @@ static void TestMultiDllAppHosting(void)
     CelsEngine engine;
     CelsEngineInit(&engine, NULL);
 
-    /* Test mode query and switching */
-    assert(CelsEngineGetMode(&engine) == CELS_MODE_IMMEDIATE);
-    CelsEngineSetMode(&engine, CELS_MODE_RETAINED);
-    assert(CelsEngineGetMode(&engine) == CELS_MODE_RETAINED);
-    CelsEngineSetMode(&engine, CELS_MODE_IMMEDIATE);
-    assert(CelsEngineGetMode(&engine) == CELS_MODE_IMMEDIATE);
-
     /* Create a secondary named session on the engine */
     CelsSession *toolSession = CelsEngineCreateSession(&engine, "tool_window", CELS_PROFILE_DEFAULT);
     assert(toolSession != NULL);
@@ -437,10 +430,19 @@ static void TestMultiDllAppHosting(void)
     assert(app2.isStarted);
     assert(toolSession->hasComposedOnce);
 
-    /* Test CelsEngineNeedsRecompose in both modes */
-    CelsEngineSetMode(&engine, CELS_MODE_IMMEDIATE);
+    /* Both sessions are clean: CelsEngineNeedsRecompose reports false */
+    assert(CelsEngineNeedsRecompose(&engine) == false);
+
+    /* Invalidation on primary session marks engine as needing recomposition */
+    CelsSessionInvalidateKey(&engine.session, 0xABCD);
     assert(CelsEngineNeedsRecompose(&engine) == true);
-    CelsEngineSetMode(&engine, CELS_MODE_RETAINED);
+    assert(CelsEngineRecompose(&engine) == CELS_OK);
+    assert(CelsEngineNeedsRecompose(&engine) == false);
+
+    /* Invalidation on secondary session also marks engine as needing recomposition */
+    CelsSessionInvalidateKey(toolSession, 0x1234);
+    assert(CelsEngineNeedsRecompose(&engine) == true);
+    assert(CelsEngineRecompose(&engine) == CELS_OK);
     assert(CelsEngineNeedsRecompose(&engine) == false);
 
     /* Test check reload on both apps */

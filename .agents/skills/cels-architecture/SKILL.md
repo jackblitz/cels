@@ -476,16 +476,16 @@ CelsEngineDestroy(&engine);
 - **Lock Evasion & Multi-Module Isolation**: Shadow copy files are stamped with `app->instanceId` (`app.hot_<PID>_<instanceId>_<reloadCount>.tmp.dll`), preventing OS file locks and shared handle ref-counts between parallel modules.
 - **Selective Entry Symbols**: Multiple app definitions can reside in a single DLL and be loaded individually via `CelsAppLoadEntry(app, engine, session, dllPath, "CelsGetAppDef_SubApp")`.
 
-### Host Execution Modes: Immediate vs. Retained
+### Host Execution Cadence: Continuous vs. Event-Driven
 
-The host explicitly selects how recomposition is driven using `CelsEngineSetMode(&engine, mode)`:
+The host process controls its own execution cadence based on its application domain:
 
-| Mode | Flag | Frame Loop Strategy | Ideal Use Case |
-| :--- | :--- | :--- | :--- |
-| **Immediate Mode** | `CELS_MODE_IMMEDIATE` *(default)* | Recomposes every frame tick unconditionally | Real-time games, physics simulations, 60+ FPS rendering loops |
-| **Retained Mode** | `CELS_MODE_RETAINED` | Recomposes only when `CelsEngineNeedsRecompose` returns `true` | Native desktop GUIs, toolbars, dialogs, battery-saving apps |
+| Cadence Strategy | Host Loop Implementation | Ideal Use Case |
+| :--- | :--- | :--- |
+| **Continuous Game Loop** | Runs `CelsEngineRecompose(&engine)` every tick at 60/120 FPS | Real-time games, physics simulations, continuous animations |
+| **Event-Driven / Power-Saving** | Calls `CelsEngineRecompose(&engine)` only when `CelsEngineNeedsRecompose(&engine)` is `true` | Native desktop GUIs, toolbars, dialogs, battery-saving apps |
 
-In Retained Mode, `CelsEngineNeedsRecompose(&engine)` evaluates:
+`CelsEngineNeedsRecompose(&engine)` objectively queries whether any active session or engine subsystem has work pending:
 1. Primary or secondary sessions have uncomposed root trees.
 2. Watched reactive state cells have been invalidated via `cel_mutate`.
 3. Discrete tree events (`cel_event`), signals (`cel_signal`), or global broadcasts (`cel_broadcast`) are queued.
