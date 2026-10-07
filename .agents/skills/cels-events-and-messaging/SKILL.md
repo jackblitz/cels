@@ -63,7 +63,7 @@ CELS v0.4.0 introduces the **Unified Messaging Subsystem**, supporting discrete,
 - **Direction**: Bubbles up from child/descendant to parent/ancestor.
 - **Timing**: Immediate intra-frame convergence. Ancestor listeners re-evaluate within the exact same frame without 1-frame latency.
 - **Producer**: `cel_event(Type, { .field = value, ... });`
-- **Consumer**: `cel_listen(Type, ev) { /* handle event */ }`
+- **Consumer**: `cel_listen(Type) { ... }` (trigger-only) or `cel_listen(Type, ev) { /* handle event */ }` (payload-binding; automatic unused variable suppression)
 
 ```c
 typedef struct FormSubmitEvent {
@@ -95,7 +95,7 @@ CEL_Composable(LoginForm) {
 - **Direction**: Direct push from sender into target session's inbox.
 - **Timing**: Delivered during the target session's next recomposition pass.
 - **Producer**: `cel_signal(targetSession, Type, { .field = value, ... });`
-- **Consumer**: `cel_connect(Type, sig) { /* handle signal */ }`
+- **Consumer**: `cel_connect(Type) { ... }` (trigger-only) or `cel_connect(Type, sig) { /* handle signal */ }` (payload-binding; automatic unused variable suppression)
 
 ```c
 typedef struct DamageSignal {
@@ -141,7 +141,7 @@ cel_signal(hud, DamageSignal, { .targetId = 7, .amount = 50.0f });
 - **Direction**: Dispatched from any OS worker thread (audio, network, physics, input).
 - **Timing**: Drained at frame boundaries (`CelsEngineRecompose`) and distributed to all active sessions.
 - **Producer**: `cel_broadcast(Type, { .field = value, ... });` (Thread-Safe)
-- **Consumer**: `cel_bind(Type, bcast) { /* handle broadcast */ }`
+- **Consumer**: `cel_bind(Type) { ... }` (trigger-only) or `cel_bind(Type, bcast) { /* handle broadcast */ }` (payload-binding; automatic unused variable suppression)
 
 ```c
 typedef struct SoundBroadcast {

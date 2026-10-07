@@ -1047,10 +1047,18 @@ extern "C" {
  *     }
  * @endcode
  */
-#define cel_listen(Type, var) \
-    for (const Type *var = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_LOCAL); \
-         var != NULL; \
+#define _CEL_LISTEN_2(Type, var) \
+    for (CELS_UNUSED const Type *var = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_LOCAL); \
+         ((void)var, var != NULL); \
          var = (const Type*)CelsEventNext(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_LOCAL))
+
+#define _CEL_LISTEN_1(Type) \
+    for (CELS_UNUSED const Type *_cels_ev = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_LOCAL); \
+         ((void)_cels_ev, _cels_ev != NULL); \
+         _cels_ev = (const Type*)CelsEventNext(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_LOCAL))
+
+#define cel_listen(...) \
+    _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_LISTEN_2, _CEL_LISTEN_1)(__VA_ARGS__)
 
 /**
  * @def cel_signal
@@ -1068,24 +1076,43 @@ extern "C" {
 #define cel_signal(targetSession, Type, ...) \
     CelsEventSignal((targetSession), CelsHashKey(#Type), (const Type[]){ __VA_ARGS__ }, sizeof(Type))
 
+#define _CEL_CONNECT_2(Type, var) \
+    for (CELS_UNUSED const Type *var = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_SIGNAL); \
+         ((void)var, var != NULL); \
+         var = (const Type*)CelsEventNext(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_SIGNAL))
+
+#define _CEL_CONNECT_1(Type) \
+    for (CELS_UNUSED const Type *_cels_sig = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_SIGNAL); \
+         ((void)_cels_sig, _cels_sig != NULL); \
+         _cels_sig = (const Type*)CelsEventNext(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_SIGNAL))
+
 /**
  * @def cel_connect
  * @brief Binds an inline handler loop for targeted signals sent directly to this session.
  *
  * What it does:
  * Iterates over any unconsumed targeted signals of Type received by this session.
+ * Supports both 1-argument (trigger-only) and 2-argument (payload-binding) forms.
  *
- * Example:
+ * Overloads:
+ * - cel_connect(Type): Iterates over signals without binding a payload variable.
+ * - cel_connect(Type, var): Binds the signal payload to var for inspection.
+ *
+ * Examples:
  * @code
+ *     // 1-argument trigger:
+ *     cel_connect(StartWorkflowSignal) {
+ *         TriggerWorkflow();
+ *     }
+ *
+ *     // 2-argument payload binding:
  *     cel_connect(PlayerHealed, sig) {
  *         SpawnFloatingNumbers(sig->amount);
  *     }
  * @endcode
  */
-#define cel_connect(Type, var) \
-    for (const Type *var = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_SIGNAL); \
-         var != NULL; \
-         var = (const Type*)CelsEventNext(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_SIGNAL))
+#define cel_connect(...) \
+    _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_CONNECT_2, _CEL_CONNECT_1)(__VA_ARGS__)
 
 /**
  * @def cel_broadcast
@@ -1103,24 +1130,43 @@ extern "C" {
 #define cel_broadcast(Type, ...) \
     CelsEventBroadcast(CelsGetCurrentSession(), CelsHashKey(#Type), (const Type[]){ __VA_ARGS__ }, sizeof(Type))
 
+#define _CEL_BIND_2(Type, var) \
+    for (CELS_UNUSED const Type *var = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_BROADCAST); \
+         ((void)var, var != NULL); \
+         var = (const Type*)CelsEventNext(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_BROADCAST))
+
+#define _CEL_BIND_1(Type) \
+    for (CELS_UNUSED const Type *_cels_bcast = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_BROADCAST); \
+         ((void)_cels_bcast, _cels_bcast != NULL); \
+         _cels_bcast = (const Type*)CelsEventNext(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_BROADCAST))
+
 /**
  * @def cel_bind
  * @brief Binds an inline handler loop for global engine broadcasts.
  *
  * What it does:
  * Iterates over any unconsumed broadcasts of Type delivered to the calling session.
+ * Supports both 1-argument (trigger-only) and 2-argument (payload-binding) forms.
  *
- * Example:
+ * Overloads:
+ * - cel_bind(Type): Iterates over broadcasts without binding a payload variable.
+ * - cel_bind(Type, var): Binds the broadcast payload to var for inspection.
+ *
+ * Examples:
  * @code
+ *     // 1-argument trigger:
+ *     cel_bind(SaveBroadcast) {
+ *         SaveGame();
+ *     }
+ *
+ *     // 2-argument payload binding:
  *     cel_bind(AudioTrigger, bcast) {
  *         PlaySound(bcast->sound, bcast->gain);
  *     }
  * @endcode
  */
-#define cel_bind(Type, var) \
-    for (const Type *var = (const Type*)CelsEventPoll(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_BROADCAST); \
-         var != NULL; \
-         var = (const Type*)CelsEventNext(CelsGetCurrentSession(), CelsHashKey(#Type), CELS_EVENT_SCOPE_BROADCAST))
+#define cel_bind(...) \
+    _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_BIND_2, _CEL_BIND_1)(__VA_ARGS__)
 
 /* ========================================================================= */
 /* Procedural Tasks & Coroutines (CEL_Task)                                  */

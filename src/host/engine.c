@@ -80,6 +80,15 @@ CelsResult _CelsEngineInitInternalWithOptions(CelsEngine *engine, const char *ap
     return CELS_OK;
 }
 
+/**
+ * Internal initializer for CelsEngine without custom session configuration.
+ *
+ * Forwards to _CelsEngineInitInternalWithOptions with default session options.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param appName Application module target name or library path. Safe if NULL.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
 CelsResult _CelsEngineInitInternal(CelsEngine *engine, const char *appName)
 {
     return _CelsEngineInitInternalWithOptions(engine, appName, NULL);
@@ -87,6 +96,10 @@ CelsResult _CelsEngineInitInternal(CelsEngine *engine, const char *appName)
 
 /**
  * Tears down a host engine, releasing modules, sessions, and dynamically loaded libraries.
+ *
+ * Invokes CelsEngineEnd if running, destroys registered subsystem modules in reverse order
+ * of registration, frees all secondary sessions, tears down the primary session,
+ * destroys the broadcast mutex, and clears ambient thread pointers.
  *
  * @param engine Target host engine. Safe if NULL.
  */
@@ -127,10 +140,14 @@ void CelsEngineDestroy(CelsEngine *engine)
 }
 
 /**
- * Starts execution of an engine instance and performs initial composition mount.
+ * Starts execution of an engine instance and performs the initial composition mount.
  *
- * @param engine Target host engine. Non-NULL.
- * @return CELS_OK on success, or CelsResult error code.
+ * Sets ambient engine and session context on the calling thread, synchronizes session
+ * across the application binary boundary, invokes manifest->onStart, marks isStarted = true,
+ * and performs the initial CelsSessionRecompose pass on the primary session.
+ *
+ * @param engine Target host engine with valid manifest. Non-NULL.
+ * @return CELS_OK on success, or CELS_ERROR_INVALID_STATE if manifest is missing.
  */
 CelsResult CelsEngineStart(CelsEngine *engine)
 {
@@ -163,9 +180,12 @@ CelsResult CelsEngineStart(CelsEngine *engine)
 }
 
 /**
- * Stops execution of an engine instance and invokes teardown hooks.
+ * Stops execution of an engine instance and invokes teardown lifecycle hooks.
  *
- * @param engine Target host engine. Safe if NULL.
+ * If an app module is loaded, unloads the module and detaches its composition.
+ * If running statically, invokes manifest->onEnd. Marks isStarted = false.
+ *
+ * @param engine Target host engine. Safe if NULL or if not running.
  */
 void CelsEngineEnd(CelsEngine *engine)
 {
@@ -192,6 +212,18 @@ void CelsEngineEnd(CelsEngine *engine)
     engine->isStarted = false;
 }
 
+/**
+ * Enqueues a thread-safe global broadcast event into the engine's staging queue.
+ *
+ * Acquires engine->broadcastMutex, stages the event record, and releases the mutex.
+ * Broadcasts are later dispatched across all engine sessions during CelsEngineDrainBroadcasts.
+ *
+ * @param engine   Target host engine. Safe if NULL.
+ * @param typeHash 64-bit FNV-1a type name hash identifying the event type.
+ * @param payload  Pointer to broadcast payload data buffer.
+ * @param size     Payload size in bytes (clamped to CELS_EVENT_MAX_PAYLOAD).
+ * @return True if broadcast was staged successfully; false if engine is NULL or queue is full.
+ */
 bool CelsEngineBroadcast(CelsEngine *engine, uint64_t typeHash, const void *payload, size_t size)
 {
     if (engine == NULL) {
@@ -217,6 +249,15 @@ bool CelsEngineBroadcast(CelsEngine *engine, uint64_t typeHash, const void *payl
     return true;
 }
 
+/**
+ * Drains staged broadcast events across all engine-supervised sessions.
+ *
+ * Acquires engine->broadcastMutex, distributes each staged broadcast into the primary
+ * session and every active secondary session, resolves any task fiber waiters,
+ * invalidates matching broadcast listeners, and resets engine->broadcastCount.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ */
 void CelsEngineDrainBroadcasts(CelsEngine *engine)
 {
     if (engine == NULL) {
@@ -301,6 +342,42 @@ void CelsEngineDrainBroadcasts(CelsEngine *engine)
     CelsMutexUnlock(&engine->broadcastMutex);
 }
 
+void CelsEngineSetMode(CelsEngine *engine, CelsEngineMode mode)
+{
+    if (engine != NULL) {
+        engine->mode = mode;
+    }
+}
+
+CelsEngineMode CelsEngineGetMode(const CelsEngine *engine)
+{
+    return engine ? engine->mode : CELS_MODE_IMMEDIATE;
+}
+
+bool CelsEngineNeedsRecompose(const CelsEngine *engine)
+{
+    if (engine == NULL) {
+        return false;
+    }
+    if (engine->mode == CELS_MODE_IMMEDIATE) {
+        return true;
+    }
+    if (engine->broadcastCount > 0) {
+        return true;
+    }
+    if (CelsSessionNeedsRecompose(&engine->session)) {
+        return true;
+    }
+    for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
+        if (engine->secondarySessions[i].isUsed && engine->secondarySessions[i].session != NULL) {
+            if (CelsSessionNeedsRecompose(engine->secondarySessions[i].session)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /**
  * Triggers a recomposition pass on the primary session and all active secondary sessions.
  *
@@ -331,7 +408,17 @@ CelsResult CelsEngineRecompose(CelsEngine *engine)
 }
 
 /**
- * Creates and registers a named secondary session supervised by the engine.
+ * Creates and registers a named secondary reactive session supervised by the engine.
+ *
+ * If name is "main" or "root", returns the primary session (&engine->session).
+ * If a secondary session with name already exists, returns the existing instance.
+ * Otherwise, allocates a new heap CelsSession, initializes it with CelsSessionInitWithProfile,
+ * binds its engine pointer to engine, and records it in engine->secondarySessions.
+ *
+ * @param engine  Target host engine. Non-NULL.
+ * @param name    Unique alphanumeric session identifier string. Non-NULL.
+ * @param profile Memory profile defining the session slab size and capacity limit.
+ * @return Pointer to initialized CelsSession, or NULL if capacity exceeded or allocation failed.
  */
 CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsSessionProfile profile)
 {
@@ -379,7 +466,14 @@ CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsS
 }
 
 /**
- * Retrieves a session supervised by the engine by name.
+ * Retrieves a session supervised by the engine by its unique name string.
+ *
+ * If name is NULL, empty, "main", or "root", returns the primary session (&engine->session).
+ * Otherwise, scans secondary sessions using 64-bit FNV-1a hash matching.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ * @param name   Session identifier name string.
+ * @return Pointer to matching CelsSession if found; NULL if not found or engine is NULL.
  */
 CelsSession *CelsEngineGetSession(CelsEngine *engine, const char *name)
 {
@@ -563,7 +657,7 @@ void *_cels_resolve_module(const void *ctx, uint64_t key)
  * @param config   Optional session configuration, or NULL for defaults.
  * @return CELS_OK on success, or CelsResult error code.
  */
-CelsResult CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessionConfig *config)
+CelsResult CelsEngineRunStandalone(const struct CelsAppDef *manifest, const CelsSessionConfig *config)
 {
     (void)config;
     if (manifest == NULL) {
@@ -605,9 +699,12 @@ CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appName)
 #if defined(_WIN32)
         HMODULE hSelf = GetModuleHandleA(NULL);
         if (hSelf != NULL) {
-            FARPROC fp = GetProcAddress(hSelf, "CelsGetAppManifest");
+            FARPROC fp = GetProcAddress(hSelf, "CelsGetAppDef");
+            if (fp == NULL) {
+                fp = GetProcAddress(hSelf, "CelsGetAppManifest");
+            }
             if (fp != NULL) {
-                typedef const struct CelsAppManifest *(*EntryFn)(void);
+                typedef const struct CelsAppDef *(*EntryFn)(void);
                 EntryFn entry = NULL;
                 memcpy(&entry, &fp, sizeof(entry));
                 if (entry != NULL) {
@@ -619,10 +716,13 @@ CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appName)
 #elif defined(__unix__) || defined(__APPLE__) || defined(__linux__)
         void *hSelf = dlopen(NULL, RTLD_NOW);
         if (hSelf != NULL) {
-            void *fp = dlsym(hSelf, "CelsGetAppManifest");
+            void *fp = dlsym(hSelf, "CelsGetAppDef");
+            if (fp == NULL) {
+                fp = dlsym(hSelf, "CelsGetAppManifest");
+            }
             dlclose(hSelf);
             if (fp != NULL) {
-                typedef const struct CelsAppManifest *(*EntryFn)(void);
+                typedef const struct CelsAppDef *(*EntryFn)(void);
                 EntryFn entry = NULL;
                 memcpy(&entry, &fp, sizeof(entry));
                 if (entry != NULL) {

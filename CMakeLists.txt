@@ -58,9 +58,6 @@ set(CELS_CORE_SOURCES
     src/platform/fiber.c
     src/platform/log.c
 )
-if(WIN32 AND CMAKE_C_COMPILER_ID MATCHES "GNU")
-    list(APPEND CELS_CORE_SOURCES src/platform/win32_compat.c)
-endif()
 
 # Core CELS library (C99 modular implementation)
 add_library(cels_core STATIC ${CELS_CORE_SOURCES})

@@ -44,8 +44,8 @@ CEL_Composable(SubmitButton, bool isPressed) {
 }
 ```
 
-### Consumer: `cel_listen(Type, var)`
-Evaluates the enclosed block for every unconsumed event of `Type` emitted by descendants:
+### Consumer: `cel_listen(Type)` & `cel_listen(Type, var)`
+Evaluates the enclosed block for every unconsumed event of `Type` emitted by descendants. Supports both 1-argument trigger form `cel_listen(Type)` and 2-argument payload form `cel_listen(Type, var)` (with automatic unused-variable warning suppression):
 
 ```c
 CEL_Composable(RegistrationForm) {
@@ -119,11 +119,23 @@ cel_signal(cel_get_session(&engine, "hud"), DamageSignal, {
 > }
 > ```
 
-### Consumer: `cel_connect(Type, var)`
+### Consumer: `cel_connect(Type)` & `cel_connect(Type, var)`
 Inside any composable of the target session, binds an iterator over incoming signals.
+`cel_connect` supports both:
+1. **1-Argument Trigger Form (`cel_connect(Type)`)**: Used when a signal is an event trigger requiring no payload inspection. Eliminates dummy variable declarations and avoids `(void)sig;`.
+2. **2-Argument Payload Form (`cel_connect(Type, var)`)**: Binds each incoming signal payload to `var`. Unused-variable warnings are automatically suppressed, so developers never need to write `(void)sig;`.
+
 Under the CELS **Actor Model Principle**, sessions **only mutate their own state**. Incoming signals are handled inside `cel_connect`, where the session mutates its own state locally:
 
 ```c
+/* Trigger-only signal: no dummy variable or (void)sig needed */
+cel_connect(StartWorkflowSignal) {
+    cel_mutate(state) {
+        this->taskWorkflowActive = true;
+    }
+}
+
+/* Payload-binding signal: */
 CEL_Composable(FloatingDamageHUD, PlayerGaugeState*, gauge) {
     int *floatingNumbersCount = cel_remember(int, 0);
 
@@ -165,8 +177,8 @@ void OnPhysicsCollision(const char *soundFile) {
 }
 ```
 
-### Consumer: `cel_bind(Type, var)`
-Inside any session anywhere in the engine, binds to global broadcasts of `Type`:
+### Consumer: `cel_bind(Type)` & `cel_bind(Type, var)`
+Inside any session anywhere in the engine, binds to global broadcasts of `Type`. Supports both 1-argument trigger form `cel_bind(Type)` and 2-argument payload form `cel_bind(Type, var)` (with automatic unused-variable warning suppression):
 
 ```c
 CEL_Composable(AudioSubsystemWidget) {

@@ -35,6 +35,7 @@ typedef struct HandshakeEvent {
 
 static int s_parentReceivedClicks = 0;
 static int s_lastClickX = 0;
+static int s_parentTriggerOnlyClicks = 0;
 
 static bool s_buttonTriggered = false;
 
@@ -46,12 +47,20 @@ CEL_Composable(ButtonChild) {
     }
 }
 
+CEL_Composable(ModalTriggerChild) {
+    /* 1-argument form: trigger-only, no payload variable needed */
+    cel_listen(ClickEvent) {
+        s_parentTriggerOnlyClicks++;
+    }
+}
+
 CEL_Composable(ModalParent) {
     /* Parent listens for ClickEvent */
     cel_listen(ClickEvent, ev) {
         s_parentReceivedClicks++;
         s_lastClickX = ev->mouseX;
     }
+    ModalTriggerChild();
     ButtonChild();
 }
 
@@ -64,6 +73,7 @@ static void TestEventTreeLocalBubbling(void)
 {
     s_parentReceivedClicks = 0;
     s_lastClickX = 0;
+    s_parentTriggerOnlyClicks = 0;
     s_buttonTriggered = false;
 
     CelsSession session;
@@ -76,10 +86,12 @@ static void TestEventTreeLocalBubbling(void)
 
     assert(s_parentReceivedClicks == 1);
     assert(s_lastClickX == 100);
+    assert(s_parentTriggerOnlyClicks == 1);
 
     /* Subsequent quiet recompose skips since no new events */
     assert(CelsSessionRecompose(&session) == CELS_OK);
     assert(s_parentReceivedClicks == 1);
+    assert(s_parentTriggerOnlyClicks == 1);
 
     CelsSessionDestroy(&session);
 }
@@ -90,6 +102,8 @@ static void TestEventTreeLocalBubbling(void)
 
 static int s_hudReceivedDamage = 0;
 static float s_lastDamageAmount = 0.0f;
+static int s_hudTriggerOnlyCount = 0;
+static int s_hudUnusedVarCount = 0;
 
 CEL_Composable(HudWidget) {
     cel_connect(DamageSignal, sig) {
@@ -98,15 +112,33 @@ CEL_Composable(HudWidget) {
     }
 }
 
+CEL_Composable(HudTriggerWidget) {
+    /* 1-argument form: trigger-only, no payload variable needed */
+    cel_connect(DamageSignal) {
+        s_hudTriggerOnlyCount++;
+    }
+}
+
+CEL_Composable(HudUnusedVarWidget) {
+    /* 2-argument form with unused variable: no (void)sig needed */
+    cel_connect(DamageSignal, sig) {
+        s_hudUnusedVarCount++;
+    }
+}
+
 CEL_Composition(HudSessionApp, void *userData) {
     (void)userData;
     HudWidget();
+    HudTriggerWidget();
+    HudUnusedVarWidget();
 }
 
 static void TestSignalTargetedSession(void)
 {
     s_hudReceivedDamage = 0;
     s_lastDamageAmount = 0.0f;
+    s_hudTriggerOnlyCount = 0;
+    s_hudUnusedVarCount = 0;
 
     CelsSession hudSession;
     CelsSessionInit(&hudSession, NULL);
@@ -115,6 +147,8 @@ static void TestSignalTargetedSession(void)
     /* Mount HUD */
     assert(CelsSessionRecompose(&hudSession) == CELS_OK);
     assert(s_hudReceivedDamage == 0);
+    assert(s_hudTriggerOnlyCount == 0);
+    assert(s_hudUnusedVarCount == 0);
 
     /* External Game Session or caller sends a targeted signal to hudSession */
     cel_signal(&hudSession, DamageSignal, { .targetId = 7, .amount = 45.5f });
@@ -123,10 +157,14 @@ static void TestSignalTargetedSession(void)
     assert(CelsSessionRecompose(&hudSession) == CELS_OK);
     assert(s_hudReceivedDamage == 1);
     assert(s_lastDamageAmount == 45.5f);
+    assert(s_hudTriggerOnlyCount == 1);
+    assert(s_hudUnusedVarCount == 1);
 
     /* Subsequent recompose skips */
     assert(CelsSessionRecompose(&hudSession) == CELS_OK);
     assert(s_hudReceivedDamage == 1);
+    assert(s_hudTriggerOnlyCount == 1);
+    assert(s_hudUnusedVarCount == 1);
 
     CelsSessionDestroy(&hudSession);
 }
@@ -135,6 +173,8 @@ static void TestEngineNamedSessionLifecycleAndSignal(void)
 {
     s_hudReceivedDamage = 0;
     s_lastDamageAmount = 0.0f;
+    s_hudTriggerOnlyCount = 0;
+    s_hudUnusedVarCount = 0;
 
     CelsEngine engine;
     CelsEngineInit(&engine, NULL);
@@ -166,6 +206,8 @@ static void TestEngineNamedSessionLifecycleAndSignal(void)
     assert(CelsEngineRecompose(&engine) == CELS_OK);
     assert(s_hudReceivedDamage == 1);
     assert(s_lastDamageAmount == 88.5f);
+    assert(s_hudTriggerOnlyCount == 1);
+    assert(s_hudUnusedVarCount == 1);
 
     CelsEngineDestroy(&engine);
 }
@@ -176,6 +218,7 @@ static void TestEngineNamedSessionLifecycleAndSignal(void)
 
 static int s_audioReceivedBinds = 0;
 static float s_lastVolume = 0.0f;
+static int s_audioTriggerOnlyBinds = 0;
 
 CEL_Composable(AudioListenerWidget) {
     cel_bind(AudioBroadcast, bcast) {
@@ -184,15 +227,24 @@ CEL_Composable(AudioListenerWidget) {
     }
 }
 
+CEL_Composable(AudioTriggerWidget) {
+    /* 1-argument form: trigger-only, no payload variable needed */
+    cel_bind(AudioBroadcast) {
+        s_audioTriggerOnlyBinds++;
+    }
+}
+
 CEL_Composition(AudioSessionApp, void *userData) {
     (void)userData;
     AudioListenerWidget();
+    AudioTriggerWidget();
 }
 
 static void TestBroadcastEngineWide(void)
 {
     s_audioReceivedBinds = 0;
     s_lastVolume = 0.0f;
+    s_audioTriggerOnlyBinds = 0;
 
     CelsEngine engine;
     CelsEngineInit(&engine, NULL);
@@ -201,6 +253,7 @@ static void TestBroadcastEngineWide(void)
     /* Initial mount */
     assert(CelsEngineRecompose(&engine) == CELS_OK);
     assert(s_audioReceivedBinds == 0);
+    assert(s_audioTriggerOnlyBinds == 0);
 
     /* Broadcast from external thread or system */
     cel_broadcast(AudioBroadcast, { .soundName = "explosion.wav", .volume = 0.95f });
@@ -209,10 +262,12 @@ static void TestBroadcastEngineWide(void)
     assert(CelsEngineRecompose(&engine) == CELS_OK);
     assert(s_audioReceivedBinds == 1);
     assert(s_lastVolume == 0.95f);
+    assert(s_audioTriggerOnlyBinds == 1);
 
     /* Subsequent recompose skips */
     assert(CelsEngineRecompose(&engine) == CELS_OK);
     assert(s_audioReceivedBinds == 1);
+    assert(s_audioTriggerOnlyBinds == 1);
 
     CelsEngineDestroy(&engine);
 }

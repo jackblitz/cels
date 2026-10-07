@@ -15,6 +15,20 @@ static volatile int s_logHead = 0; // write index
 static volatile int s_logTail = 0; // read index
 static volatile int s_logDropped = 0;
 
+/**
+ * Formats and enqueues a log message into the internal fixed ring buffer.
+ *
+ * Extracts the file basename, prepends a timestamped/level severity prefix,
+ * formats the variable arguments into a fixed-size buffer, and advances the
+ * ring buffer head. If the buffer is full, the message is dropped and a dropped
+ * counter is incremented to prevent I/O blocking during active frame execution.
+ *
+ * @param level Log severity level (CELS_LOG_LEVEL_INFO, WARNING, ERROR).
+ * @param file  Source file path where the log originated (basename extracted).
+ * @param line  Source line number.
+ * @param fmt   Printf-style format string. Non-NULL.
+ * @param ...   Format string arguments.
+ */
 void CelsLog(CelsLogLevel level, const char *file, int line, const char *fmt, ...)
 {
     int nextHead = (s_logHead + 1) % CELS_LOG_BUFFER_SIZE;
@@ -52,6 +66,13 @@ void CelsLog(CelsLogLevel level, const char *file, int line, const char *fmt, ..
     s_logHead = nextHead;
 }
 
+/**
+ * Flushes all pending log messages from the ring buffer to standard output streams.
+ *
+ * Drains messages from tail to head, routing ERROR level logs to stderr and other
+ * levels to stdout. If any messages were dropped due to ring buffer overflow, a
+ * warning notice is emitted to stderr. Finally, flushes both stdout and stderr.
+ */
 void CelsFlushLogs(void)
 {
     if (s_logHead == s_logTail && s_logDropped == 0) return;

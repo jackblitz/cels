@@ -10,44 +10,79 @@
 /* Standard Built-In Easing Functions                                        */
 /* ========================================================================= */
 
-/** Linear easing: constant velocity. */
+/**
+ * Linear easing curve with constant velocity throughout the transition.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Unmodified normalized progress value identical to t.
+ */
 float CelsEaseLinear(float t)
 {
     return t;
 }
 
-/** Quadratic ease-in: accelerating from zero velocity. */
+/**
+ * Quadratic ease-in curve that accelerates from zero initial velocity.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Eased interpolation factor computed as t^2.
+ */
 float CelsEaseInQuad(float t)
 {
     return t * t;
 }
 
-/** Quadratic ease-out: decelerating to zero velocity. */
+/**
+ * Quadratic ease-out curve that decelerates towards zero terminal velocity.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Eased interpolation factor computed as t * (2 - t).
+ */
 float CelsEaseOutQuad(float t)
 {
     return t * (2.0f - t);
 }
 
-/** Quadratic ease-in-out: acceleration until midpoint, then deceleration. */
+/**
+ * Quadratic ease-in-out curve with acceleration up to midpoint and deceleration thereafter.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Eased interpolation factor smoothly transitioning between 0.0 and 1.0.
+ */
 float CelsEaseInOutQuad(float t)
 {
     return (t < 0.5f) ? (2.0f * t * t) : (-1.0f + (4.0f - 2.0f * t) * t);
 }
 
-/** Cubic ease-in: accelerating from zero velocity with cubic curve. */
+/**
+ * Cubic ease-in curve that accelerates sharply from zero initial velocity.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Eased interpolation factor computed as t^3.
+ */
 float CelsEaseInCubic(float t)
 {
     return t * t * t;
 }
 
-/** Cubic ease-out: decelerating to zero velocity with cubic curve. */
+/**
+ * Cubic ease-out curve that smoothly decelerates to rest at the target value.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Eased interpolation factor computed via inverted cubic curve.
+ */
 float CelsEaseOutCubic(float t)
 {
     const float f = t - 1.0f;
     return f * f * f + 1.0f;
 }
 
-/** Cubic ease-in-out: acceleration then deceleration with cubic curve. */
+/**
+ * Cubic ease-in-out curve accelerating until the halfway point and decelerating to the target.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Eased interpolation factor between 0.0 and 1.0.
+ */
 float CelsEaseInOutCubic(float t)
 {
     if (t < 0.5f) {
@@ -57,25 +92,45 @@ float CelsEaseInOutCubic(float t)
     return 0.5f * f * f * f + 1.0f;
 }
 
-/** Sinusoidal ease-in: accelerating using trigonometric sine. */
+/**
+ * Sinusoidal ease-in curve accelerating smoothly using trigonometric quarter-cosine.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Eased interpolation factor.
+ */
 float CelsEaseInSine(float t)
 {
     return 1.0f - (float)cos(t * (M_PI / 2.0));
 }
 
-/** Sinusoidal ease-out: decelerating using trigonometric sine. */
+/**
+ * Sinusoidal ease-out curve decelerating smoothly using trigonometric quarter-sine.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Eased interpolation factor.
+ */
 float CelsEaseOutSine(float t)
 {
     return (float)sin(t * (M_PI / 2.0));
 }
 
-/** Sinusoidal ease-in-out: acceleration then deceleration using trigonometric sine. */
+/**
+ * Sinusoidal ease-in-out curve with symmetric trigonometric acceleration and deceleration.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Eased interpolation factor.
+ */
 float CelsEaseInOutSine(float t)
 {
     return -0.5f * (float)(cos(M_PI * t) - 1.0);
 }
 
-/** Bounce ease-out: decelerating with decaying rebounds off target value. */
+/**
+ * Bounce ease-out curve simulating decaying physical rebounds against the target value.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Bouncing interpolation factor settling cleanly at 1.0.
+ */
 float CelsEaseOutBounce(float t)
 {
     const float n1 = 7.5625f;
@@ -96,7 +151,12 @@ float CelsEaseOutBounce(float t)
     return n1 * t * t + 0.984375f;
 }
 
-/** Back ease-out: overshooting target value slightly then snapping back. */
+/**
+ * Back ease-out curve that overshoots the target value slightly before settling back.
+ *
+ * @param t Normalized elapsed time in the range [0.0, 1.0].
+ * @return Overshooting interpolation factor.
+ */
 float CelsEaseOutBack(float t)
 {
     const float c1 = 1.70158f;
@@ -110,7 +170,21 @@ float CelsEaseOutBack(float t)
 /* ========================================================================= */
 
 /**
- * Updates or advances a transition in the active session.
+ * Updates or advances a temporal state transition for the current frame.
+ *
+ * Evaluates the elapsed monotonic time against the transition duration:
+ * - On first mount (uninitialized): snaps current to targetVal and marks settled.
+ * - On retarget mid-flight: resets startVal to current value, adjusts timestamp, and un-settles.
+ * - While active: samples easing curve and computes linearly interpolated current value.
+ * - Automatically registers session invalidation on group key until settled to drive frames.
+ *
+ * @param session    Owning or active session. Safe if NULL (resolves current session).
+ * @param state      Pointer to persistent transition state storage. Non-NULL.
+ * @param key        Unique 64-bit composable slot group key used for frame invalidation.
+ * @param target     Target floating-point value to converge towards.
+ * @param durationMs Transition duration in milliseconds.
+ * @param easing     Easing function pointer. Defaults to CelsEaseOutQuad if NULL.
+ * @return Current interpolated floating-point value for the active frame.
  */
 float CelsTransitionStep(
     CelsSession *session,

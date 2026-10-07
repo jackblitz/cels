@@ -88,7 +88,17 @@
 /* Forward declarations */
 struct CelsEngine;
 typedef struct CelsEngine CelsEngine;
-typedef struct CelsEngine CelsApp;
+struct CelsAppDef;
+#ifndef CELS_APP_DEF_TYPEDEF_DEFINED
+#define CELS_APP_DEF_TYPEDEF_DEFINED
+typedef struct CelsAppDef CelsAppDef;
+typedef struct CelsAppDef CelsAppManifest;
+#endif
+struct CelsApp;
+#ifndef CELS_APP_TYPEDEF_DEFINED
+#define CELS_APP_TYPEDEF_DEFINED
+typedef struct CelsApp CelsApp;
+#endif
 #ifndef CELS_SESSION_TYPEDEF_DEFINED
 #define CELS_SESSION_TYPEDEF_DEFINED
 typedef struct CelsSession CelsSession;
@@ -469,6 +479,14 @@ void CelSessionDestroy(CEL_Session *session);
  */
 CelsResult CelsSessionRecompose(CelsSession *session);
 CelsResult CelSessionRecompose(CEL_Session *session);
+
+/**
+ * Checks whether a session requires recomposition (dirty state, signals, invalidations, or initial pass).
+ *
+ * @param session Target session. Safe if NULL.
+ * @return True if session needs a recomposition pass; false if completely idle and clean.
+ */
+bool CelsSessionNeedsRecompose(const CelsSession *session);
 
 /**
  * Recomposes all registered active sessions.

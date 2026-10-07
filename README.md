@@ -6,7 +6,7 @@
     <img src="https://img.shields.io/badge/version-v0.4.0-blue" alt="version">
     <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="license">
     <img src="https://img.shields.io/badge/standard-C99-orange?logo=c" alt="C99">
-    <img src="https://img.shields.io/badge/tests-70%20passing-brightgreen" alt="tests">
+    <img src="https://img.shields.io/badge/tests-73%20passing-brightgreen" alt="tests">
     <img src="https://img.shields.io/badge/allocations-0%20runtime%20heap-blueviolet" alt="zero-alloc">
   </p>
 </p>
@@ -106,7 +106,7 @@ CEL_OnStart(App_OnStart) {
     cel_attach(session, AppRoot);
 }
 
-CEL_App(MyApp,
+CEL_App_Def(MyApp,
     .onStart = App_OnStart
 );
 ```
@@ -143,7 +143,7 @@ Comprehensive guides and technical documentation are available in the **[`docs/`
 ## Testing & Verification
 
 ```bash
-# Run all 63 tests across 11 architectural features
+# Run all 73 tests across 12 architectural features
 ./build/windows/test_cli.exe all
 
 # Run performance benchmark suite

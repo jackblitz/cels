@@ -96,7 +96,7 @@ CEL_App(MyApplication, MainView);
 ```
 
 > [!TIP]
-> If your application root requires a lifecycle evaluation predicate (to control when it mounts or despawns), pass it as the second argument: `CEL_App(MyApplication, MainView, MainEval)`. For advanced custom manifest hooks (such as `.continuousCompose = true` or cleanup callbacks), use `CEL_App_Manifest(MyApplication, ...)`.
+> If your application root requires a lifecycle evaluation predicate (to control when it mounts or despawns), pass it as the second argument: `CEL_App(MyApplication, MainView, MainEval)`. For custom application definitions with setup and teardown lifecycle hooks, use `CEL_App_Def(MyApplication, .onStart = ..., .onReload = ..., .onEnd = ...)`. Execution modes (immediate vs retained) are configured cleanly by the host via `CelsEngineSetMode`.
 
 Now create `src/main_view.c` to declare your root composition and a simple composable:
 

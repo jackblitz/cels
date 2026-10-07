@@ -255,7 +255,7 @@ CEL_Composable(SubmitButton, const FormState*, state) {
     RenderButton("Submit");
 }
 
-CEL_Composition(MyWindowComposition, void *ctx) {
+CEL_Composition(MyWindowComposition) {
     FormState *form = cel_state(FormState, { .canSubmit = true });
     SubmitButton(form);
 }
@@ -317,13 +317,93 @@ cel_connect(HealthSignal, sig) {
 }
 ```
 
+---
+
+## 5. Host Application Architecture & Multi-DLL Hosting
+
+In CELS, the host executable (`cel_host`) controls all platform lifecycles and hosts one or more dynamic application modules (`cel_app`).
+
+```
++=============================================================================+
+| HOST EXECUTABLE (cel_host)                                                  |
+| CelsEngine (Modules, Global Broadcast Bus, Ambient Context)                 |
+|                                                                             |
+|  +---------------------------+       +------------------------------------+ |
+|  | CelsSession ("main")      |       | CelsSession ("editor")             | |
+|  | Slab: 128 KiB             |       | Slab: 256 KiB                      | |
+|  | CelsApp (game_app.dll)    |       | CelsApp (editor_tooling.dll)       | |
+|  | - instanceId = 1          |       | - instanceId = 2                   | |
+|  | - CEL_App_Def(GameApp)    |       | - CEL_App_Def(EditorApp)           | |
+|  +---------------------------+       +------------------------------------+ |
++=============================================================================+
+```
+
+### Multi-DLL Hosting Pipeline (`CelsApp`)
+
+Hosts can load multiple independent modules simultaneously into dedicated sessions:
+
+```c
+CelsEngine engine;
+CelsEngineInitWithProfile(&engine, NULL, CELS_PROFILE_1K);
+
+CelsSession *mainSession   = cel_get_session(&engine, "main");
+CelsSession *editorSession = CelsEngineCreateSession(&engine, "editor", CELS_PROFILE_2K);
+
+CelsApp gameApp;
+CelsApp editorApp;
+
+/* Load dynamic modules independently into target sessions */
+CelsAppLoad(&gameApp, &engine, mainSession, "game_app");
+CelsAppLoad(&editorApp, &engine, editorSession, "editor_tooling");
+
+CelsAppStart(&gameApp);
+CelsAppStart(&editorApp);
+
+while (!engine.shouldQuit) {
+    /* Hot-reload checks for both modules */
+    CelsAppCheckReload(&gameApp);
+    CelsAppCheckReload(&editorApp);
+
+    if (CelsEngineNeedsRecompose(&engine)) {
+        CelsEngineRecompose(&engine);
+    }
+    SleepMs(16);
+}
+
+CelsAppDestroy(&editorApp);
+CelsAppDestroy(&gameApp);
+CelsEngineDestroy(&engine);
+```
+
+- **Lock Evasion & Multi-Module Isolation**: Shadow copy files are stamped with `app->instanceId` (`app.hot_<PID>_<instanceId>_<reloadCount>.tmp.dll`), preventing OS file locks and shared handle ref-counts between parallel modules.
+- **Selective Entry Symbols**: Multiple app definitions can reside in a single DLL and be loaded individually via `CelsAppLoadEntry(app, engine, session, dllPath, "CelsGetAppDef_SubApp")`.
+
+### Host Execution Modes: Immediate vs. Retained
+
+The host explicitly selects how recomposition is driven using `CelsEngineSetMode(&engine, mode)`:
+
+| Mode | Flag | Frame Loop Strategy | Ideal Use Case |
+| :--- | :--- | :--- | :--- |
+| **Immediate Mode** | `CELS_MODE_IMMEDIATE` *(default)* | Recomposes every frame tick unconditionally | Real-time games, physics simulations, 60+ FPS rendering loops |
+| **Retained Mode** | `CELS_MODE_RETAINED` | Recomposes only when `CelsEngineNeedsRecompose` returns `true` | Native desktop GUIs, toolbars, dialogs, battery-saving apps |
+
+In Retained Mode, `CelsEngineNeedsRecompose(&engine)` evaluates:
+1. Primary or secondary sessions have uncomposed root trees.
+2. Watched reactive state cells have been invalidated via `cel_mutate`.
+3. Discrete tree events (`cel_event`), signals (`cel_signal`), or global broadcasts (`cel_broadcast`) are queued.
+4. Active fiber tasks (`CEL_Task`) have expired delays or are ready to resume.
+5. Code hot-reload is pending (`CelsSessionHotReload`).
+
+---
+
 ### Summary Cheat Sheet
 
 | Requirement | Entity Type | API Definition | Example |
 | :--- | :--- | :--- | :--- |
-| Standalone OS Window / Root Scene | **Composition** | `CEL_Composition(Name, void* ctx)` | `cel_attach(session, WindowComposition, WindowEval)` |
+| Standalone OS Window / Root Scene | **Composition** | `CEL_Composition(Name)` | `cel_attach(session, WindowComposition, WindowEval)` |
 | Reusable Widget / Subtree | **Composable** | `CEL_Composable(Name, ...)` | `ProfileCard(user)` |
 | Dedicated Real-time Thread | **Session** | `CelsSession* session` | Audio thread session |
+| Dynamic Hosted Application | **Host App Handle** | `CelsApp app` | `CelsAppLoad(&app, &engine, session, "game_app")` |
 | Persistent Local Value | **Slot Value** | `cel_remember(Type, init)` | `uint32_t *frame = cel_remember(uint32_t, 0)` |
 | Scoped Reactive Model | **Hoisted State** | `cel_state(Type, { ... })` | `WindowState *win = cel_state(...)` |
 | Local Tree Event | **Discrete Event** | `cel_event(Type, ...)` / `cel_listen(Type, ev)` | `cel_event(ClickEvent, { .id = 1 })` |

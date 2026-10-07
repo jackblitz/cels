@@ -214,8 +214,7 @@ CEL_Composition(EventAppComposition) {
     }
     TuiFooter("Controls: [E] Event | [S] Signal | [B] Broadcast | [T] Task | [Q] Quit");
 
-    cel_connect(StartWorkflowSignal, sig) {
-        (void)sig;
+    cel_connect(StartWorkflowSignal) {
         cel_mutate(state) {
             this->taskWorkflowActive = true;
             this->workflowStep = 0;

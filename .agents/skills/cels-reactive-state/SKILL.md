@@ -60,8 +60,7 @@ CEL_State(WindowState) {
 Inside a parent composition or container composable, allocate state with `cel_state`:
 
 ```c
-CEL_Composition(MainWindow, void *userData) {
-    (void)userData;
+CEL_Composition(MainWindow) {
     // Pinned to this slot, auto-generated unique ID, auto-cleanup on unmount:
     WindowState *win = cel_state(WindowState, ((WindowState){
         .isOpen = true,
