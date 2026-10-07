@@ -4,6 +4,7 @@
 #include "cels/engine.h"
 #include "terminal.h"
 #include "common_events.h"
+#include "cels_input.h"
 
 #ifdef __cplusplus
 extern "C" {

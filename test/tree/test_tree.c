@@ -321,12 +321,130 @@ static void TestTreeFullPassSequence(void) {
     CelsSessionDestroy(&session);
 }
 
+/* ========================================================================= */
+/* Child Introspection & Container Tracking Tests                            */
+/* ========================================================================= */
+
+CEL_State(CounterState) {
+    int tick;
+};
+
+static uint32_t s_childIndices[4];
+static bool s_childIsFirst[4];
+static bool s_childIsLast[4];
+static uint32_t s_childTotalSeen[4];
+static int s_childInvokedCount = 0;
+static bool s_rootChecked = false;
+
+CEL_Composable(TestLeafItem, int, val) {
+    (void)val;
+    const CounterState *cnt = cel_watch(CounterState, CEL_ID("CounterState"));
+    (void)cnt;
+
+    CelsChildInfo info;
+    CelsResult res = cel_child_info(&info);
+    assert(res == CELS_OK);
+
+    uint32_t idx = 999;
+    assert(cel_child_index(&idx) == CELS_OK);
+    assert(idx == info.index);
+
+    bool isFirst = false;
+    assert(cel_is_first_child(&isFirst) == CELS_OK);
+    assert(isFirst == info.isFirst);
+
+    bool isLast = false;
+    assert(cel_is_last_child(&isLast) == CELS_OK);
+    assert(isLast == info.isLast);
+
+    if (s_childInvokedCount < 4) {
+        s_childIndices[s_childInvokedCount] = idx;
+        s_childIsFirst[s_childInvokedCount] = isFirst;
+        s_childIsLast[s_childInvokedCount] = isLast;
+        s_childTotalSeen[s_childInvokedCount] = info.totalCount;
+        s_childInvokedCount++;
+    }
+}
+
+CEL_Composable(TestContainerGroup) {
+    cel_container(TestContainerBlock) {
+        TestLeafItem(10);
+        TestLeafItem(20);
+        TestLeafItem(30);
+
+        uint32_t containerChildCount = 0;
+        assert(cel_child_count(&containerChildCount) == CELS_OK);
+        assert(containerChildCount == 3);
+    }
+}
+
+CEL_Composition(TestContainerComposition) {
+    CelsChildInfo info;
+    CelsResult res = cel_child_info(&info);
+    assert(res == CELS_ERROR_INVALID_STATE);
+    s_rootChecked = true;
+    TestContainerGroup();
+}
+
+static void TestTreeChildIntrospection(void) {
+    /* 1. Outside active session */
+    uint32_t outIdx = 999;
+    bool outBool = false;
+    CelsChildInfo outInfo;
+    assert(cel_child_index(&outIdx) == CELS_ERROR_INVALID_STATE);
+    assert(cel_child_count(&outIdx) == CELS_ERROR_INVALID_STATE);
+    assert(cel_is_first_child(&outBool) == CELS_ERROR_INVALID_STATE);
+    assert(cel_is_last_child(&outBool) == CELS_ERROR_INVALID_STATE);
+    assert(cel_child_info(&outInfo) == CELS_ERROR_INVALID_STATE);
+
+    /* 2. Argument validation */
+    assert(cel_child_index(NULL) == CELS_ERROR_INVALID_ARGUMENT);
+    assert(cel_child_count(NULL) == CELS_ERROR_INVALID_ARGUMENT);
+    assert(cel_is_first_child(NULL) == CELS_ERROR_INVALID_ARGUMENT);
+    assert(cel_is_last_child(NULL) == CELS_ERROR_INVALID_ARGUMENT);
+    assert(cel_child_info(NULL) == CELS_ERROR_INVALID_ARGUMENT);
+
+    /* 3. Run session with container and children */
+    CelsSession session;
+    CelsSessionInit(&session, NULL);
+    CelsSessionRememberState(&session, CEL_ID("CounterState"), sizeof(CounterState), &((CounterState){ .tick = 0 }));
+    cel_attach(&session, TestContainerComposition);
+
+    s_childInvokedCount = 0;
+    s_rootChecked = false;
+
+    /* PASS 1: Mount */
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(s_rootChecked == true);
+    assert(s_childInvokedCount == 3);
+    assert(s_childIndices[0] == 0);
+    assert(s_childIndices[1] == 1);
+    assert(s_childIndices[2] == 2);
+    assert(s_childIsFirst[0] == true);
+    assert(s_childIsFirst[1] == false);
+    assert(s_childIsFirst[2] == false);
+
+    /* PASS 2: Mutate state to trigger recomposition of watchers */
+    cels_session_mutate(&session, CEL_ID("CounterState"), CounterState) {
+        this->tick++;
+    }
+    s_childInvokedCount = 0;
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(s_childInvokedCount == 3);
+    assert(s_childIndices[0] == 0 && s_childTotalSeen[0] == 3 && s_childIsFirst[0] == true && s_childIsLast[0] == false);
+    assert(s_childIndices[1] == 1 && s_childTotalSeen[1] == 3 && s_childIsFirst[1] == false && s_childIsLast[1] == false);
+    assert(s_childIndices[2] == 2 && s_childTotalSeen[2] == 3 && s_childIsFirst[2] == false && s_childIsLast[2] == true);
+
+    CelsSessionDestroy(&session);
+}
+
 static const TestCase s_treeTests[] = {
     { "TestTreeInitialMount", "Initial mount with complete hierarchy", TestTreeInitialMount },
     { "TestTreeToggleSubMenu", "Conditional child branch toggle (showSubMenu)", TestTreeToggleSubMenu },
     { "TestTreeToggleOptionalSidebar", "Conditional branch despawn and observer release", TestTreeToggleOptionalSidebar },
     { "TestTreeReenableOptionalSidebar", "Re-attaching previously pruned conditional branch", TestTreeReenableOptionalSidebar },
-    { "TestTreeFullPassSequence", "Complete multi-pass hierarchy manipulation sequence", TestTreeFullPassSequence }
+    { "TestTreeFullPassSequence", "Complete multi-pass hierarchy manipulation sequence", TestTreeFullPassSequence },
+    { "TestTreeChildIntrospection", "Container child metrics, indexing, and isFirst/isLast introspection", TestTreeChildIntrospection }
 };
 
 static const TestSuite s_treeSuite = {
@@ -339,3 +457,4 @@ static const TestSuite s_treeSuite = {
 const TestSuite *GetTreeTestSuite(void) {
     return &s_treeSuite;
 }
+

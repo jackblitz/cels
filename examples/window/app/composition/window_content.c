@@ -9,7 +9,7 @@ typedef struct LastEventMsg {
 } LastEventMsg;
 
 /**
- * Container composable implementation.
+ * Parent composable implementation.
  *
  * Demonstrates:
  * - Persistent local slot memory (cel_remember)

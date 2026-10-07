@@ -69,6 +69,201 @@ int CelsRunHostEx(int argc, char **argv, const char *appName)
             CelsEngineRecompose(&engine);
             CelsTerminalSleepMs(60);
             CelsEngineRecompose(&engine);
+        } else if (appName != NULL && strcmp(appName, "cel_input_dll") == 0) {
+            /* Automated verification of Gameplay vs UI Input Mapping and CEL_Layout Focus: */
+            CelsSetCurrentSession(session);
+            CelsInputState *input = cel_remember_state(CelsInputState, {0});
+
+            /* 1. In Gameplay: Send 'W' to move player character */
+            cel_mutate(input) {
+                this->rawKey = 'W';
+                this->handled = false;
+                this->frameId++;
+            }
+            cel_signal(session, CelsKeySignal, { .key = 'W' });
+            CelsEngineRecompose(&engine);
+
+            /* 2. Clear key */
+            cel_mutate(input) {
+                this->rawKey = 0;
+                this->handled = false;
+            }
+            CelsEngineRecompose(&engine);
+
+            /* 3. Send [Tab] to toggle into UI Menu mode */
+            cel_mutate(input) {
+                this->rawKey = '\t';
+                this->handled = false;
+                this->frameId++;
+            }
+            cel_signal(session, CelsKeySignal, { .key = '\t' });
+            CelsEngineRecompose(&engine);
+
+            /* 4. Clear key */
+            cel_mutate(input) {
+                this->rawKey = 0;
+                this->handled = false;
+            }
+            CelsEngineRecompose(&engine);
+
+            /* 5. In UI Menu: Item 0 (Volume) has focus. Send 'D' to increase volume */
+            cel_mutate(input) {
+                this->rawKey = 'D';
+                this->handled = false;
+                this->frameId++;
+            }
+            cel_signal(session, CelsKeySignal, { .key = 'D' });
+            CelsEngineRecompose(&engine);
+
+            /* 6. Clear key */
+            cel_mutate(input) {
+                this->rawKey = 0;
+                this->handled = false;
+            }
+            CelsEngineRecompose(&engine);
+
+            /* 7. Send 'S' to navigate focus down to Item 1 (Audio Mute) */
+            cel_mutate(input) {
+                this->rawKey = 'S';
+                this->handled = false;
+                this->frameId++;
+            }
+            cel_signal(session, CelsKeySignal, { .key = 'S' });
+            CelsEngineRecompose(&engine);
+
+            /* 8. Clear key */
+            cel_mutate(input) {
+                this->rawKey = 0;
+                this->handled = false;
+            }
+            CelsEngineRecompose(&engine);
+
+            /* 9. Send [Space] to activate focused item (toggle mute) */
+            cel_mutate(input) {
+                this->rawKey = ' ';
+                this->handled = false;
+                this->frameId++;
+            }
+            cel_signal(session, CelsKeySignal, { .key = ' ' });
+            CelsEngineRecompose(&engine);
+
+            /* 10. Clear key */
+            cel_mutate(input) {
+                this->rawKey = 0;
+                this->handled = false;
+            }
+            CelsEngineRecompose(&engine);
+
+            /* 11. Send 'S' to navigate focus down to Item 2 (Graphics Preset) */
+            cel_mutate(input) {
+                this->rawKey = 'S';
+                this->handled = false;
+                this->frameId++;
+            }
+            cel_signal(session, CelsKeySignal, { .key = 'S' });
+            CelsEngineRecompose(&engine);
+
+            /* 12. Clear key */
+            cel_mutate(input) {
+                this->rawKey = 0;
+                this->handled = false;
+            }
+            CelsEngineRecompose(&engine);
+
+            /* 13. Send 'D' to cycle graphics preset (HIGH -> ULTRA) */
+            cel_mutate(input) {
+                this->rawKey = 'D';
+                this->handled = false;
+                this->frameId++;
+            }
+            cel_signal(session, CelsKeySignal, { .key = 'D' });
+            CelsEngineRecompose(&engine);
+
+            /* 14. Clear key */
+            cel_mutate(input) {
+                this->rawKey = 0;
+                this->handled = false;
+            }
+            CelsEngineRecompose(&engine);
+
+            /* 15. Send [Space] to cycle graphics preset forward (ULTRA -> LOW) */
+            cel_mutate(input) {
+                this->rawKey = ' ';
+                this->handled = false;
+                this->frameId++;
+            }
+            cel_signal(session, CelsKeySignal, { .key = ' ' });
+            CelsEngineRecompose(&engine);
+        } else if (appName != NULL && strcmp(appName, "cel_component_dll") == 0) {
+            /* Automated verification of Declarative ECS Components & Reconciliation */
+            CelsSetCurrentSession(session);
+            CelsInputState *input = cel_remember_state(CelsInputState, {0});
+
+            /* 1. Toggle Burn Debuff ('b') */
+            cel_mutate(input) { this->rawKey = 'b'; this->handled = false; this->frameId++; }
+            CelsEngineRecompose(&engine);
+            cel_mutate(input) { this->rawKey = 0; }
+            CelsEngineRecompose(&engine);
+
+            /* 2. Toggle Energy Shield ('s') */
+            cel_mutate(input) { this->rawKey = 's'; this->handled = false; this->frameId++; }
+            CelsEngineRecompose(&engine);
+            cel_mutate(input) { this->rawKey = 0; }
+            CelsEngineRecompose(&engine);
+
+            /* 3. Toggle Boss Tag ('t') */
+            cel_mutate(input) { this->rawKey = 't'; this->handled = false; this->frameId++; }
+            CelsEngineRecompose(&engine);
+            cel_mutate(input) { this->rawKey = 0; }
+            CelsEngineRecompose(&engine);
+        } else if (appName != NULL && strcmp(appName, "cel_theming_dll") == 0) {
+            /* Automated verification of Ambient Theming and Modal Overrides */
+            CelsSetCurrentSession(session);
+            CelsInputState *input = cel_remember_state(CelsInputState, {0});
+
+            /* 1. Cycle Theme to Dark Mode ('t') */
+            cel_mutate(input) { this->rawKey = 't'; this->handled = false; this->frameId++; }
+            CelsEngineRecompose(&engine);
+            cel_mutate(input) { this->rawKey = 0; }
+            CelsEngineRecompose(&engine);
+
+            /* 2. Toggle High-Contrast Alert ('a') */
+            cel_mutate(input) { this->rawKey = 'a'; this->handled = false; this->frameId++; }
+            CelsEngineRecompose(&engine);
+            cel_mutate(input) { this->rawKey = 0; }
+            CelsEngineRecompose(&engine);
+        } else if (appName != NULL && strcmp(appName, "cel_transition_dll") == 0) {
+            /* Automated verification of Temporal Motion & Easing */
+            CelsSetCurrentSession(session);
+            CelsInputState *input = cel_remember_state(CelsInputState, {0});
+
+            /* 1. Trigger Damage ('d') */
+            cel_mutate(input) { this->rawKey = 'd'; this->handled = false; this->frameId++; }
+            CelsEngineRecompose(&engine);
+            cel_mutate(input) { this->rawKey = 0; }
+            CelsTerminalSleepMs(50);
+            CelsEngineRecompose(&engine);
+        } else if (appName != NULL && strcmp(appName, "cel_task_dll") == 0) {
+            /* Automated verification of Asynchronous Multi-Step Task */
+            CelsSetCurrentSession(session);
+            CelsInputState *input = cel_remember_state(CelsInputState, {0});
+
+            /* 1. Trigger Connect ('c') */
+            cel_mutate(input) { this->rawKey = 'c'; this->handled = false; this->frameId++; }
+            CelsEngineRecompose(&engine);
+            cel_mutate(input) { this->rawKey = 0; }
+            CelsTerminalSleepMs(220);
+            CelsEngineRecompose(&engine);
+        } else if (appName != NULL && strcmp(appName, "cel_dll") == 0) {
+            /* Automated verification of Window Component & Status Badge */
+            CelsSetCurrentSession(session);
+            CelsInputState *input = cel_remember_state(CelsInputState, {0});
+
+            /* 1. Toggle Badge ('b') */
+            cel_mutate(input) { this->rawKey = 'b'; this->handled = false; this->frameId++; }
+            CelsEngineRecompose(&engine);
+            cel_mutate(input) { this->rawKey = 0; }
+            CelsEngineRecompose(&engine);
         }
 
         CelsEngineEnd(&engine);
@@ -80,17 +275,35 @@ int CelsRunHostEx(int argc, char **argv, const char *appName)
     /* Interactive Tick Loop */
     while (!engine.shouldQuit) {
         CelsAppRuntimeCheck(&engine);
-        CelsEngineRecompose(&engine);
 
         int key = CelsTerminalPollKey();
         if (key == 'q' || key == 'Q' || key == 27) {
             engine.shouldQuit = true;
             break;
-        } else if (key > 0) {
-            /* Dispatch discrete key signal to session */
-            cel_signal(session, CelsKeySignal, { .key = key });
         }
 
+        /* Update reactive input state in the session */
+        CelsSetCurrentSession(session);
+        CelsInputState *input = cel_remember_state(CelsInputState, {0});
+        if (input != NULL) {
+            if (key > 0) {
+                cel_mutate(input) {
+                    this->rawKey = key;
+                    this->handled = false;
+                    this->frameId++;
+                }
+                /* Also dispatch discrete key signal for backward compatibility */
+                cel_signal(session, CelsKeySignal, { .key = key });
+            } else if (input->rawKey != 0) {
+                /* Clear key on subsequent frame (1-frame pulse) */
+                cel_mutate(input) {
+                    this->rawKey = 0;
+                    this->handled = false;
+                }
+            }
+        }
+
+        CelsEngineRecompose(&engine);
         CelsTerminalSleepMs(16);
     }
 

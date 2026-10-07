@@ -155,14 +155,17 @@ CELS provides two distinct mechanisms for accessing external data:
 ### Tier 3: Composable (`CEL_Composable` / `CEL_ComposableDef`)
 - **What it is**: Reusable building blocks that declare UI elements, layout containers, or local reactive logic.
 - **What it owns**:
-  - A slot group in the session's slot table (automatically keyed by callsite source location and index).
+  - A slot group in the session's slot table (automatically keyed by callsite source location and index, or keyed explicitly via `CEL_Composable(Name, id, ...)`, `cel_key`, or `cel_call`).
   - Local persistent slot state via `cel_remember(Type, initialValue)`.
   - Hoisted reactive state instances via `cel_state(Type, initialValue)`.
   - Reactive subscriptions via `cel_watch(instancePtr)` (or `cel_watch(Type, stateId)`).
   - Resource acquisition and release hooks via `cel_lifecycle(LifecycleName, resourceData)`.
+  - Declarative components attached via `cel_has(Type, ...)` and tags via `cel_has_tag(Type)` with automatic omission diffing (`CELS_OP_REMOVE`) and unmount deletion (`CELS_OP_DELETE`).
+  - Ambient context scoping and consumption via `cel_context(Type, ptr)` and `cel_context(Type)`.
 - **Key Characteristics**:
   - Idempotent and declarative: during recomposition, composables execute sequentially, matching previous slots or inserting/deleting slots via the internal gap buffer.
-  - Composable functions can take typed arguments using `CEL_Composable(Name, Type, arg)` / `CEL_ComposableDef(Name, Type, arg)` or take no arguments using `CEL_Composable(Name)`.
+  - Composable functions can take typed arguments using unkeyed forms (e.g. `CEL_Composable(Name, Type, arg)`), take an explicit 64-bit ID parameter using keyed forms (e.g. `CEL_Composable(Name, id, Type, arg)`), or take no arguments using `CEL_Composable(Name)`.
+  - Every composable has a stable 64-bit identity (queried via `cel_id()`), auto-generated or explicitly bound (`CEL_Composable(Name, id, ...)`, `cel_key(id)`, `cel_call(Fn, id)`), seamlessly mapping to external ECS entities (Flecs `ecs_entity_t`).
 
 ---
 
@@ -316,6 +319,101 @@ cel_connect(HealthSignal, sig) {
     }
 }
 ```
+
+### Pattern 5: Natural Component Decomposition & Containers (`cel_container` & `CEL_Layout`)
+
+In CELS, **every composable naturally acts as a container for its children** through sequential invocation inside parent composables or layout blocks:
+1. **Direct Composition**: Invoking child composables sequentially within a parent body automatically nests their slot groups in the engine's gap buffer in $\mathcal{O}(1)$ time. Sibling metrics, parent-child hierarchies, and settled child counts are recorded natively without manual `CelsEnterComposable` or `CelsExitGroup` calls.
+2. **Core Inline Containers (`cel_container`)**: CELS provides `cel_container(Name)` to enter and exit slot groups for grouping without writing manual enter/exit code.
+3. **Custom Layout Composables (`CEL_Layout`)**: Direction is passed as a **parameter**, allowing layouts to dynamically change orientation or modes across recompositions. The layout attaches the `CelsLayoutDir` component (`cel_has(CelsLayoutDir, { dir })`), publishes ambient context (`cel_set_context(CelsLayoutDir, &dir)`), and delegates to `cel_container`.
+
+> [!NOTE]
+> **The Golden Rule: Framework Archetypes vs. Application Composables**:
+> - Preprocessor `#define` macros are reserved exclusively for **framework-level archetypes** (DSL primitives like `CEL_Composition`, `CEL_Composable`, `cel_container`, `CEL_Layout`). Application developers **never** write `#define` for application components; they write standard C functions with `CEL_Composable`.
+> - `cel_container` is a **core CELS library primitive** (`include/cels/cels.h`).
+> - `CEL_Layout` is an **application-level helper recipe** (`examples/common/cels_layout.h`). Developers use `CEL_Layout(dir) { ... }` directly with zero `#define`, or author reusable components with `CEL_Composable`.
+> - For full technical guidance on building custom container primitives or DSL base classes, consult the **`cels-primitives-and-archetypes`** skill and [`docs/guides/10-authoring-primitives-and-archetypes.md`](file:///D:/cels-workspace/library/cels/docs/guides/10-authoring-primitives-and-archetypes.md).
+
+```c
+// 1. Direct composable nesting
+CEL_Composable(ProfileCard, const Profile*, p) {
+    CardHeader(p->name);
+    CardBody(p->bio);
+    CardFooter(p->id);
+}
+
+// 2. Direct inline layout invocation (Zero #define required!)
+CEL_Composable(PauseSettingsMenu, WorkspaceAppState*, state, SettingsState*, settings) {
+    CEL_Layout(CEL_LAYOUT_DIR_VERT) {
+        VolumeSlider(settings);
+        MuteToggle(settings);
+        GraphicsSelector(settings);
+        ResumeButton(state);
+    }
+}
+
+// 3. Responsive Direction: Dynamic orientation across recomposition
+CEL_Layout(isPortrait ? CEL_LAYOUT_DIR_VERT : CEL_LAYOUT_DIR_HORIZ) {
+    SidebarPanel();
+    ContentPanel();
+}
+
+// 4. Multi-directional 2D Game Grid (Named container in slot table)
+CEL_Layout(InventoryGrid, CEL_LAYOUT_DIR_2D, 4 /* columns */, true /* wrapFocus */) {
+    for (int i = 0; i < 16; ++i) {
+        InventorySlot(i);
+    }
+}
+
+// 5. Reusable Layout Composable (Composable IS the universal base)
+CEL_Composable(ItemGrid, InventoryState*, inv) {
+    CEL_Layout(CEL_LAYOUT_DIR_2D, 4) {
+        for (int i = 0; i < 16; ++i) {
+            InventorySlot(inv->items[i]);
+        }
+    }
+}
+// Callers invoke: ItemGrid(inv);
+```
+
+#### Child Introspection: Sibling Metrics with Result Protection
+Child composables inside containers can discover their position safely without parent parameter drilling:
+- `cel_child_info(&info)`: Resolves `CelsChildInfo` (`index`, `totalCount`, `parentId`, `childId`, `isFirst`, `isLast`).
+- `cel_child_index(&outIdx)`: 0-based sibling index among container children.
+- `cel_child_count(&outCount)`: Total direct children inside container.
+- `cel_is_first_child(&outFirst)` / `cel_is_last_child(&outLast)`: Sibling position predicates for visual styling or dividers.
+All return `CelsResult` (`CELS_OK`, `CELS_ERROR_INVALID_STATE`, `CELS_ERROR_INVALID_ARGUMENT`). When invoked standalone outside a container or session, returns `CELS_ERROR_INVALID_STATE` safely without crashing.
+
+**Key Architectural Rules for Children:**
+1. **Universal Invocation**: Every composable is called identically: `Name(...)` or `Name(id, ...)`. There is never a distinction between "containers" and "leaves".
+2. **Automatic Slot Table Nesting**: Invoking child composables inside a parent automatically nests their slot groups in the engine's gap buffer in $\mathcal{O}(1)$ time. Unmounting the parent automatically tears down all child groups and destructors.
+3. **Container Context & Framing**: When containers share environment or visual themes down a subtree, attach ambient context via `cel_set_context(ThemeType, ptr)`. Dynamic lists of children are invoked directly via keyed composables `Child(id, item)`.
+
+### Pattern 6: State vs. Context vs. Props (The 3-Way Decision Guide)
+
+Developers frequently confuse when to pass arguments (props), when to create reactive state, and when to use ambient context. Follow this architectural rule:
+
+| Mechanism | Where it lives | Primary Purpose | How updates happen |
+| :--- | :--- | :--- | :--- |
+| **Props (Parameters)** | Function arguments | Specific inputs for an immediate child widget (e.g. `label`, `width`, `item`). | Parent re-evaluates and passes new values. |
+| **State (`cel_state`, `cel_remember_state`)** | Session slot table (double-buffered) | Authoritative, dynamic data that mutates over time and triggers recomposition. | Staged through `cel_mutate(ptr)`. |
+| **Context (`cel_set_context`, `cel_get_context`)** | Ambient scope stack (`CelsScopeNode`) | Passes environment or state pointers down an entire subtree without parameter drilling. | Non-reactive courier; restored on composable exit. |
+
+#### Context Read Safety:
+- **Result-Protected Form (`cel_get_context(Type, &outPtr) -> CelsResult`) [Recommended]**: Returns `CELS_OK` on success, `CELS_ERROR_NOT_FOUND` if absent, and `CELS_ERROR_INVALID_STATE` outside session.
+- **Pointer Form (`cel_get_context(Type) -> const Type*`)**: Returns pointer or `NULL`.
+
+#### The Container Synergy Pattern:
+Containers (e.g. `CEL_Layout`, `LazyColumn`, `ModalWindow`) pair State and Context together:
+1. **Container owns State**: `LazyListState *st = cel_remember_state(LazyListState, { ... });`
+2. **Container publishes Context**: `cel_set_context(LazyListState, st);`
+3. **Descendants consume & mutate**:
+   ```c
+   const LazyListState *st = NULL;
+   if (cel_get_context(LazyListState, &st) == CELS_OK) {
+       cel_mutate(st) { this->firstVisibleIndex++; }
+   }
+   ```
 
 ---
 

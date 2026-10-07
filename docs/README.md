@@ -35,6 +35,8 @@ Practical, snippet-heavy, task-oriented guides designed to take you from a blank
 | **[`06-transitions-and-motion.md`](guides/06-transitions-and-motion.md)** | Implement smooth visual motion and continuous interpolation. | `cel_transition()`, in-flight retargeting, 0% CPU idle, built-in easing curves (`CEL_EASE_OUT_QUAD`). |
 | **[`07-hot-reloading.md`](guides/07-hot-reloading.md)** | Set up live DLL code reloading without losing runtime state. | Sub-50ms hot swaps, host runtime checks, shadow-copying, state retention. |
 | **[`08-events-signals-broadcasts.md`](guides/08-events-signals-broadcasts.md)** | Master discrete events, session signals, and engine-wide broadcasts. | `cel_event` / `cel_listen` tree bubbling, `cel_signal` / `cel_connect` cross-session delivery, `cel_broadcast` / `cel_bind` thread-safe bus, non-blocking task awaiting (`cel_wait_for`, `cel_wait_for_timeout`). |
+| **[`09-flecs-integration.md`](guides/09-flecs-integration.md)** | Declarative ECS component attachment and Flecs engine bridging. | Keyed composables `CEL_Composable(Name, id, ...)`, `cel_has`, `cel_has_tag`, `cel_get`, `cel_is`, automatic omission diffing, host commit hooks. |
+| **[`10-authoring-primitives-and-archetypes.md`](guides/10-authoring-primitives-and-archetypes.md)** | Author custom layout containers, DSL primitives, and base archetypes. | Macro `#define` rules, dual-loop expansion, `cel_container`, `cel_key`, `cel_has`, zero-heap layout engines (`CEL_FlexBox`, `CEL_Layout`). |
 
 ---
 
@@ -82,3 +84,8 @@ Exhaustive lookups, API cheat sheets, mathematical specifications, and coding st
 1. Read **[`guides/06-transitions-and-motion.md`](guides/06-transitions-and-motion.md)** for `cel_transition` and easing.
 2. Read **[`guides/05-tasks-and-coroutines.md`](guides/05-tasks-and-coroutines.md)** for `CEL_Task` and async coroutines.
 3. Consult **[`reference/motion-spec.md`](reference/motion-spec.md)** for the underlying mathematical models.
+
+### 🛠️ "I want to author custom layout engines, DSL wrappers, or primitives"
+1. Read **[`guides/10-authoring-primitives-and-archetypes.md`](guides/10-authoring-primitives-and-archetypes.md)** for the macro `#define` rules and dual-loop expansion pattern.
+2. Read **[`guides/02-compositions-and-tree.md`](guides/02-compositions-and-tree.md)** for slot table grouping and child metrics.
+3. Review [`cels_layout.h`](file:///D:/cels-workspace/library/cels/examples/common/cels_layout.h) for a complete reference implementation.

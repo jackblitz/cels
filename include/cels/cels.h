@@ -5,44 +5,74 @@
  * @brief Public API and Declarative DSL Macros for CELS.
  *
  * CELS (Composition, Evaluation, Lifecycle, State) is a high-performance,
- * cache-aligned declarative composition engine for C99.
+ * cache-aligned declarative composition engine for ISO C99.
  *
- * Four Core Concepts:
- * - C: Composition (CEL_Composition, CEL_Composable, cel_attach)
- * - E: Evaluation  (Fine-grained recomposition, CEL_Evaluate)
- * - L: Lifecycle   (Pure mount & unmount topology tracking: CEL_Lifecycle, cel_lifecycle)
- * - S: State       (Double-buffered cache-aligned state: cel_remember, cel_remember_state,
- *                   cel_watch, cel_get_state, cel_mutate)
+ * Core Concepts & Mental Model:
+ * - C: Composition
+ *      Root compositions (`CEL_Composition`, `cel_attach`), child composable widgets
+ *      (`CEL_Composable`), and inline child-aware container blocks (`cel_container`).
+ * - E: Evaluation
+ *      Fine-grained, dirty-driven recomposition walks (`CelsSessionRecompose`, `CEL_Evaluate`).
+ *      Only composables observing mutated state are re-evaluated; untouched subtrees are skipped.
+ * - L: Lifecycle
+ *      Deterministic, topological mount and unmount tracking (`CEL_Lifecycle`, `cel_lifecycle`).
+ *      Tears down native resources in strictly reverse (LIFO) order of registration.
+ * - S: State
+ *      Double-buffered, cache-aligned reactive state (`CEL_State`, `cel_remember`,
+ *      `cel_state`, `cel_remember_state`, `cel_watch`, `cel_get_state`, `cel_mutate`).
+ * - Context & Ambient Cascading:
+ *      Pass environment variables, theme tokens, and input maps down the composable tree
+ *      without parameter drilling (`cel_set_context`, `cel_get_context`, `cel_context`).
+ * - Declarative ECS Reconciliation:
+ *      Attach and reconcile entity components and tags within composables (`cel_key`,
+ *      `cel_has`, `cel_has_tag`, `cel_get`, `cel_is`, `cel_id`).
+ * - Custom Layout Primitives:
+ *      Engine and library authors author custom container archetypes (like `CEL_Layout`,
+ *      `CEL_FlexBox`, `CEL_Grid`) using `cel_container(Name, onStart, onEnd, layoutData)`.
  *
- * Typical usage:
+ * Typical Usage Guide:
  * @code
- *     // Declare state
+ *     // 1. Declare double-buffered reactive state
  *     CEL_State(CounterState) {
  *         int count;
  *     };
  *
- *     // Declare composable widget
+ *     // 2. Declare a child composable widget
  *     CEL_Composable(CounterWidget) {
- *         const CounterState *state = cel_watch(CounterState, 1);
+ *         const CounterState *state = cel_watch_state(CounterState);
  *         int *localClicks = cel_remember(int, 0);
+ *
+ *         if (cel_button("Increment")) {
+ *             cel_mutate(state) {
+ *                 this->count++;
+ *             }
+ *             (*localClicks)++;
+ *         }
  *         printf("Count: %d, Clicks: %d\n", state ? state->count : 0, *localClicks);
  *     }
  *
- *     // Declare root composition
+ *     // 3. Declare a root composition
  *     CEL_Composition(AppRoot, void *userData) {
  *         CounterWidget();
  *     }
  *
- *     // Attach to session and recompose
+ *     // 4. Attach to session and run recomposition
  *     CelsSession session;
  *     CelsSessionInit(&session, NULL);
- *     cel_attach(&session, CEL_ID("AppRoot"), AppRoot);
+ *     cel_attach(&session, AppRoot);
  *     CelsSessionRecompose(&session);
  *     CelsSessionDestroy(&session);
  * @endcode
  *
- * Thread safety: Root composition execution and child composables run single-threaded
- * on the active session thread. Double-buffered state reads are lock-free.
+ * Thread Safety & Concurrency Invariants:
+ * - Single-Threaded Recomposition: Root composition walks and child composable execution
+ *   run single-threaded on their assigned host thread. No locks are acquired on hot paths.
+ * - Lock-Free Snapshot Reads: Front-buffer state (`cel_watch`, `cel_get_state`) is immutable
+ *   and completely lock-free to read across threads.
+ * - Cross-Thread Mutations: Staged via double-buffered transaction batches (`CelsSessionSwapTransactionBatches`)
+ *   or inter-session signals (`cel_signal`), processed safely at frame boundaries.
+ * - Zero Heap Allocations: During active composition walks, all state and groups are allocated
+ *   from contiguous slot slabs and nonmoving data arenas. No malloc/free on hot paths.
  */
 
 #include <assert.h>
@@ -370,57 +400,135 @@ extern "C" {
     } \
     static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4)
 
-#define _CEL_GET_COMPOSABLE_MACRO(_1, _2, _3, _4, _5, _6, _7, _8, _9, NAME, ...) NAME
+#define _CEL_COMPOSABLE_KEYED_0_ARG(FnName, IdName) \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED); \
+    static inline void FnName(uint64_t IdName) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+            _cels_body_##FnName(IdName); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED)
+
+#define _CEL_COMPOSABLE_KEYED_1_ARG(FnName, IdName, Type1, Arg1) \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1); \
+    static inline void FnName(uint64_t IdName, Type1 Arg1) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+            _cels_body_##FnName(IdName, Arg1); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1)
+
+#define _CEL_COMPOSABLE_KEYED_2_ARGS(FnName, IdName, Type1, Arg1, Type2, Arg2) \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2); \
+    static inline void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+            _cels_body_##FnName(IdName, Arg1, Arg2); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2)
+
+#define _CEL_COMPOSABLE_KEYED_3_ARGS(FnName, IdName, Type1, Arg1, Type2, Arg2, Type3, Arg3) \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3); \
+    static inline void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+            _cels_body_##FnName(IdName, Arg1, Arg2, Arg3); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3)
+
+#define _CEL_COMPOSABLE_KEYED_4_ARGS(FnName, IdName, Type1, Arg1, Type2, Arg2, Type3, Arg3, Type4, Arg4) \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4); \
+    static inline void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+            _cels_body_##FnName(IdName, Arg1, Arg2, Arg3, Arg4); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4)
+
+#define _CEL_GET_COMPOSABLE_MACRO(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, NAME, ...) NAME
 
 /**
  * @def CEL_Composable
  * @brief Declares a reusable, reactive child composable node in the composition hierarchy.
  *
  * What it does:
- * Automatically manages slot table hierarchy navigation for this function. When invoked,
- * it hashes the composable name into a 64-bit group key, calls CelsEnterComposable()
- * to enter or mount the group in the session's slot gap buffer, evaluates its body if
- * dirty or newly mounted, and automatically calls CelsExitGroup() on exit. Unchanged
- * subtrees are skipped in O(1) time without executing the function body.
+ * Automatically manages slot table hierarchy navigation for this function. Supports both
+ * unkeyed (auto-generated ID) and keyed (explicit 64-bit ID parameter) declarations.
+ * When invoked, it keys the composable group in the session's slot gap buffer, evaluates
+ * its body if dirty or newly mounted, and automatically calls CelsExitGroup() on exit.
  *
- * Expected outcome:
- * - Pushes a new structural group node under the current parent in the active CelsSession.
- * - Any local state allocated with cel_remember() inside this composable is pinned across frames.
- * - Reactive subscriptions made with cel_watch() bind to this composable's key; mutations
- *   will automatically invalidate this group and trigger recomposition on the next pass.
- * - If omitted or conditionally excluded during a subsequent frame, the composable and all
- *   its descendants are cleanly unmounted, invoking registered destructors in reverse order.
+ * Identity & Keying:
+ * - Unkeyed forms (e.g. CEL_Composable(StatusBar)): Auto-keys group by function name hash,
+ *   auto-generates cel_id() if no parent ID is active, and accepts standard typed arguments.
+ * - Keyed forms (e.g. CEL_Composable(TodoItemCard, id, const TodoItem*, item)): First parameter
+ *   is `uint64_t id`. Callers invoke `TodoItemCard(item->id, item)`. Binds the node's `cel_id()`
+ *   to `id` and allows list reconciliation and component attachment (`cel_has`) directly to `id`.
  *
- * Where to use:
- * - Define at file/global scope (generates an inline function and internal static body).
- * - Invoke inside an active CEL_Composition or another CEL_Composable function.
- * - Never call outside an active CelsSession recomposition pass (asserts in debug mode).
- * - For multi-file translation units, declare standard prototypes in headers (e.g. `void Name(...);`)
- *   and define implementations with CEL_ComposableDef() in .c files.
- *
- * Supported signatures (0 to 4 arguments):
+ * Supported signatures:
  * @code
- *     // 0 arguments:
+ *     // Unkeyed 0 arguments:
  *     CEL_Composable(StatusBar) {
- *         // widgets, slots, state watches
+ *         // widgets, slots, cel_id() is auto-generated
  *     }
  *
- *     // Parameterized with typed arguments:
- *     CEL_Composable(UserBadge, const char*, username, int, level) {
- *         const UserTheme *theme = cel_watch(UserTheme);
- *         int *hoverCount = cel_remember(int, 0);
- *         // render or compose UI
+ *     // Keyed 0 extra arguments:
+ *     CEL_Composable(PlayerEntity, id) {
+ *         cel_has(Position, { .x = 0, .y = 0 });
  *     }
  *
- *     // Calling inside a parent composition or composable:
- *     CEL_Composition(MainScreen, void *userData) {
+ *     // Keyed with typed arguments:
+ *     CEL_Composable(TodoItemCard, id, const TodoItem*, item) {
+ *         cel_has(Position, { .x = item->x, .y = item->y });
+ *     }
+ *
+ *     // Calling inside parent composition or composable:
+ *     CEL_Composition(MainScreen) {
  *         StatusBar();
- *         UserBadge("Alice", 42);
+ *         PlayerEntity(1001);
+ *         for (int i = 0; i < count; i++) {
+ *             TodoItemCard(items[i].id, &items[i]);
+ *         }
  *     }
  * @endcode
  */
 #define CEL_Composable(...) \
-    _CEL_GET_COMPOSABLE_MACRO(__VA_ARGS__, _CEL_COMPOSABLE_4_ARGS, _UNUSED, _CEL_COMPOSABLE_3_ARGS, _UNUSED, _CEL_COMPOSABLE_2_ARGS, _UNUSED, _CEL_COMPOSABLE_1_ARG, _CEL_COMPOSABLE_VOID, _CEL_COMPOSABLE_VOID)(__VA_ARGS__)
+    _CEL_GET_COMPOSABLE_MACRO(__VA_ARGS__, \
+        _CEL_COMPOSABLE_KEYED_4_ARGS, \
+        _CEL_COMPOSABLE_4_ARGS, \
+        _CEL_COMPOSABLE_KEYED_3_ARGS, \
+        _CEL_COMPOSABLE_3_ARGS, \
+        _CEL_COMPOSABLE_KEYED_2_ARGS, \
+        _CEL_COMPOSABLE_2_ARGS, \
+        _CEL_COMPOSABLE_KEYED_1_ARG, \
+        _CEL_COMPOSABLE_1_ARG, \
+        _CEL_COMPOSABLE_KEYED_0_ARG, \
+        _CEL_COMPOSABLE_VOID, \
+        _UNUSED)(__VA_ARGS__)
 
 /* ========================================================================= */
 /* Non-inline Composable Definition for Multi-File Translation Units         */
@@ -433,6 +541,7 @@ extern "C" {
  * NOTE: In CELS, composable functions are standard C functions returning void.
  * You can write standard C prototypes directly in headers:
  *     void UserCard(const char *name, int karma);
+ *     void TodoItemCard(uint64_t id, const TodoItem *item);
  * CEL_ComposableDecl is provided as an optional convenience macro.
  */
 #define CEL_ComposableDecl(FnName, ...) void FnName(__VA_ARGS__)
@@ -497,26 +606,98 @@ extern "C" {
     } \
     static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4)
 
+#define _CEL_COMPOSABLE_DEF_KEYED_0_ARG(FnName, IdName) \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED); \
+    void FnName(uint64_t IdName) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+            _cels_body_##FnName(IdName); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED)
+
+#define _CEL_COMPOSABLE_DEF_KEYED_1_ARG(FnName, IdName, Type1, Arg1) \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1); \
+    void FnName(uint64_t IdName, Type1 Arg1) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+            _cels_body_##FnName(IdName, Arg1); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1)
+
+#define _CEL_COMPOSABLE_DEF_KEYED_2_ARGS(FnName, IdName, Type1, Arg1, Type2, Arg2) \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2); \
+    void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+            _cels_body_##FnName(IdName, Arg1, Arg2); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2)
+
+#define _CEL_COMPOSABLE_DEF_KEYED_3_ARGS(FnName, IdName, Type1, Arg1, Type2, Arg2, Type3, Arg3) \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3); \
+    void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+            _cels_body_##FnName(IdName, Arg1, Arg2, Arg3); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3)
+
+#define _CEL_COMPOSABLE_DEF_KEYED_4_ARGS(FnName, IdName, Type1, Arg1, Type2, Arg2, Type3, Arg3, Type4, Arg4) \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4); \
+    void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
+        CelsSession *sess = CelsGetCurrentSession(); \
+        assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+            _cels_body_##FnName(IdName, Arg1, Arg2, Arg3, Arg4); \
+        } \
+        CelsExitGroup(sess); \
+    } \
+    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4)
+
 /**
  * @def CEL_ComposableDef
  * @brief Implements an externally linkable composable function in a .c source file.
  *
  * What it does:
  * Generates an externally visible (non-static) C function `void FnName(...)` that
- * wraps the body with CelsEnterComposable() and CelsExitGroup().
- *
- * Multi-file component pattern:
- * - In header (.h): Write a standard C function prototype:
- *       void UserCard(const char *name, int karma);
- * - In source (.c): Implement with CEL_ComposableDef:
- *       CEL_ComposableDef(UserCard, const char*, name, int, karma) {
- *           // UI logic, cel_watch, cel_remember
- *       }
- *
- * For single-file or header-only components, use CEL_Composable(...) instead.
+ * wraps the body with CelsEnterComposable() and CelsExitGroup(). Supports both unkeyed
+ * and keyed signatures matching CEL_Composable.
  */
 #define CEL_ComposableDef(...) \
-    _CEL_GET_COMPOSABLE_MACRO(__VA_ARGS__, _CEL_COMPOSABLE_DEF_4_ARGS, _UNUSED, _CEL_COMPOSABLE_DEF_3_ARGS, _UNUSED, _CEL_COMPOSABLE_DEF_2_ARGS, _UNUSED, _CEL_COMPOSABLE_DEF_1_ARG, _CEL_COMPOSABLE_DEF_VOID, _CEL_COMPOSABLE_DEF_VOID)(__VA_ARGS__)
+    _CEL_GET_COMPOSABLE_MACRO(__VA_ARGS__, \
+        _CEL_COMPOSABLE_DEF_KEYED_4_ARGS, \
+        _CEL_COMPOSABLE_DEF_4_ARGS, \
+        _CEL_COMPOSABLE_DEF_KEYED_3_ARGS, \
+        _CEL_COMPOSABLE_DEF_3_ARGS, \
+        _CEL_COMPOSABLE_DEF_KEYED_2_ARGS, \
+        _CEL_COMPOSABLE_DEF_2_ARGS, \
+        _CEL_COMPOSABLE_DEF_KEYED_1_ARG, \
+        _CEL_COMPOSABLE_DEF_1_ARG, \
+        _CEL_COMPOSABLE_DEF_KEYED_0_ARG, \
+        _CEL_COMPOSABLE_DEF_VOID, \
+        _UNUSED)(__VA_ARGS__)
 
 /* ========================================================================= */
 /* Pure Lifecycles (CEL_Lifecycle & cel_lifecycle)                           */
@@ -1654,67 +1835,467 @@ extern "C" {
 #endif
 
 /* ========================================================================= */
-/* Flecs ECS Integration (Optional)                                          */
+/* Child Introspection & Sibling Metrics (cel_child_*)                       */
 /* ========================================================================= */
 
-#if defined(flecs_STATIC) || defined(FLECS_H) || defined(flecs_EXPORTS) || defined(CELS_ENABLE_FLECS)
-#ifndef _CELS_FLECS_INTEGRATION_DEFINED
-#define _CELS_FLECS_INTEGRATION_DEFINED
-
-typedef struct CelsEntitySlot {
-    ecs_world_t  *world;
-    ecs_entity_t  entity;
-} CelsEntitySlot;
-
-static inline void _cels_entity_cleanup(void *instance, CelsSession *s) {
-    (void)s;
-    CelsEntitySlot *slot = (CelsEntitySlot*)instance;
-    if (slot && slot->world && ecs_is_valid(slot->world, slot->entity)) {
-        ecs_delete(slot->world, slot->entity);
-    }
-    if (slot) {
-        slot->entity = 0;
-        slot->world = NULL;
-    }
+/**
+ * Resolves full layout and sibling metadata for the currently executing composable.
+ *
+ * @param outInfo Destination pointer to receive child info struct.
+ * @return CELS_OK on success,
+ *         CELS_ERROR_INVALID_ARGUMENT if outInfo is NULL,
+ *         CELS_ERROR_INVALID_STATE if called outside a container or outside active session.
+ */
+static inline CelsResult cel_child_info(CelsChildInfo *outInfo)
+{
+    return CelsGetChildInfo(CelsGetCurrentSession(), outInfo);
 }
 
-static inline ecs_entity_t _cels_resolve_entity(
-    CelsSession *s, 
-    ecs_world_t *world, 
-    const char *name, 
-    uint64_t key
-) {
-    (void)key;
-    bool isMount = CelsIsFreshMount(s);
+/**
+ * Resolves the 0-based sequential sibling index of this child within its parent container.
+ *
+ * @param outIndex Destination pointer to receive 0-based index.
+ * @return CELS_OK on success,
+ *         CELS_ERROR_INVALID_ARGUMENT if outIndex is NULL,
+ *         CELS_ERROR_INVALID_STATE if called outside a container or outside active session.
+ */
+static inline CelsResult cel_child_index(uint32_t *outIndex)
+{
+    if (outIndex == NULL) return CELS_ERROR_INVALID_ARGUMENT;
+    CelsChildInfo info;
+    CelsResult res = CelsGetChildInfo(CelsGetCurrentSession(), &info);
+    if (res == CELS_OK) {
+        *outIndex = info.index;
+    }
+    return res;
+}
 
-    CelsEntitySlot *slot = (CelsEntitySlot*)CelsResolveSlot(
-        s, 
-        sizeof(CelsEntitySlot), 
-        NULL
-    );
+/**
+ * Resolves the total sibling count of the parent container (or child count of current container).
+ *
+ * @param outCount Destination pointer to receive count.
+ * @return CELS_OK on success,
+ *         CELS_ERROR_INVALID_ARGUMENT if outCount is NULL,
+ *         CELS_ERROR_INVALID_STATE if called outside active composition.
+ */
+static inline CelsResult cel_child_count(uint32_t *outCount)
+{
+    if (outCount == NULL) return CELS_ERROR_INVALID_ARGUMENT;
+    CelsSession *sess = CelsGetCurrentSession();
+    if (sess == NULL || sess->currentDepth == 0) return CELS_ERROR_INVALID_STATE;
+    uint32_t depth = sess->currentDepth - 1;
+    uint32_t groupIdx = sess->groupIndexStack[depth];
+    const CelsSlotGroup *g = CelsGetGroup(sess, groupIdx);
+    *outCount = (g != NULL && g->nodeCount > 0) ? (uint32_t)g->nodeCount : sess->childCounterStack[depth];
+    return CELS_OK;
+}
 
-    if (isMount && slot) {
-        slot->world = world;
-        slot->entity = ecs_new(world);
-        if (name && name[0] != '\0') {
-            ecs_set_name(world, slot->entity, name);
+/**
+ * Checks whether this child is the first element among siblings in its container (index == 0).
+ */
+static inline CelsResult cel_is_first_child(bool *outIsFirst)
+{
+    if (outIsFirst == NULL) return CELS_ERROR_INVALID_ARGUMENT;
+    CelsChildInfo info;
+    CelsResult res = CelsGetChildInfo(CelsGetCurrentSession(), &info);
+    if (res == CELS_OK) {
+        *outIsFirst = info.isFirst;
+    }
+    return res;
+}
+
+/**
+ * Checks whether this child is the last element among siblings in its container.
+ */
+static inline CelsResult cel_is_last_child(bool *outIsLast)
+{
+    if (outIsLast == NULL) return CELS_ERROR_INVALID_ARGUMENT;
+    CelsChildInfo info;
+    CelsResult res = CelsGetChildInfo(CelsGetCurrentSession(), &info);
+    if (res == CELS_OK) {
+        *outIsLast = info.isLast;
+    }
+    return res;
+}
+
+/* ========================================================================= */
+/* Ambient Context Scope (cel_get_context / cel_set_context)                 */
+/* ========================================================================= */
+
+#define _CEL_GET_CONTEXT_1(Type) \
+    ((const Type *)CelsScopeFind(CelsGetCurrentSession() ? CelsGetCurrentSession()->ambientScope : NULL, CelsHashKey(#Type)))
+
+#define _CEL_GET_CONTEXT_2(Type, outPtr) \
+    CelsContextResolve(CelsGetCurrentSession(), CelsHashKey(#Type), (const void **)(outPtr))
+
+#define _CEL_GET_CONTEXT_3(session, Type, outPtr) \
+    CelsContextResolve((session), CelsHashKey(#Type), (const void **)(outPtr))
+
+/**
+ * @def cel_get_context
+ * @def cel_getContext
+ * @brief Reads ambient context up the ancestor call tree with optional CelsResult protection.
+ *
+ * Supported Signatures:
+ * - cel_get_context(Type): Returns const Type* (or NULL if absent).
+ * - cel_get_context(Type, &outPtr): Returns CelsResult (CELS_OK, CELS_ERROR_NOT_FOUND, CELS_ERROR_INVALID_STATE).
+ * - cel_get_context(session, Type, &outPtr): Explicit session variant returning CelsResult.
+ */
+#define cel_get_context(...) \
+    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_GET_CONTEXT_3, _CEL_GET_CONTEXT_2, _CEL_GET_CONTEXT_1)(__VA_ARGS__)
+
+#define cel_getContext(...) cel_get_context(__VA_ARGS__)
+
+#define _CEL_SET_CONTEXT_2(Type, ptr) \
+    CelsContextPush(CelsGetCurrentSession(), CelsHashKey(#Type), (const void *)(ptr))
+
+#define _CEL_SET_CONTEXT_3(session, Type, ptr) \
+    CelsContextPush((session), CelsHashKey(#Type), (const void *)(ptr))
+
+/**
+ * @def cel_set_context
+ * @def cel_setContext
+ * @brief Attaches ambient context to the active composable scope.
+ *
+ * Automatically restores ancestor scope when the current composable exits. Zero heap allocations.
+ *
+ * @param Type Struct type name.
+ * @param ptr  Pointer to the context struct payload to scope down descendants.
+ */
+#define cel_set_context(...) \
+    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_SET_CONTEXT_3, _CEL_SET_CONTEXT_2, _UNUSED)(__VA_ARGS__)
+
+#define cel_setContext(...) cel_set_context(__VA_ARGS__)
+
+/**
+ * @def cel_context
+ * @brief Unified ambient context API alias (resolves read or write depending on parameter count).
+ */
+#define cel_context(...) \
+    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_SET_CONTEXT_3, _CEL_SET_CONTEXT_2, _CEL_GET_CONTEXT_1)(__VA_ARGS__)
+
+/* ========================================================================= */
+/* Core Container Scoping Helper (cel_container)                             */
+/* ========================================================================= */
+
+/**
+ * @typedef CelsContainerStartHook
+ * @brief Lifecycle callback executed immediately after entering a container scope.
+ *
+ * @param userData Opaque user context or layout parameters passed into cel_container.
+ */
+typedef void (*CelsContainerStartHook)(void *userData);
+
+/**
+ * @typedef CelsContainerEndHook
+ * @brief Lifecycle callback executed immediately after child composables settle.
+ *
+ * Receives the exact count of direct child composables executed within the container scope,
+ * allowing layout and container engines to perform instant post-layout index clamping,
+ * geometry allocation, or directional focus navigation.
+ *
+ * @param childCount Number of direct child composables executed inside this container.
+ * @param userData   Opaque user context or layout parameters passed into cel_container.
+ */
+typedef void (*CelsContainerEndHook)(uint32_t childCount, void *userData);
+
+/**
+ * @struct CelsContainerScope
+ * @brief RAII scope tracking structure for cel_container inline blocks.
+ *
+ * Sized and ordered from largest alignment to smallest alignment (descending field
+ * ordering) to eliminate structure padding and maintain 32-byte cache alignment.
+ */
+typedef struct CelsContainerScope {
+    CelsSession           *session;     /**< Active CelsSession pointer (8 bytes). */
+    CelsContainerEndHook   onGroupEnd;  /**< Post-children completion hook (8 bytes). */
+    void                  *userData;    /**< Opaque user or layout parameters (8 bytes). */
+    uint8_t                entered;     /**< Single-iteration loop guard flag (1 byte). */
+    uint8_t                reserved[7]; /**< Alignment padding to 32 bytes (7 bytes). */
+} CelsContainerScope;
+
+/**
+ * @brief Enters a container group scope in the session slot table.
+ *
+ * Resolves the ambient session, sets up the scope RAII tracking struct, enters the
+ * composable group with the specified 64-bit key, and executes the onGroupStart hook.
+ *
+ * @param session       Active session pointer (if NULL, resolves via CelsGetCurrentSession()).
+ * @param key           64-bit group key hash.
+ * @param onGroupStart  Optional callback invoked on container start.
+ * @param onGroupEnd    Optional callback invoked on container exit.
+ * @param userData      Opaque user context passed to start and end hooks.
+ * @param[out] outScope Pointer to caller-allocated CelsContainerScope structure.
+ * @return True if successfully entered; false on failure or session unavailable.
+ */
+static inline bool CelsContainerScopeEnter(
+    CelsSession           *session,
+    uint64_t               key,
+    CelsContainerStartHook onGroupStart,
+    CelsContainerEndHook   onGroupEnd,
+    void                  *userData,
+    CelsContainerScope    *outScope)
+{
+    if (session == NULL) session = CelsGetCurrentSession();
+    if (session == NULL || outScope == NULL) return false;
+    outScope->session = session;
+    outScope->entered = 1;
+    outScope->onGroupEnd = onGroupEnd;
+    outScope->userData = userData;
+
+    if (!CelsEnterComposable(session, key)) {
+        return false;
+    }
+    if (onGroupStart != NULL) {
+        onGroupStart(userData);
+    }
+    return true;
+}
+
+/**
+ * @brief Exits a container group scope, delivering settled child metrics to onGroupEnd.
+ *
+ * Queries the frame-accurate settled child counter from the session's child counter stack,
+ * delivers the count and userData to onGroupEnd if registered, and invokes CelsExitGroup().
+ *
+ * @param scope Pointer to active CelsContainerScope.
+ */
+static inline void CelsContainerScopeExit(CelsContainerScope *scope)
+{
+    if (scope != NULL && scope->session != NULL) {
+        if (scope->onGroupEnd != NULL) {
+            uint32_t childCount = 0;
+            if (scope->session->currentDepth > 0) {
+                uint32_t depth = scope->session->currentDepth - 1;
+                childCount = scope->session->childCounterStack[depth];
+            }
+            scope->onGroupEnd(childCount, scope->userData);
         }
-        CelsSessionRegisterLifecycle(s, slot, NULL, _cels_entity_cleanup);
+        CelsExitGroup(scope->session);
     }
-    return slot ? slot->entity : 0;
 }
 
-#define CEL_Entity(world, name, key) \
-    for (int _cels_ent_run = (CelsEnterComposable(CelsGetCurrentSession(), (uint64_t)(key)) ? 1 : 0), _cels_ent_done = 0; \
-         !_cels_ent_done; \
-         _cels_ent_done = 1, CelsExitGroup(CelsGetCurrentSession())) \
-        for ( ; _cels_ent_run; _cels_ent_run = 0) \
-            for (ecs_entity_t it = _cels_resolve_entity(CelsGetCurrentSession(), (world), (name), (uint64_t)(key)); \
-                 it != 0; \
-                 it = 0)
+#define _CEL_CONTAINER_4(Name, onStart, onEnd, userData) \
+    for (CelsContainerScope _cels_cscope = { 0 }; \
+         !_cels_cscope.entered && CelsContainerScopeEnter(CelsGetCurrentSession(), CelsHashKey(#Name), \
+                                                          (CelsContainerStartHook)(onStart), \
+                                                          (CelsContainerEndHook)(onEnd), \
+                                                          (void*)(userData), &_cels_cscope); \
+         CelsContainerScopeExit(&_cels_cscope))
 
-#endif /* _CELS_FLECS_INTEGRATION_DEFINED */
-#endif /* Flecs ECS Integration */
+#define _CEL_CONTAINER_3(Name, onStart, onEnd) \
+    _CEL_CONTAINER_4(Name, onStart, onEnd, NULL)
+
+#define _CEL_CONTAINER_2(Name, onStart) \
+    _CEL_CONTAINER_4(Name, onStart, NULL, NULL)
+
+#define _CEL_CONTAINER_1(Name) \
+    _CEL_CONTAINER_4(Name, NULL, NULL, NULL)
+
+/**
+ * @def cel_container
+ * @brief Establishes an inline container group in the slot table with optional group hooks.
+ *
+ * What it does:
+ * Enters a composable group in the slot table for the duration of the enclosed block,
+ * automatically recording child metrics (cel_child_index, cel_child_count, isFirst, isLast).
+ * Supports optional onGroupStart and onGroupEnd lifecycle hooks for custom layout engines.
+ * Zero heap allocations.
+ *
+ * Signatures:
+ * - cel_container(Name)
+ * - cel_container(Name, onGroupStart)
+ * - cel_container(Name, onGroupStart, onGroupEnd)
+ * - cel_container(Name, onGroupStart, onGroupEnd, userData)
+ *
+ * Hook signatures:
+ * - void onGroupStart(void *userData);
+ * - void onGroupEnd(uint32_t childCount, void *userData);
+ *
+ * Example:
+ * @code
+ *     cel_container(Toolbar) {
+ *         Button("File");
+ *         Button("Edit");
+ *     }
+ * @endcode
+ */
+#define cel_container(...) \
+    _CEL_GET_MACRO_4(__VA_ARGS__, _CEL_CONTAINER_4, _CEL_CONTAINER_3, _CEL_CONTAINER_2, _CEL_CONTAINER_1)(__VA_ARGS__)
+
+#define _CEL_CONTAINER_KEYED_5(Name, id, onStart, onEnd, userData) \
+    for (CelsContainerScope _cels_cscope = { 0 }; \
+         !_cels_cscope.entered && CelsContainerScopeEnter(CelsGetCurrentSession(), CelsKeyIndex(CelsHashKey(#Name), (uint64_t)(id)), \
+                                                          (CelsContainerStartHook)(onStart), \
+                                                          (CelsContainerEndHook)(onEnd), \
+                                                          (void*)(userData), &_cels_cscope); \
+         CelsContainerScopeExit(&_cels_cscope))
+
+#define _CEL_CONTAINER_KEYED_4(Name, id, onStart, onEnd) \
+    _CEL_CONTAINER_KEYED_5(Name, id, onStart, onEnd, NULL)
+
+#define _CEL_CONTAINER_KEYED_3(Name, id, onStart) \
+    _CEL_CONTAINER_KEYED_5(Name, id, onStart, NULL, NULL)
+
+#define _CEL_CONTAINER_KEYED_2(Name, id) \
+    _CEL_CONTAINER_KEYED_5(Name, id, NULL, NULL, NULL)
+
+/**
+ * @def cel_container_keyed
+ * @brief Establishes an inline container group in the slot table with an explicit 64-bit ID.
+ *
+ * Identical to cel_container, but derives its slot table identity by compounding the
+ * symbolic Name with an explicit 64-bit identifier (via CelsKeyIndex(CelsHashKey(#Name), id)),
+ * enabling safe reconciliation of dynamic container lists or entity-bound containers.
+ *
+ * Signatures:
+ * - cel_container_keyed(Name, id)
+ * - cel_container_keyed(Name, id, onGroupStart)
+ * - cel_container_keyed(Name, id, onGroupStart, onGroupEnd)
+ * - cel_container_keyed(Name, id, onGroupStart, onGroupEnd, userData)
+ */
+#define cel_container_keyed(...) \
+    _CEL_GET_MACRO_5(__VA_ARGS__, _CEL_CONTAINER_KEYED_5, _CEL_CONTAINER_KEYED_4, _CEL_CONTAINER_KEYED_3, _CEL_CONTAINER_KEYED_2, _UNUSED)(__VA_ARGS__)
+
+/* ========================================================================= */
+/* Composable Identity, Keys & Components (cel_key / CEL_Entity / cel_has)   */
+/* ========================================================================= */
+
+#define _CEL_KEY_1(id) \
+    for (CelsEntityScope _cels_key_scope = { 0 }; \
+         !_cels_key_scope.isActive && CelsEnterEntityScope(CelsGetCurrentSession(), (uint64_t)(id), NULL, &_cels_key_scope); \
+         CelsExitEntityScope(CelsGetCurrentSession(), &_cels_key_scope))
+
+#define _CEL_KEY_2(id, name) \
+    for (CelsEntityScope _cels_key_scope = { 0 }; \
+         !_cels_key_scope.isActive && CelsEnterEntityScope(CelsGetCurrentSession(), (uint64_t)(id), (name), &_cels_key_scope); \
+         CelsExitEntityScope(CelsGetCurrentSession(), &_cels_key_scope))
+
+#define _CEL_KEY_3(world, name, id) \
+    for (CelsEntityScope _cels_key_scope = { 0 }; \
+         !_cels_key_scope.isActive && CelsEnterEntityScope(CelsGetCurrentSession(), (uint64_t)(id), (name), &_cels_key_scope); \
+         CelsExitEntityScope(CelsGetCurrentSession(), &_cels_key_scope))
+
+/**
+ * @def cel_key
+ * @brief Establishes an explicit identity/key scope for list reconciliation and component attachment.
+ *
+ * What it does:
+ * Enters a composable group in the slot table keyed by 64-bit ID. When used in loops over dynamic
+ * lists, CELS reconciles sibling groups by key so local slot memory (cel_remember) and reactive
+ * bindings are preserved across item reordering. When items are removed, they are automatically
+ * unmounted and their components/entities pruned.
+ *
+ * Example:
+ * @code
+ *     for (int i = 0; i < count; i++) {
+ *         cel_key(items[i].id) {
+ *             TodoItemCard(&items[i]);
+ *         }
+ *     }
+ * @endcode
+ */
+#define cel_key(...) \
+    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_KEY_3, _CEL_KEY_2, _CEL_KEY_1, _UNUSED)(__VA_ARGS__)
+
+/**
+ * @def CEL_Entity
+ * @brief Alias to cel_key for backward-compatible declarative entity scopes.
+ */
+#define CEL_Entity(...) cel_key(__VA_ARGS__)
+
+/**
+ * @def cel_id
+ * @brief Retrieves the 64-bit entity/node ID of the active composable scope.
+ *
+ * What it does:
+ * Returns the active 64-bit ID for the current composable scope. If the composable was declared
+ * with an explicit ID parameter (e.g. CEL_Composable(MyWidget, id, ...)), returns that ID.
+ * If unkeyed, returns the auto-generated composable group ID.
+ *
+ * Note:
+ * cel_id() is strictly a getter. Developers pass explicit IDs directly to keyed composables
+ * via CEL_Composable(Name, id, ...) rather than setting them imperatively.
+ */
+#define cel_id() CelsGetActiveEntityId(CelsGetCurrentSession())
+#define cel_entity_id() cel_id()
+
+/**
+ * @def cel_call
+ * @brief Keyed composable invocation helper to invoke any composable with an explicit key on a single line.
+ *
+ * Example:
+ * @code
+ *     for (int i = 0; i < count; i++) {
+ *         cel_call(TodoItemCard, items[i].id, &items[i]);
+ *     }
+ * @endcode
+ */
+#define cel_call(Fn, id, ...) do { \
+    cel_key(id) { \
+        Fn(__VA_ARGS__); \
+    } \
+} while(0)
+
+/**
+ * @def cel_has
+ * @brief Declaratively binds a component to the active composable/entity scope.
+ *
+ * What it does:
+ * Stages a CELS_OP_SET transaction for the component. When omitted on subsequent frames,
+ * CELS automatically stages a CELS_OP_REMOVE transaction at the close of the scope.
+ * When the composable unmounts from the hierarchy, CELS automatically stages CELS_OP_DELETE.
+ *
+ * Example:
+ * @code
+ *     CEL_Composable(EnemyView, id, const Enemy *enemy) {
+ *         cel_has(Position, { .x = enemy->x, .y = enemy->y });
+ *         if (enemy->isBurning) {
+ *             cel_has(BurnDebuff, { .dps = 15.0f });
+ *         }
+ *     }
+ * @endcode
+ */
+#define cel_has(Type, ...) \
+    CelsEntityRegisterComponent(CelsGetCurrentSession(), CelsHashKey(#Type), sizeof(Type), &(Type)__VA_ARGS__)
+
+/**
+ * @def cel_has_tag
+ * @brief Declaratively binds a zero-sized tag component to the active composable/entity scope.
+ */
+#define cel_has_tag(Type) \
+    CelsEntityRegisterComponent(CelsGetCurrentSession(), CelsHashKey(#Type), 0, NULL)
+
+/**
+ * @def cel_get
+ * @brief Queries an attached component, checking CELS intra-frame staged batch first,
+ * then falling back to registered ECS lookup hook (Flecs).
+ *
+ * Overloads:
+ * - cel_get(Type): Reads component attached to current active composable node (cel_id()).
+ * - cel_get(entityId, Type): Reads component attached to explicit entity ID.
+ *
+ * Example:
+ * @code
+ *     const Position *pos = cel_get(Position);
+ *     const Health *targetHp = cel_get(targetEntity, Health);
+ * @endcode
+ */
+#define cel_get(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_GET_2, _CEL_GET_1, _UNUSED)(__VA_ARGS__)
+#define _CEL_GET_1(Type)           ((const Type*)CelsEntityGetComponent(CelsGetCurrentSession(), CelsGetActiveEntityId(CelsGetCurrentSession()), CelsHashKey(#Type)))
+#define _CEL_GET_2(entityId, Type) ((const Type*)CelsEntityGetComponent(CelsGetCurrentSession(), (uint64_t)(entityId), CelsHashKey(#Type)))
+
+/**
+ * @def cel_is
+ * @brief Checks if a component or tag is attached in the active frame or registered ECS.
+ *
+ * Overloads:
+ * - cel_is(Type): Checks component on current active composable node (cel_id()).
+ * - cel_is(entityId, Type): Checks component on explicit entity ID.
+ */
+#define cel_is(...) _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_IS_2, _CEL_IS_1, _UNUSED)(__VA_ARGS__)
+#define _CEL_IS_1(Type)           CelsEntityHasComponent(CelsGetCurrentSession(), CelsGetActiveEntityId(CelsGetCurrentSession()), CelsHashKey(#Type))
+#define _CEL_IS_2(entityId, Type) CelsEntityHasComponent(CelsGetCurrentSession(), (uint64_t)(entityId), CelsHashKey(#Type))
 
 #ifdef __cplusplus
 }

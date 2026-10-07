@@ -1,5 +1,6 @@
 #include "cels.h"
 #include "transition_state.h"
+#include "cels_input.h"
 #include "tui_renderer.h"
 #include "common_events.h"
 #include <stdio.h>
@@ -24,6 +25,17 @@ CEL_Composable(HealthBarHUD, const PlayerGaugeState*, gauge) {
     TuiFooter("Controls: [D] -25 Damage | [H] +25 Heal | [Q] Quit");
 }
 
+typedef enum TransitionAction {
+    TRANS_ACTION_DAMAGE = 1,
+    TRANS_ACTION_HEAL
+} TransitionAction;
+
+static const CelsKeyBinding g_transitionBindings[] = {
+    { 'd', TRANS_ACTION_DAMAGE },
+    { 'h', TRANS_ACTION_HEAL }
+};
+static const CelsInputMap g_transitionMap = CELS_INPUT_MAP("TransitionMap", g_transitionBindings);
+
 /**
  * Root composition initializing and observing the player health state.
  */
@@ -34,20 +46,20 @@ CEL_Composition(TransitionAppComposition) {
         .isAlive       = true
     });
 
-    /* 1. React to common keyboard signals from host */
-    cel_connect(CelsKeySignal, sig) {
-        if (sig->key == 'd' || sig->key == 'D') {
-            cel_mutate(gauge) {
-                this->currentHealth -= 25.0f;
-                if (this->currentHealth < 0.0f) this->currentHealth = 0.0f;
-                this->isAlive = (this->currentHealth > 0.0f);
-            }
-        } else if (sig->key == 'h' || sig->key == 'H') {
-            cel_mutate(gauge) {
-                this->currentHealth += 25.0f;
-                if (this->currentHealth > this->maxHealth) this->currentHealth = this->maxHealth;
-                this->isAlive = true;
-            }
+    /* Route active input mapping down the transition subtree */
+    cel_set_context(CelsInputMap, &g_transitionMap);
+
+    if (cel_action_consume(TRANS_ACTION_DAMAGE)) {
+        cel_mutate(gauge) {
+            this->currentHealth -= 25.0f;
+            if (this->currentHealth < 0.0f) this->currentHealth = 0.0f;
+            this->isAlive = (this->currentHealth > 0.0f);
+        }
+    } else if (cel_action_consume(TRANS_ACTION_HEAL)) {
+        cel_mutate(gauge) {
+            this->currentHealth += 25.0f;
+            if (this->currentHealth > this->maxHealth) this->currentHealth = this->maxHealth;
+            this->isAlive = true;
         }
     }
 

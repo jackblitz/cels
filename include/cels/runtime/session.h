@@ -207,6 +207,64 @@ typedef struct CelsModuleBinding {
 } CelsModuleBinding;
 #endif
 
+/* ========================================================================= */
+/* Ambient Context Scope                                                     */
+/* ========================================================================= */
+
+typedef struct CelsScopeNode {
+    uint64_t typeId;
+    const void *data;
+    struct CelsScopeNode *parent;
+} CelsScopeNode;
+
+static inline const void *CelsScopeFind(const CelsScopeNode *head, uint64_t typeId)
+{
+    const CelsScopeNode *curr = head;
+    while (curr != NULL) {
+        if (curr->typeId == typeId) {
+            return curr->data;
+        }
+        curr = curr->parent;
+    }
+    return NULL;
+}
+
+CelsScopeNode *CelsContextPush(CelsSession *session, uint64_t typeId, const void *data);
+
+/* ========================================================================= */
+/* Declarative Entity Component Tracking (cel_has)                           */
+/* ========================================================================= */
+
+#ifndef CELS_MAX_ENTITY_COMPONENTS
+#define CELS_MAX_ENTITY_COMPONENTS 64u
+#endif
+
+typedef struct CelsEntityTracker {
+    uint64_t entityId;
+    uint32_t prevCount;
+    uint32_t currCount;
+    uint64_t prevTypes[CELS_MAX_ENTITY_COMPONENTS];
+    uint64_t currTypes[CELS_MAX_ENTITY_COMPONENTS];
+} CelsEntityTracker;
+
+typedef struct CelsEntityScope {
+    int isActive;
+    CelsEntityTracker *tracker;
+} CelsEntityScope;
+
+/* ========================================================================= */
+/* Child Introspection & Reflection (CelsChildInfo)                          */
+/* ========================================================================= */
+
+typedef struct CelsChildInfo {
+    uint32_t index;       /**< 0-based sequential index of this child within the parent container */
+    uint32_t totalCount;  /**< Total direct children in the parent container (from settled pass) */
+    uint64_t parentId;    /**< 64-bit entity / node ID of the enclosing container */
+    uint64_t childId;     /**< 64-bit entity / node ID of this child composable */
+    bool     isFirst;     /**< True if index == 0 */
+    bool     isLast;      /**< True if index == totalCount - 1 (when totalCount > 0) */
+} CelsChildInfo;
+
 /**
  * Primary session orchestrating composition, traversal, and reactive state.
  */
@@ -229,6 +287,8 @@ struct CelsSession {
     uint32_t groupIndexStack[CELS_MAX_DEPTH];
     uint32_t oldGroupSizeStack[CELS_MAX_DEPTH];
     uint32_t slotOffsetStack[CELS_MAX_DEPTH];
+    uint32_t childCounterStack[CELS_MAX_DEPTH]; /**< Number of direct children evaluated at this depth */
+    uint32_t childIndexStack[CELS_MAX_DEPTH];   /**< 0-based child index assigned to this node */
 
     /* Slab storage */
     void *slab;
@@ -289,11 +349,27 @@ struct CelsSession {
     /* Generic user context pointer */
     void *userData;
 
+    /* Ambient context scope stack (top of call-stack linked list) */
+    CelsScopeNode *ambientScope;
+    CelsScopeNode *ambientScopeStack[CELS_MAX_DEPTH];
+
+    /* Declarative entity tracking stack */
+    CelsEntityTracker *currentEntityTracker;
+    CelsEntityTracker *entityTrackerStack[CELS_MAX_DEPTH];
+    uint32_t entityDepth;
+    uint64_t activeEntityId;
+    uint64_t activeEntityIdStack[CELS_MAX_DEPTH];
+
+    /* ECS lookup hook (e.g. Flecs fallback) */
+    const void *(*ecsLookupHook)(uint64_t entityId, uint64_t typeKey, void *userData);
+    void *ecsLookupUserData;
+
     /* Post-recomposition frame completion hook */
     void (*postRecomposeHook)(struct CelsSession *session, void *userData);
     void *postRecomposeUserData;
 };
 
+typedef const void *(*CelsEcsLookupFn)(uint64_t entityId, uint64_t typeKey, void *userData);
 typedef void (*CelsPostRecomposeFn)(CelsSession *session, void *userData);
 
 /* ========================================================================= */
@@ -576,6 +652,30 @@ bool CelsEnterComposable(CelsSession *session, uint64_t key);
 void CelsExitGroup(CelsSession *session);
 
 /**
+ * Resolves child metadata for the currently executing composable within its parent container.
+ *
+ * @param session Active session instance. Safe if NULL.
+ * @param outInfo Destination struct receiving child index and count. Non-NULL.
+ * @return CELS_OK on success,
+ *         CELS_ERROR_INVALID_ARGUMENT if outInfo is NULL,
+ *         CELS_ERROR_INVALID_STATE if called outside a container or outside active session.
+ */
+CelsResult CelsGetChildInfo(const CelsSession *session, CelsChildInfo *outInfo);
+
+/**
+ * Resolves an ambient context value from the ancestor call chain.
+ *
+ * @param session Active session instance. Safe if NULL.
+ * @param typeId  Unique 64-bit context type hash.
+ * @param outData Destination pointer receiving context payload address. Non-NULL.
+ * @return CELS_OK on success,
+ *         CELS_ERROR_INVALID_ARGUMENT if outData is NULL,
+ *         CELS_ERROR_NOT_FOUND if context was not provided in ancestor scope,
+ *         CELS_ERROR_INVALID_STATE if session is NULL.
+ */
+CelsResult CelsContextResolve(const CelsSession *session, uint64_t typeId, const void **outData);
+
+/**
  * Prunes and removes an entire subtree starting at the specified logical group index.
  *
  * Invokes registered unmount lifecycle cleanups for all descendant nodes in reverse order.
@@ -726,6 +826,94 @@ bool CelsSessionStageCustom(CelsSession *session,
                             uint64_t typeKey,
                             size_t size,
                             const void *data);
+
+/* ========================================================================= */
+/* Declarative Entity Scope & Component Registration                         */
+/* ========================================================================= */
+
+/**
+ * Enters a declarative entity scope during recomposition.
+ *
+ * Allocates or resolves the persistent entity tracker slot, enters a composable
+ * group, and initializes tracking for this frame's component declarations.
+ *
+ * @param session  Active session (or NULL for ambient session).
+ * @param entityId 64-bit entity identifier.
+ * @param name     Optional diagnostic entity name.
+ * @param scope    Scope guard struct populated by this call.
+ * @return True if scope entered successfully; false otherwise.
+ */
+bool CelsEnterEntityScope(CelsSession *session, uint64_t entityId, const char *name, CelsEntityScope *scope);
+
+/**
+ * Exits a declarative entity scope and performs component reconciliation diff.
+ *
+ * Automatically stages CELS_OP_REMOVE for any component that was active in the previous
+ * recomposition pass but omitted during the current pass.
+ *
+ * @param session Active session (or NULL for ambient session).
+ * @param scope   Scope guard struct returned by CelsEnterEntityScope.
+ */
+void CelsExitEntityScope(CelsSession *session, CelsEntityScope *scope);
+
+/**
+ * Registers a component on the active entity in the current entity scope.
+ *
+ * Stages a CELS_OP_SET transaction and records the component type for this frame's
+ * reconciliation diff.
+ *
+ * @param session Active session (or NULL for ambient session).
+ * @param typeKey 64-bit component type key (typically CelsHashKey(#Type)).
+ * @param size    Payload size in bytes.
+ * @param data    Pointer to payload data.
+ */
+void CelsEntityRegisterComponent(CelsSession *session, uint64_t typeKey, size_t size, const void *data);
+
+/**
+ * Returns the 64-bit entity identifier of the innermost active composable or entity scope.
+ *
+ * @param session Active session (or NULL for ambient session).
+ * @return Active entity identifier, or 0 if outside any active scope.
+ */
+uint64_t CelsGetActiveEntityId(CelsSession *session);
+
+/**
+ * Explicitly sets or overrides the 64-bit entity identifier of the innermost active composable scope.
+ *
+ * @param session  Active session (or NULL for ambient session).
+ * @param entityId New 64-bit entity identifier.
+ */
+void CelsSetActiveEntityId(CelsSession *session, uint64_t entityId);
+
+/**
+ * Registers an external ECS lookup hook callback (e.g. for Flecs fallback queries).
+ *
+ * @param session Target session. Safe if NULL.
+ * @param hook    Callback invoked to query external ECS components. Can be NULL to clear.
+ * @param userData Context pointer passed to hook.
+ */
+void CelsSessionSetEcsLookupHook(CelsSession *session, CelsEcsLookupFn hook, void *userData);
+
+/**
+ * Inspects a component attached to an entity, checking CELS intra-frame staged batch first,
+ * then falling back to registered ECS lookup hook (Flecs).
+ *
+ * @param session  Active session (or NULL for ambient session).
+ * @param entityId 64-bit entity identifier.
+ * @param typeKey  64-bit component type key.
+ * @return Read-only pointer to component data, or NULL if absent.
+ */
+const void *CelsEntityGetComponent(CelsSession *session, uint64_t entityId, uint64_t typeKey);
+
+/**
+ * Checks if a component or tag exists on an entity in the staged batch or external ECS.
+ *
+ * @param session  Active session (or NULL for ambient session).
+ * @param entityId 64-bit entity identifier.
+ * @param typeKey  64-bit component type key.
+ * @return True if component exists; false otherwise.
+ */
+bool CelsEntityHasComponent(CelsSession *session, uint64_t entityId, uint64_t typeKey);
 
 /**
  * Commits the current active transaction batch using the supplied handler callback.

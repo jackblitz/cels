@@ -83,7 +83,7 @@ CEL_Composable(TuiFooter, const char*, controls) {
  */
 #define TuiPrint(fmt, ...) do { \
     char _tui_fmt_buf[128]; \
-    snprintf(_tui_fmt_buf, sizeof(_tui_fmt_buf), (fmt), __VA_ARGS__); \
+    snprintf(_tui_fmt_buf, sizeof(_tui_fmt_buf), (fmt), ##__VA_ARGS__); \
     TuiLine(_tui_fmt_buf); \
 } while (0)
 

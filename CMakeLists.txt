@@ -211,6 +211,51 @@ if(CELS_BUILD_EXAMPLES)
         LIBRARIES
             cels_example_common
     )
+
+    # 5. Declarative Component & ECS Example (cel_component_host + cel_component_dll)
+    cels_add_application(
+        HOST cel_component_host
+        DLL cel_component_dll
+        HOST_SOURCES
+            examples/component/host.c
+        APP_SOURCES
+            examples/component/app/app.c
+        INCLUDES
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/common
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/component/app
+        LIBRARIES
+            cels_example_common
+    )
+
+    # 6. Ambient Theming Example (cel_theming_host + cel_theming_dll)
+    cels_add_application(
+        HOST cel_theming_host
+        DLL cel_theming_dll
+        HOST_SOURCES
+            examples/theming/host.c
+        APP_SOURCES
+            examples/theming/app/app.c
+        INCLUDES
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/common
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/theming/app
+        LIBRARIES
+            cels_example_common
+    )
+
+    # 7. Declarative Input & Focus Scoping Example (cel_input_host + cel_input_dll)
+    cels_add_application(
+        HOST cel_input_host
+        DLL cel_input_dll
+        HOST_SOURCES
+            examples/input/host.c
+        APP_SOURCES
+            examples/input/app/app.c
+        INCLUDES
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/common
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/input/app
+        LIBRARIES
+            cels_example_common
+    )
 endif()
 
 # =============================================================================

@@ -1,9 +1,25 @@
 #include "cels.h"
+#include "cels_input.h"
 #include "event_state.h"
 #include "tui_renderer.h"
 #include "common_events.h"
 #include <stdio.h>
 #include <string.h>
+
+typedef enum EventAppAction {
+    EVENT_ACTION_TRIGGER = 1,
+    EVENT_ACTION_SIGNAL,
+    EVENT_ACTION_BROADCAST,
+    EVENT_ACTION_WORKFLOW
+} EventAppAction;
+
+static const CelsKeyBinding g_eventBindings[] = {
+    { 'e', EVENT_ACTION_TRIGGER },
+    { 's', EVENT_ACTION_SIGNAL },
+    { 'b', EVENT_ACTION_BROADCAST },
+    { 't', EVENT_ACTION_WORKFLOW }
+};
+static const CelsInputMap g_eventMap = CELS_INPUT_MAP("EventMap", g_eventBindings);
 
 /**
  * Child Leaf Composable: ActionButton
@@ -156,33 +172,32 @@ CEL_Composition(EventAppComposition) {
     bool *triggerChildClick = cel_remember(bool, false);
     bool shouldClick = *triggerChildClick;
     *triggerChildClick = false; /* Reset pulse */
+    /* Route active input mapping down the event messaging tree */
+    cel_set_context(CelsInputMap, &g_eventMap);
 
-    /* 1. React to common keyboard signals from host */
-    cel_connect(CelsKeySignal, sig) {
-        if (sig->key == 'e' || sig->key == 'E') {
-            cel_event(UserActionEvent, {
-                .actionId = 1,
-                .cost = 10,
-                .actionName = "Shield"
-            });
-        } else if (sig->key == 's' || sig->key == 'S') {
-            CelsSession *sess = CelsGetCurrentSession();
-            cel_signal(sess, CombatSignal, {
-                .targetId = 20,
-                .damage = 45.0f,
-                .isCritical = false
-            });
-        } else if (sig->key == 'b' || sig->key == 'B') {
-            cel_broadcast(AudioBroadcast, {
-                .soundEffect = "laser.wav",
-                .volume = 0.8f
-            });
-        } else if (sig->key == 't' || sig->key == 'T') {
-            cel_mutate(state) {
-                this->taskWorkflowActive = true;
-                this->workflowStep = 0;
-                this->taskWorkflowCompleted = false;
-            }
+    if (cel_action_consume(EVENT_ACTION_TRIGGER)) {
+        cel_event(UserActionEvent, {
+            .actionId = 1,
+            .cost = 10,
+            .actionName = "Shield"
+        });
+    } else if (cel_action_consume(EVENT_ACTION_SIGNAL)) {
+        CelsSession *sess = CelsGetCurrentSession();
+        cel_signal(sess, CombatSignal, {
+            .targetId = 20,
+            .damage = 45.0f,
+            .isCritical = false
+        });
+    } else if (cel_action_consume(EVENT_ACTION_BROADCAST)) {
+        cel_broadcast(AudioBroadcast, {
+            .soundEffect = "laser.wav",
+            .volume = 0.8f
+        });
+    } else if (cel_action_consume(EVENT_ACTION_WORKFLOW)) {
+        cel_mutate(state) {
+            this->taskWorkflowActive = true;
+            this->workflowStep = 0;
+            this->taskWorkflowCompleted = false;
         }
     }
 

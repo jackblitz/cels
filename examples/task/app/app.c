@@ -1,5 +1,6 @@
 #include "cels.h"
 #include "network_state.h"
+#include "cels_input.h"
 #include "network_task.h"
 #include "tui_renderer.h"
 #include "common_events.h"
@@ -63,6 +64,17 @@ CEL_Composable(NetworkHUD, NetworkState*, net) {
 /**
  * Root composition for the network task application.
  */
+typedef enum TaskAction {
+    TASK_ACTION_CONNECT = 1,
+    TASK_ACTION_CANCEL
+} TaskAction;
+
+static const CelsKeyBinding g_taskBindings[] = {
+    { 'c', TASK_ACTION_CONNECT },
+    { 'x', TASK_ACTION_CANCEL }
+};
+static const CelsInputMap g_taskMap = CELS_INPUT_MAP("TaskMap", g_taskBindings);
+
 CEL_Composition(NetworkAppComposition) {
     NetworkState *net = cel_remember_state(NetworkState, {
         .packetsReceived = 0,
@@ -72,17 +84,17 @@ CEL_Composition(NetworkAppComposition) {
         .isConnecting    = false
     });
 
-    /* 1. React to common keyboard signals from host */
-    cel_connect(CelsKeySignal, sig) {
-        if (sig->key == 'c' || sig->key == 'C') {
-            cel_mutate(net) {
-                this->isConnecting = true;
-                this->status = NET_RESOLVING;
-            }
-        } else if (sig->key == 'x' || sig->key == 'X') {
-            cel_mutate(net) {
-                this->isConnecting = false;
-            }
+    /* Route active input mapping down the network task subtree */
+    cel_set_context(CelsInputMap, &g_taskMap);
+
+    if (cel_action_consume(TASK_ACTION_CONNECT)) {
+        cel_mutate(net) {
+            this->isConnecting = true;
+            this->status = NET_RESOLVING;
+        }
+    } else if (cel_action_consume(TASK_ACTION_CANCEL)) {
+        cel_mutate(net) {
+            this->isConnecting = false;
         }
     }
 

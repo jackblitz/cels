@@ -210,7 +210,6 @@ static void DrainInvalidationQueue(CelsSession *s)
                         curr = p->parentIndex;
                     }
                 }
-                break;
             }
         }
     }
@@ -614,6 +613,9 @@ void CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
         ? config->maxDrainIterations
         : CELS_MAX_DRAIN_ITERATIONS;
 
+    memset(s->childCounterStack, 0, sizeof(s->childCounterStack));
+    memset(s->childIndexStack, 0, sizeof(s->childIndexStack));
+
     CelsStateRegistryInit(&s->stateRegistry);
     CelsEventQueueInit(&s->eventQueue);
 }
@@ -877,12 +879,14 @@ CelsResult CelsSessionRecompose(CelsSession *s)
 
         /* Publish double-buffered state snapshots before each evaluation pass */
         CelsStatePublishDirty(s);
+        s->isHandlingEvent = false;
 
         DrainInvalidationQueue(s);
 
         s->currentDepth = 0;
         s->currentSlotOffset = 0;
         s->logicalCursor = 0;
+        s->ambientScope = NULL;
 
         for (uint32_t i = 0; i < s->attachedCount; ++i) {
             CelsAttachedComposition *const comp = &s->attachedCompositions[i];
@@ -1154,6 +1158,7 @@ bool CelsEnterComposition(CelsSession *s, uint64_t rootKey)
 
     const uint32_t depth = s->currentDepth++;
     s->activeStack[depth] = 1;
+    s->ambientScopeStack[depth] = s->ambientScope;
 
     if (totalGroups == 0) {
         MoveGroupGap(s, 0);
@@ -1218,6 +1223,18 @@ bool CelsEnterComposable(CelsSession *s, uint64_t key)
     const uint32_t depth = s->currentDepth++;
     s->slotOffsetStack[depth - 1] = s->currentSlotOffset;
     s->activeStack[depth] = 0;
+    s->activeEntityIdStack[depth] = s->activeEntityId;
+    s->entityTrackerStack[depth] = s->currentEntityTracker;
+    s->ambientScopeStack[depth] = s->ambientScope;
+    s->currentEntityTracker = NULL;
+
+    /* Initialize child introspection for this composable node */
+    s->childCounterStack[depth] = 0;
+    if (depth > 0) {
+        s->childIndexStack[depth] = s->childCounterStack[depth - 1]++;
+    } else {
+        s->childIndexStack[depth] = 0;
+    }
 
     const uint32_t totalGroups = CelsGetLogicalGroupCount(s);
     const uint32_t cursor = s->logicalCursor;
@@ -1230,6 +1247,10 @@ bool CelsEnterComposable(CelsSession *s, uint64_t key)
             ? CelsGetGroup(s, parentIdx)->key
             : 0xCBF29CE484222325ULL;
         key = CelsKeyIndex(parentKey, ((uint64_t)(cursor - parentIdx) + 1u) * 0x9e3779b97f4a7c15ULL);
+    }
+
+    if (s->activeEntityId == 0) {
+        s->activeEntityId = key;
     }
 
     for (uint32_t i = cursor; i < parentEnd;) {
@@ -1285,6 +1306,7 @@ bool CelsEnterComposable(CelsSession *s, uint64_t key)
         s->currentGroupIndex = cursor;
         s->currentSlotOffset = 0;
         s->logicalCursor++;
+        s->activeEntityId = (s->activeEntityIdStack[depth] != 0) ? s->activeEntityIdStack[depth] : cached->userData;
         return true;
     }
 
@@ -1338,6 +1360,7 @@ bool CelsEnterComposable(CelsSession *s, uint64_t key)
     s->currentGroupIndex = cursor;
     s->currentSlotOffset = 0;
     s->logicalCursor = cursor + 1;
+    s->activeEntityId = (s->activeEntityIdStack[depth] != 0) ? s->activeEntityIdStack[depth] : CelsGetGroup(s, cursor)->userData;
 
     return true;
 }
@@ -1374,7 +1397,34 @@ void CelsExitGroup(CelsSession *s)
             g->flags &= ~CELS_FLAG_FRESH_MOUNT;
         }
         assert(g->groupSize == (s->logicalCursor - 1) - groupIdx);
+        g->nodeCount = (uint16_t)s->childCounterStack[depth];
+
+        /* Reconcile components if any were declared via cel_has in this composable group */
+        if (s->currentEntityTracker != NULL) {
+            CelsEntityTracker *tracker = s->currentEntityTracker;
+            for (uint32_t i = 0; i < tracker->prevCount; i++) {
+                uint64_t oldType = tracker->prevTypes[i];
+                bool stillPresent = false;
+                for (uint32_t j = 0; j < tracker->currCount; j++) {
+                    if (tracker->currTypes[j] == oldType) {
+                        stillPresent = true;
+                        break;
+                    }
+                }
+                if (!stillPresent) {
+                    CelsSessionStageRemove(s, tracker->entityId, oldType);
+                }
+            }
+            uint32_t countToCopy = tracker->currCount < CELS_MAX_ENTITY_COMPONENTS ? tracker->currCount : CELS_MAX_ENTITY_COMPONENTS;
+            memcpy(tracker->prevTypes, tracker->currTypes, countToCopy * sizeof(uint64_t));
+            tracker->prevCount = countToCopy;
+            tracker->currCount = 0;
+        }
     }
+
+    s->currentEntityTracker = s->entityTrackerStack[depth];
+    s->activeEntityId = s->activeEntityIdStack[depth];
+    s->ambientScope = s->ambientScopeStack[depth];
 
     if (depth > 0) {
         s->currentGroupIndex = s->groupIndexStack[depth - 1];
@@ -1920,4 +1970,327 @@ void *CelsResolveSlotWithCleanup(CelsSession *s,
     }
     return ptr;
 }
+
+/* ========================================================================= */
+/* Declarative Entity Scope & Component Registration Implementation          */
+/* ========================================================================= */
+
+static void _CelsEntityTrackerUnmount(void *ptr, CelsSession *session)
+{
+    CelsEntityTracker *tracker = (CelsEntityTracker *)ptr;
+    if (tracker != NULL && tracker->entityId != 0 && session != NULL) {
+        /* Automatically stage entity deletion when the entity composable unmounts! */
+        CelsSessionStageDelete(session, tracker->entityId);
+    }
+}
+
+bool CelsEnterEntityScope(CelsSession *session, uint64_t entityId, const char *name, CelsEntityScope *scope)
+{
+    (void)name;
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL || scope == NULL) {
+        if (scope != NULL) {
+            scope->isActive = 0;
+            scope->tracker = NULL;
+        }
+        return false;
+    }
+
+    /* Compute unique 64-bit group key for this entity */
+    uint64_t groupKey = CelsKeyIndex(CelsHashKey("CEL_Entity"), entityId);
+    if (!CelsEnterComposable(session, groupKey)) {
+        CelsExitGroup(session);
+        scope->isActive = 0;
+        scope->tracker = NULL;
+        return false;
+    }
+
+    CelsEntityTracker initTracker;
+    memset(&initTracker, 0, sizeof(initTracker));
+    initTracker.entityId = entityId;
+
+    CelsEntityTracker *tracker = (CelsEntityTracker *)CelsResolveSlotWithCleanup(
+        session,
+        sizeof(CelsEntityTracker),
+        &initTracker,
+        _CelsEntityTrackerUnmount
+    );
+
+    if (tracker == NULL) {
+        CelsExitGroup(session);
+        scope->isActive = 0;
+        scope->tracker = NULL;
+        return false;
+    }
+
+    if (entityId != 0) {
+        tracker->entityId = entityId;
+    }
+    tracker->currCount = 0;
+
+    /* Push previous tracker onto entity stack */
+    if (session->entityDepth < CELS_MAX_DEPTH) {
+        session->entityTrackerStack[session->entityDepth++] = session->currentEntityTracker;
+    }
+    session->currentEntityTracker = tracker;
+    session->activeEntityId = tracker->entityId;
+
+    scope->isActive = 1;
+    scope->tracker = tracker;
+    return true;
+}
+
+void CelsExitEntityScope(CelsSession *session, CelsEntityScope *scope)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL || scope == NULL || scope->tracker == NULL) {
+        return;
+    }
+
+    CelsEntityTracker *tracker = scope->tracker;
+
+    /* RECONCILIATION DIFF: */
+    /* Find any component that was active in prevTypes but NOT emitted in currTypes this frame */
+    for (uint32_t i = 0; i < tracker->prevCount; i++) {
+        uint64_t oldType = tracker->prevTypes[i];
+        bool stillPresent = false;
+
+        for (uint32_t j = 0; j < tracker->currCount; j++) {
+            if (tracker->currTypes[j] == oldType) {
+                stillPresent = true;
+                break;
+            }
+        }
+
+        if (!stillPresent) {
+            /* Declarative removal: The component was omitted this frame! */
+            CelsSessionStageRemove(session, tracker->entityId, oldType);
+        }
+    }
+
+    /* Commit current types list to previous types list for next recomposition */
+    uint32_t countToCopy = tracker->currCount < CELS_MAX_ENTITY_COMPONENTS ? tracker->currCount : CELS_MAX_ENTITY_COMPONENTS;
+    memcpy(tracker->prevTypes, tracker->currTypes, countToCopy * sizeof(uint64_t));
+    tracker->prevCount = countToCopy;
+    tracker->currCount = 0;
+
+    /* Pop entity tracker stack */
+    if (session->entityDepth > 0) {
+        session->currentEntityTracker = session->entityTrackerStack[--session->entityDepth];
+        session->activeEntityId = session->currentEntityTracker ? session->currentEntityTracker->entityId : 0;
+    } else {
+        session->currentEntityTracker = NULL;
+        session->activeEntityId = 0;
+    }
+
+    /* Close the entity group in the slot table */
+    CelsExitGroup(session);
+}
+
+void CelsEntityRegisterComponent(CelsSession *session, uint64_t typeKey, size_t size, const void *data)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL) return;
+
+    CelsEntityTracker *tracker = session->currentEntityTracker;
+    if (tracker == NULL && session->currentDepth > 0) {
+        uint64_t entId = CelsGetActiveEntityId(session);
+        CelsEntityTracker initTracker;
+        memset(&initTracker, 0, sizeof(initTracker));
+        initTracker.entityId = entId;
+
+        tracker = (CelsEntityTracker *)CelsResolveSlotWithCleanup(
+            session,
+            sizeof(CelsEntityTracker),
+            &initTracker,
+            _CelsEntityTrackerUnmount
+        );
+        if (tracker != NULL) {
+            if (entId != 0) {
+                tracker->entityId = entId;
+            }
+            session->currentEntityTracker = tracker;
+        }
+    }
+
+    if (tracker == NULL) {
+        assert(tracker != NULL && "cel_has called outside an active composable or entity scope!");
+        return;
+    }
+
+    /* Record in currTypes for this frame's diff */
+    if (tracker->currCount < CELS_MAX_ENTITY_COMPONENTS) {
+        tracker->currTypes[tracker->currCount++] = typeKey;
+    }
+
+    /* Stage CELS_OP_SET transaction */
+    CelsSessionStageSet(session, tracker->entityId, typeKey, size, data);
+}
+
+uint64_t CelsGetActiveEntityId(CelsSession *session)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    return session ? session->activeEntityId : 0;
+}
+
+void CelsSetActiveEntityId(CelsSession *session, uint64_t entityId)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL) return;
+    session->activeEntityId = entityId;
+    if (session->currentEntityTracker != NULL) {
+        session->currentEntityTracker->entityId = entityId;
+    }
+}
+
+void CelsSessionSetEcsLookupHook(CelsSession *session, CelsEcsLookupFn hook, void *userData)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL) return;
+    session->ecsLookupHook = hook;
+    session->ecsLookupUserData = userData;
+}
+
+const void *CelsEntityGetComponent(CelsSession *session, uint64_t entityId, uint64_t typeKey)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL || entityId == 0) return NULL;
+
+    /* 1. Check active frame staged transaction batch (newest staged set wins) */
+    const CelsTransactionBatch *batch = &session->transactionBatches[session->activeBatchIndex];
+    for (int32_t i = (int32_t)batch->opCount - 1; i >= 0; --i) {
+        const CelsTransactionOp *op = &batch->ops[i];
+        if (op->targetId == entityId && op->typeKey == typeKey) {
+            if (op->opCode == CELS_OP_SET && op->size > 0) {
+                return (const void *)&batch->data[op->dataOffset];
+            } else if (op->opCode == CELS_OP_REMOVE || op->opCode == CELS_OP_DELETE) {
+                return NULL;
+            }
+        }
+    }
+
+    /* 2. Check ECS lookup hook fallback (e.g. Flecs) */
+    if (session->ecsLookupHook != NULL) {
+        void *userCtx = session->ecsLookupUserData ? session->ecsLookupUserData : session->userData;
+        return session->ecsLookupHook(entityId, typeKey, userCtx);
+    }
+
+    return NULL;
+}
+
+bool CelsEntityHasComponent(CelsSession *session, uint64_t entityId, uint64_t typeKey)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL || entityId == 0) return false;
+
+    /* 1. Check active frame staged transaction batch */
+    const CelsTransactionBatch *batch = &session->transactionBatches[session->activeBatchIndex];
+    for (int32_t i = (int32_t)batch->opCount - 1; i >= 0; --i) {
+        const CelsTransactionOp *op = &batch->ops[i];
+        if (op->targetId == entityId && op->typeKey == typeKey) {
+            if (op->opCode == CELS_OP_SET) {
+                return true;
+            } else if (op->opCode == CELS_OP_REMOVE || op->opCode == CELS_OP_DELETE) {
+                return false;
+            }
+        }
+    }
+
+    /* 2. Check ECS lookup hook fallback */
+    if (session->ecsLookupHook != NULL) {
+        void *userCtx = session->ecsLookupUserData ? session->ecsLookupUserData : session->userData;
+        return session->ecsLookupHook(entityId, typeKey, userCtx) != NULL;
+    }
+
+    return false;
+}
+
+CelsScopeNode *CelsContextPush(CelsSession *session, uint64_t typeId, const void *data)
+{
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL || session->currentDepth == 0) return NULL;
+
+    CelsScopeNode initNode = { .typeId = typeId, .data = data, .parent = session->ambientScope };
+    CelsScopeNode *node = (CelsScopeNode *)CelsResolveSlot(session, sizeof(CelsScopeNode), &initNode);
+    if (node != NULL) {
+        node->typeId = typeId;
+        node->data = data;
+        node->parent = session->ambientScope;
+        session->ambientScope = node;
+    }
+    return node;
+}
+
+CelsResult CelsGetChildInfo(const CelsSession *s, CelsChildInfo *outInfo)
+{
+    if (outInfo == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+    memset(outInfo, 0, sizeof(*outInfo));
+    if (s == NULL) {
+        s = CelsGetCurrentSession();
+    }
+    if (s == NULL || s->currentDepth <= 1) {
+        return CELS_ERROR_INVALID_STATE;
+    }
+
+    uint32_t depth = s->currentDepth - 1;
+    if (depth == 0) {
+        return CELS_ERROR_INVALID_STATE;
+    }
+
+    uint32_t parentDepth = depth - 1;
+    uint32_t parentGroupIdx = s->groupIndexStack[parentDepth];
+    const CelsSlotGroup *parentGroup = CelsGetGroup((CelsSession *)s, parentGroupIdx);
+
+    outInfo->index = s->childIndexStack[depth];
+    outInfo->totalCount = (parentGroup != NULL && parentGroup->nodeCount > 0)
+        ? (uint32_t)parentGroup->nodeCount
+        : s->childCounterStack[parentDepth];
+    outInfo->parentId = (parentGroup != NULL) ? parentGroup->userData : 0;
+    outInfo->childId = s->activeEntityId;
+    outInfo->isFirst = (outInfo->index == 0);
+    outInfo->isLast = (outInfo->totalCount > 0 && outInfo->index == outInfo->totalCount - 1);
+
+    return CELS_OK;
+}
+
+CelsResult CelsContextResolve(const CelsSession *session, uint64_t typeId, const void **outData)
+{
+    if (outData == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+    *outData = NULL;
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+    }
+    if (session == NULL) {
+        return CELS_ERROR_INVALID_STATE;
+    }
+    const void *data = CelsScopeFind(session->ambientScope, typeId);
+    if (data == NULL) {
+        return CELS_ERROR_NOT_FOUND;
+    }
+    *outData = data;
+    return CELS_OK;
+}
+
 

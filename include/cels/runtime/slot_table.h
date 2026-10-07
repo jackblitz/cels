@@ -79,6 +79,7 @@ typedef enum CelsResult {
     CELS_ERROR_CAPACITY_EXCEEDED,
     CELS_ERROR_INDEX_OUT_OF_BOUNDS,
     CELS_ERROR_INVALID_STATE,
+    CELS_ERROR_NOT_FOUND,
     /** Recompose hit its drain-iteration bound; queue left intact. */
     CELS_ERROR_RECOMPOSE_DID_NOT_CONVERGE
 } CelsResult;

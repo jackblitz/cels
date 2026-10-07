@@ -101,6 +101,33 @@ cel_mutate(win) {
 }
 ```
 
+#### State Hoisting via Ambient Context (`cel_set_context` / `cel_get_context`)
+When state is needed across an entire subtree (e.g., container layouts, themes, focus routing, virtualized lists), avoid parameter drilling by publishing the state pointer as ambient context:
+
+```c
+/* 1. Container owns State and publishes Context */
+CEL_Composable(LazyColumn, LazyListState*, state, int, count) {
+    cel_watch(state);
+    cel_set_context(LazyListState, state);
+    // ...
+}
+
+/* 2. Deep descendants read Context and mutate State */
+CEL_Composable(LazyScrollThumb) {
+    const LazyListState *state = cel_get_context(LazyListState);
+    if (state != NULL && cel_action_consume(ACTION_PAGE_DOWN)) {
+        cel_mutate(state) {
+            this->firstVisibleIndex += 5;
+        }
+    }
+}
+```
+
+**Boundary Rule**:
+- **Props**: Pass as a function argument if only the immediate child needs the pointer.
+- **Context**: Publish via `cel_set_context` if descendants 3+ levels deep need access without cluttering intermediate signatures.
+- **Never store state in Context**: Context owns no memory and has no dirty tracking. Always allocate the underlying state with `cel_state` or `cel_remember_state` first.
+
 ---
 
 ### Secondary Pattern: Session State & Type-Based Registry
@@ -286,6 +313,22 @@ CEL_Lifecycle(TextureLifecycle, void *tex) {
 CEL_Composable(TextureViewer) {
     void *tex = cel_remember(void*, malloc(4096));
     cel_lifecycle(TextureLifecycle, tex);
+}
+```
+
+### Pattern 4: Reactive State Driving Declarative Components (`cel_has`)
+
+```c
+// When reactive state changes, recomposition automatically diffs declarative components!
+CEL_Composable(PlayerEntity, id, const PlayerState*, player) {
+    cel_watch(player); // Recomposes when player mutates!
+
+    cel_has(Position, { player->x, player->y, player->z });
+
+    // When isBurning transitions true -> false, CELS AUTO-REMOVES the debuff from Flecs!
+    if (player->isBurning) {
+        cel_has(BurnDebuff, { .dps = 25.0f });
+    }
 }
 ```
 

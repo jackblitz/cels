@@ -26,6 +26,8 @@ const char *CelsResultToString(CelsResult result)
         return "Index is out of range";
     case CELS_ERROR_INVALID_STATE:
         return "Operation invalid for current table/writer state";
+    case CELS_ERROR_NOT_FOUND:
+        return "Requested item or context was not found";
     default:
         return "Unknown error code";
     }
