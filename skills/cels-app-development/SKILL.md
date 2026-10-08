@@ -194,10 +194,23 @@ int custom_host_main(int argc, char **argv)
         return 1;
     }
 
+    /* 2. Register Host Platform Services via Engine Ambient Context */
+    static PdcursesInputContext inputCtx;
+    cel_engine_set_context(&engine, PdcursesInputContext, &inputCtx);
+
+    /* 3. Read Application Manifest Metadata (e.g. Window Title) */
+    const CelsAppManifest *manifest = CelsEngineGetManifest(&engine);
+    if (manifest && manifest->title) {
+        printf("[Host] Launching application: %s v%s\n", manifest->title, manifest->appVersion ? manifest->appVersion : "1.0");
+    }
+
     printf("[Host] Engine started (CELS_PROFILE_1K: 128 KiB slab). Entering main loop...\n");
 
-    /* 2. Main loop */
+    /* 4. Main loop */
     while (!engine.shouldQuit) {
+        /* Poll native input events and commit key states */
+        // CelsPdcursesPollInput(&inputCtx);
+
         /* Check if application DLL was rebuilt and hot-swap if needed */
         CelsAppRuntimeCheck(&engine);
 

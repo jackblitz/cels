@@ -58,11 +58,15 @@ Passing theme structs, DPI scales, or UI metrics through 5 to 10 layers of compo
 Button("Submit", theme, dpi, fontManager);
 ```
 
-### The CELS Solution: Scoped Lexical Ambient Stack
-`cel_set_context(Type, &val)` (or `cel_setContext`) attaches context to the current composable scope, automatically restoring the ancestor scope when the composable exits. Descendants can read context using either **result-protected resolution** or the **direct pointer form**:
+### The CELS Solution: Two-Tier Scoped Lexical Ambient Stack
+CELS resolves ambient context across a two-tier hierarchy without parameter drilling:
+1. **Tier 1: Composable Subtree Scope (`cel_set_context`)**: Scoped lexically to the active composable and its descendants. Ancestor scope is automatically restored when the composable exits. Best for local UI themes (`UITheme`), layout directions (`CelsLayoutDir`), or modal overrides.
+2. **Tier 2: Host Engine Scope (`cel_engine_set_context`)**: Attached to `CelsEngine` and ambiently inherited by all active sessions. Best for host platform services (`PdcursesInputContext`, `RendererBackend`, `WindowHandle`, `AudioDevice`).
+
+When reading context via `cel_context(Type)` or `cel_get_context(Type, &ptr)`, CELS checks the local composable subtree stack first; if not found, it transparently falls back to the host engine context.
 
 #### 1. Result-Protected Resolution (`cel_get_context(Type, &outPtr) -> CelsResult`) [Recommended]:
-Returns `CELS_OK` on success, `CELS_ERROR_NOT_FOUND` if absent, and `CELS_ERROR_INVALID_STATE` outside an active session:
+Returns `CELS_OK` on success, `CELS_ERROR_NOT_FOUND` if neither subtree nor engine provides the type, and `CELS_ERROR_INVALID_STATE` outside an active session:
 ```c
 CEL_Composable(ThemedButton, const char*, label) {
     const UITheme *theme = NULL;
@@ -111,6 +115,19 @@ CEL_Composable(AppScreen, bool, showDarkModal) {
 
     if (showDarkModal) {
         ModalDialog("Warning");
+    }
+}
+
+// 4. Host Engine Context Registration (Global Services):
+// In host main():
+static PdcursesInputContext g_inputCtx;
+cel_engine_set_context(&engine, PdcursesInputContext, &g_inputCtx);
+
+// Inside any Composable across any Session:
+CEL_Composable(PlayerControls) {
+    const PdcursesInputContext *input = cel_context(PdcursesInputContext);
+    if (input && cel_action_pressed(input, "Jump")) {
+        // Handle jump
     }
 }
 ```

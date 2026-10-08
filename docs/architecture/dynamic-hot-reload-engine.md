@@ -27,9 +27,9 @@ CELS implements a **production-grade, zero-restart dynamic hot-reload engine**:
 |  DYNAMIC APPLICATION LIBRARY (.dll)              |                                                |
 |  +--------------------------------------------+  |                                                |
 |  | app.hot_18420_1_2.tmp.dll                  |<--+ (Copied from game_app.dll)                    |
-|  |  |-- CelsGetAppDef()                       |                                                  |
-|  |  |-- def->setSession(session)              | (Synchronizes TLS ambient session pointer)       |
-|  |  |-- def->onStart(engine, session)         | (Attaches root compositions via cel_attach)      |
+|  |  |-- CelsGetAppManifest()                     |                                                  |
+|  |  |-- manifest->setSession(session)          | (Synchronizes TLS ambient session pointer)       |
+|  |  |-- manifest->onStart(engine)              | (Creates session & attaches root compositions)   |
 |  |  `-- Declarative UI & Gameplay Logic       |                                                  |
 |  +--------------------------------------------+                                                   |
 +===================================================================================================+

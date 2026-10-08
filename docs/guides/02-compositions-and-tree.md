@@ -467,22 +467,48 @@ Developers often wonder: *Should this be a parameter (prop), reactive state, or 
 
 ---
 
-### 1. Ambient Context Theming (`cel_set_context` / `cel_get_context`)
-Passes visual styling or environment down an entire composable subtree with zero parameter drilling and zero heap allocations.
+### 1. Ambient Context Theming & Services (`cel_set_context` / `cel_context`)
+Passes visual styling, environment, or platform services down an entire composable subtree or application with zero parameter drilling and zero heap allocations.
+
+#### Two-Tier Cascading Context Architecture
+CELS resolves ambient context across a two-tier hierarchy:
+1. **Tier 1: Composable Subtree Scope (`cel_set_context`)**: Scoped to the active composable and its descendants. Automatically restored when the composable exits. Best for local themes (`UITheme`), layout directions (`CelsLayoutDir`), or modal states.
+2. **Tier 2: Host Engine Scope (`cel_engine_set_context`)**: Scoped across the entire `CelsEngine` and available to all sessions. Best for host platform services (`PdcursesInputContext`, `RendererBackend`, `AudioDevice`, `PlatformWindow`).
+
+When resolving context via `cel_context(Type)` or `cel_get_context(Type, &ptr)`, CELS checks the local composable subtree stack first; if not found, it transparently falls back to the host engine context.
 
 #### Publishing Context:
+
+**In Composable Subtree (Local Override):**
 ```c
 CEL_Composable(SettingsContainer) {
     /* Provide dark theme down this entire subtree */
     cel_set_context(UITheme, &darkTheme);
-    SettingsScreen(); // Descendants consume via cel_get_context(UITheme)
+    SettingsScreen(); // Descendants consume via cel_context(UITheme)
 }
+```
+
+**In Host Main Loop (Engine-Wide Service):**
+```c
+/* Host registers platform services on CelsEngine */
+cel_engine_set_context(&engine, PdcursesInputContext, &inputCtx);
 ```
 
 #### Consuming Context (Two Styles):
 
-1. **Result-Protected Form (`cel_get_context(Type, &outPtr) -> CelsResult`) [Recommended for Safety]**:
-   Returns `CELS_OK` on success, `CELS_ERROR_NOT_FOUND` if no ancestor provides the type, or `CELS_ERROR_INVALID_STATE` if called outside an active session. Enables rigorous error handling and eliminates accidental null dereferences:
+1. **Direct Pointer Form (`cel_context(Type) -> const Type*`) [Convenient]**:
+   Returns the nearest ancestor or engine-level context pointer, or `NULL` if absent:
+   ```c
+   CEL_Composable(PlayerInput) {
+       const PdcursesInputContext *input = cel_context(PdcursesInputContext);
+       if (input && cel_action_pressed(input, "MoveUp")) {
+           // Move player
+       }
+   }
+   ```
+
+2. **Result-Protected Form (`cel_get_context(Type, &outPtr) -> CelsResult`) [Rigorous Safety]**:
+   Returns `CELS_OK` on success, `CELS_ERROR_NOT_FOUND` if neither subtree nor engine provides the type, or `CELS_ERROR_INVALID_STATE` if called outside an active session:
    ```c
    CEL_Composable(SettingsItem, const char*, title) {
        const UITheme *theme = NULL;
@@ -491,16 +517,6 @@ CEL_Composable(SettingsContainer) {
        } else {
            RenderTextDefault(title);
        }
-   }
-   ```
-
-2. **Pointer Form (`cel_get_context(Type) -> const Type*`)**:
-   Returns the nearest ancestor context pointer, or `NULL` if absent:
-   ```c
-   CEL_Composable(SettingsItemFast, const char*, title) {
-       const UITheme *theme = cel_get_context(UITheme);
-       uint32_t color = theme ? theme->textColor : 0xFFFFFFFF;
-       RenderTextWithColor(title, color);
    }
    ```
 

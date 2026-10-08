@@ -468,7 +468,7 @@ static const TestCase s_hotReloadTests[] = {
     { "TestModuleRegistry", "Verify CEL_Module registration, retrieval, and survival across session restarts", TestModuleRegistry },
     { "TestAppLifecycleAndReturnComposition", "Verify CEL_App onStart/onEnd hooks, returning CEL_COMPOSITION, and custom module", TestAppLifecycleAndReturnComposition },
     { "TestDynamicAppLoader", "Verify loading, shadow copying, and unloading a dynamic CELS application module", TestDynamicAppLoader },
-    { "TestStaticAppBinding", "Verify CelsAppBindStatic with monolithic CelsAppDef lifecycle hooks", TestStaticAppBinding },
+    { "TestStaticAppBinding", "Verify CelsAppBindStatic with monolithic CelsAppManifest lifecycle hooks", TestStaticAppBinding },
     { "TestMultiDllAppHosting", "Verify multi-DLL hosting across primary and secondary sessions, mode switching, and recompose predicate", TestMultiDllAppHosting }
 };
 
