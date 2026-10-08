@@ -48,7 +48,7 @@ CELS supports two distinct compilation modes via the `CELS_HOT_RELOAD` preproces
 
 ### 2.1 The Application Manifest Handshake (`CelsAppManifest`)
 
-Communication across the host-module boundary is governed by an ABI-stable application manifest declared via `CEL_App_Manifest` (or `CEL_App_Define`):
+Communication across the host-module boundary is governed by an ABI-stable application manifest declared via `CEL_App_Manifest`:
 
 ```c
 struct CelsAppManifest {

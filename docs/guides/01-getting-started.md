@@ -113,6 +113,10 @@ CEL_App_Manifest(MyApplication,
 
 > If your application root requires a lifecycle evaluation predicate (to control when it mounts or despawns), pass it as the second argument to `cel_attach(session, MainView, MainEval)`. The host loop controls frame cadence directly, calling `CelsEngineRecompose()` continuously in game loops or conditionally via `CelsEngineNeedsRecompose()` in event-driven loops.
 
+> [!NOTE]
+> **Understanding `cel_engine_create_session`**:
+> `cel_engine_create_session(engine, "main", CELS_PROFILE_1K)` is a core CELS library API (`include/cels/engine.h` and `include/cels/cels.h`). It registers the session with the engine for automatic supervision and recomposition, activates Thread-Local Storage (TLS), and links `session->engine = engine` so that any platform services registered by the host via `cel_engine_set_context` are ambiently available to all composables via `cel_context(Type)`. If the session was already created by the host runner, it idempotently returns the existing instance without resetting state.
+
 Now create `src/main_view.c` to declare your root composition and a simple composable:
 
 ```c

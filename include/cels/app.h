@@ -136,10 +136,6 @@ CELS_APP_EXPORT const CelsAppManifest *CelsGetAppDef(void);
     } \
     typedef int _cels_app_semicolon_swallower_##AppName
 
-/* Canonical Aliases */
-#define CEL_App_Define(AppName, ...) CEL_App_Manifest(AppName, __VA_ARGS__)
-#define CEL_App_Def(AppName, ...)    CEL_App_Manifest(AppName, __VA_ARGS__)
-
 /* ========================================================================= */
 /* Standalone Execution Helpers                                              */
 /* ========================================================================= */

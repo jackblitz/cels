@@ -42,7 +42,7 @@ CELS cleanly separates the **Host** (the native runtime harness and loop) from t
                                   v
 +--------------------------------------------------------------------+
 |  APPLICATION (cel_app)                                             |
-|  - Declares CEL_App_Manifest (or CEL_App_Define)                   |
+|  - Declares CEL_App_Manifest application manifest                  |
 |  - Implements onStart / onReload / onEnd lifecycle callbacks       |
 |  - Creates engine session and attaches root compositions           |
 +--------------------------------------------------------------------+
@@ -55,7 +55,7 @@ CELS cleanly separates the **Host** (the native runtime harness and loop) from t
 An application requires:
 1. One or more Compositions (e.g. `WindowComposition`).
 2. An `onStart(CelsEngine *engine)` callback that creates or gets the application session via `cel_engine_create_session(engine, "main", profile)` and attaches root compositions with `cel_attach`.
-3. The `CEL_App_Manifest` (or `CEL_App_Define`) macro exporting application metadata (`title`, `appVersion`) and lifecycle callbacks (`onStart`, `onReload`, `onEnd`).
+3. The `CEL_App_Manifest` macro exporting application metadata (`title`, `appVersion`) and lifecycle callbacks (`onStart`, `onReload`, `onEnd`).
 
 ### Canonical Application Example (`app.c`)
 ```c
@@ -90,10 +90,24 @@ CEL_App_Manifest(WindowApp,
 );
 ```
 
-### Manifest Definition Signatures
+### Manifest Definition Signature
 - `CEL_App_Manifest(AppName, ...)`: Canonical designated initializer defining application metadata and hooks (`.title`, `.appVersion`, `.onStart`, `.onReload`, `.onEnd`).
-- `CEL_App_Define(AppName, ...)`: Direct alias for `CEL_App_Manifest`.
-- `CEL_App_Def(AppName, ...)`: Backwards-compatible shorthand alias.
+
+### The Session Creation Handshake (`cel_engine_create_session`)
+
+`cel_engine_create_session(engine, name, profile)` (or `cel_create_session`) is a **core CELS library API** declared in `<cels/engine.h>` and `<cels/cels.h>`, backed by `CelsEngineCreateSession`.
+
+#### How and Why It Works:
+1. **Engine Supervision**: Registers the session in the engine's supervised sessions array. When the host ticks `CelsEngineRecompose(&engine)`, all active sessions are ticked automatically; when the host calls `CelsEngineDestroy(&engine)`, all allocated sessions are safely torn down.
+2. **Ambient Context Inheritance**: Binds `session->engine = engine`. When any composable in the session calls `cel_context(ServiceType)`, resolution checks the local composable subtree first; if not found, it automatically falls back to host platform services registered on the engine via `cel_engine_set_context`.
+3. **Idempotence & Multi-Reload**: If the session already exists (e.g., pre-created by the host runner or preserved across DLL hot-reloads), it returns the existing pointer and activates it on Thread-Local Storage (TLS) without reallocating or wiping reactive state.
+4. **Intent-Driven Memory Sizing**: Allocates a cache-aligned slab sized to the workload profile (`CELS_PROFILE_1K` for ~1,024 composables, `CELS_PROFILE_512` for ~512 composables, etc.).
+
+```c
+// Inside onStart(engine):
+CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+cel_attach(session, MainWindow, WindowEval);
+```
 
 ### Root Compositions and `userData`: How, When, and Why
 

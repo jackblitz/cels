@@ -1178,6 +1178,9 @@ extern "C" {
 #define cel_create_session(engine, name, profile) \
     CelsEngineCreateSession((engine), (name), (profile))
 
+#define cel_engine_create_session(engine, name, profile) \
+    CelsEngineCreateSession((engine), (name), (profile))
+
 /**
  * @def cel_get_session
  * @brief Retrieves a named session managed by the host engine.
@@ -1191,6 +1194,9 @@ extern "C" {
  * @endcode
  */
 #define cel_get_session(engine, name) \
+    CelsEngineGetSession((engine), (name))
+
+#define cel_engine_get_session(engine, name) \
     CelsEngineGetSession((engine), (name))
 
 /* ========================================================================= */
