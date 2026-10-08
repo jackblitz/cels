@@ -114,7 +114,18 @@ CEL_Composition(NetworkAppComposition) {
     NetworkHUD(net);
 }
 
+static void NetworkApp_OnStart(CelsEngine *engine)
+{
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+    cel_attach(session, NetworkAppComposition);
+}
+
 /**
- * Declarative Application Root.
+ * Application Manifest.
  */
-CEL_App(NetworkApp, NetworkAppComposition);
+CEL_App_Manifest(NetworkApp,
+    .title      = "CELS Async Task & Network Demo",
+    .appVersion = "0.5.0",
+    .onStart    = NetworkApp_OnStart,
+    .onReload   = NetworkApp_OnStart
+);

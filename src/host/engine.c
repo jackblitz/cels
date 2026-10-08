@@ -168,7 +168,7 @@ CelsResult CelsEngineStart(CelsEngine *engine)
     }
 
     if (engine->manifest->onStart != NULL) {
-        engine->manifest->onStart(engine, &engine->session);
+        engine->manifest->onStart(engine);
     }
 
     engine->isStarted = true;
@@ -203,7 +203,7 @@ void CelsEngineEnd(CelsEngine *engine)
         s_currentEngine = engine;
         CelsSetCurrentSession(&engine->session);
 
-        engine->manifest->onEnd(engine, &engine->session);
+        engine->manifest->onEnd(engine);
 
         s_currentEngine = prevEngine;
         CelsSetCurrentSession(prevSession);
@@ -407,12 +407,32 @@ CelsResult CelsEngineRecompose(CelsEngine *engine)
  */
 CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsSessionProfile profile)
 {
-    if (engine == NULL || name == NULL || name[0] == '\0') {
+    if (engine == NULL) {
         return NULL;
+    }
+
+    /* If name is NULL or empty, resolve current ambient session if available, else default to "main" */
+    if (name == NULL || name[0] == '\0') {
+        CelsSession *cur = CelsGetCurrentSession();
+        if (cur != NULL) {
+            return cur;
+        }
+        name = "main";
     }
 
     /* "main" or "root" maps directly to the primary session */
     if (strcmp(name, "main") == 0 || strcmp(name, "root") == 0) {
+        if (!engine->session.hasComposedOnce) {
+            CelsSessionConfig cfg = CelsSessionProfileConfig(profile);
+            cfg.engine = engine;
+            if (cfg.slabSize != engine->session.slabSize) {
+                CelsSessionDestroy(&engine->session);
+                CelsSessionInit(&engine->session, &cfg);
+                engine->session.engine = engine;
+            }
+        }
+        engine->session.engine = engine;
+        CelsSetCurrentSession(&engine->session);
         return &engine->session;
     }
 
@@ -421,6 +441,7 @@ CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsS
     for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
         if (engine->secondarySessions[i].isUsed && engine->secondarySessions[i].nameHash == hash &&
             strcmp(engine->secondarySessions[i].name, name) == 0) {
+            CelsSetCurrentSession(engine->secondarySessions[i].session);
             return engine->secondarySessions[i].session;
         }
     }
@@ -441,6 +462,7 @@ CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsS
             entry->nameHash = hash;
             entry->isUsed = true;
             engine->secondarySessionCount++;
+            CelsSetCurrentSession(entry->session);
             return entry->session;
         }
     }
@@ -448,6 +470,20 @@ CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsS
     fprintf(stderr, "[CELS ERROR] Engine secondary session capacity full (%u / %u). Cannot create session '%s'.\n",
             engine->secondarySessionCount, CELS_MAX_SECONDARY_SESSIONS, name);
     return NULL;
+}
+
+void CelsEngineSetContext(CelsEngine *engine,
+                          uint64_t key,
+                          const char *name,
+                          void *instance,
+                          void (*onDestroy)(void *instance))
+{
+    CelsEngineRegisterModule(engine, key, name, instance, onDestroy);
+}
+
+void *CelsEngineGetContext(const CelsEngine *engine, uint64_t key)
+{
+    return CelsEngineGetModule(engine, key);
 }
 
 /**
@@ -642,7 +678,7 @@ void *_cels_resolve_module(const void *ctx, uint64_t key)
  * @param config   Optional session configuration, or NULL for defaults.
  * @return CELS_OK on success, or CelsResult error code.
  */
-CelsResult CelsEngineRunStandalone(const struct CelsAppDef *manifest, const CelsSessionConfig *config)
+CelsResult CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessionConfig *config)
 {
     (void)config;
     if (manifest == NULL) {
@@ -684,12 +720,12 @@ CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appName)
 #if defined(_WIN32)
         HMODULE hSelf = GetModuleHandleA(NULL);
         if (hSelf != NULL) {
-            FARPROC fp = GetProcAddress(hSelf, "CelsGetAppDef");
+            FARPROC fp = GetProcAddress(hSelf, "CelsGetAppManifest");
             if (fp == NULL) {
-                fp = GetProcAddress(hSelf, "CelsGetAppManifest");
+                fp = GetProcAddress(hSelf, "CelsGetAppDef");
             }
             if (fp != NULL) {
-                typedef const struct CelsAppDef *(*EntryFn)(void);
+                typedef const struct CelsAppManifest *(*EntryFn)(void);
                 EntryFn entry = NULL;
                 memcpy(&entry, &fp, sizeof(entry));
                 if (entry != NULL) {
@@ -701,13 +737,13 @@ CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appName)
 #elif defined(__unix__) || defined(__APPLE__) || defined(__linux__)
         void *hSelf = dlopen(NULL, RTLD_NOW);
         if (hSelf != NULL) {
-            void *fp = dlsym(hSelf, "CelsGetAppDef");
+            void *fp = dlsym(hSelf, "CelsGetAppManifest");
             if (fp == NULL) {
-                fp = dlsym(hSelf, "CelsGetAppManifest");
+                fp = dlsym(hSelf, "CelsGetAppDef");
             }
             dlclose(hSelf);
             if (fp != NULL) {
-                typedef const struct CelsAppDef *(*EntryFn)(void);
+                typedef const struct CelsAppManifest *(*EntryFn)(void);
                 EntryFn entry = NULL;
                 memcpy(&entry, &fp, sizeof(entry));
                 if (entry != NULL) {

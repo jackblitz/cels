@@ -35,9 +35,18 @@ int CelsRunHostEx(int argc, char **argv, const char *appName)
         return 1;
     }
 
+    /* Inspect application manifest if present to configure host environment */
+    const CelsAppManifest *manifest = CelsEngineGetManifest(&engine);
+    if (manifest != NULL && manifest->title != NULL) {
+        CelsTerminalSetTitle(manifest->title);
+    }
+
     CelsSession *session = cel_get_session(&engine, "main");
     PdcursesInputContext inputCtx;
     PdcursesInputInit(&inputCtx);
+
+    /* Bind host platform input service to engine context so all sessions inherit ambiently */
+    cel_engine_set_context(&engine, PdcursesInputContext, &inputCtx);
 
     if (playbackKeys != NULL) {
         /* Scripted input playback mode for integration verification */

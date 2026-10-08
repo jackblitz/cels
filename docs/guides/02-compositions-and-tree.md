@@ -56,7 +56,8 @@ CEL_Composition(WindowComposition) {
 }
 
 /* Attach directly to the session in onStart */
-CEL_OnStart(App_OnStart) {
+static void App_OnStart(CelsEngine *engine) {
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, WindowComposition, WindowEval);
 }
 ```
@@ -96,21 +97,27 @@ CEL_Composition(PluginView, void *userData) {
 
 ### Passing Context into Root Compositions
 
-#### 1. In Application Modules (`CEL_App`)
-When declaring an application module, bind your root composition directly via `CEL_App`:
+#### 1. In Application Modules (`CEL_App_Manifest`)
+When declaring an application module, bind your root composition in `onStart`:
 
 ```c
-/* Standard zero-parameter composition */
-CEL_App(MyApp, MainWindow);
+static void App_OnStart(CelsEngine *engine) {
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
 
-/* With an evaluation lifecycle predicate */
-CEL_App(MyApp, MainWindow, WindowEval);
+    /* Standard zero-parameter composition */
+    cel_attach(session, MainWindow);
 
-/* With custom instance userData */
-CEL_App(MyApp, ViewportWindow, NULL, &g_ViewportConfig);
+    /* Or with lifecycle evaluation predicate: */
+    // cel_attach(session, MainWindow, WindowEval);
 
-/* With both lifecycle predicate and instance userData */
-CEL_App(MyApp, ViewportWindow, WindowEval, &g_ViewportConfig);
+    /* Or with typed userData: */
+    // cel_attach(session, ViewportWindow, NULL, &g_ViewportConfig);
+}
+
+CEL_App_Manifest(MyApp,
+    .title = "My App",
+    .onStart = App_OnStart
+);
 ```
 
 #### 2. In Multi-Composition Host Tick Loops

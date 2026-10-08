@@ -59,11 +59,11 @@ extern "C" {
 
 /* Forward declarations */
 struct CelsEngine;
-struct CelsAppDef;
-#ifndef CELS_APP_DEF_TYPEDEF_DEFINED
-#define CELS_APP_DEF_TYPEDEF_DEFINED
-typedef struct CelsAppDef CelsAppDef;
-typedef struct CelsAppDef CelsAppManifest;
+struct CelsAppManifest;
+#ifndef CELS_APP_MANIFEST_TYPEDEF_DEFINED
+#define CELS_APP_MANIFEST_TYPEDEF_DEFINED
+typedef struct CelsAppManifest CelsAppManifest;
+typedef struct CelsAppManifest CelsAppDef;
 #endif
 struct CelsAppModule;
 struct CelsApp;
@@ -125,7 +125,7 @@ typedef struct CelsEngineSessionEntry {
  */
 struct CelsEngine {
     uint32_t                      magic;        /**< CELS_ENGINE_MAGIC validation tag */
-    const struct CelsAppDef      *manifest;     /**< Application manifest from DLL or static */
+    const struct CelsAppManifest *manifest;     /**< Application manifest from DLL or static */
     struct CelsAppModule         *appModule;    /**< Dynamic application handle in Hot-Reload mode */
     CelsModuleBinding             modules[CELS_MAX_MODULES]; /**< Subsystem module bindings */
     uint32_t                      moduleCount;  /**< Number of active module bindings */
@@ -247,6 +247,17 @@ CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsS
 CelsSession *CelsEngineGetSession(CelsEngine *engine, const char *name);
 
 /**
+ * Returns the application manifest bound to the engine.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ * @return Pointer to CelsAppManifest, or NULL if none is bound.
+ */
+static inline const CelsAppManifest *CelsEngineGetManifest(const CelsEngine *engine)
+{
+    return engine ? engine->manifest : NULL;
+}
+
+/**
  * Initializes the engine with explicit session configuration and loads the application module.
  *
  * What it does:
@@ -274,8 +285,8 @@ static inline CelsResult CelsEngineInitWithOptions(CelsEngine *engine, const cha
     if (res != CELS_OK) {
         return res;
     }
-    extern const struct CelsAppDef *CelsGetAppManifest(void);
-    const struct CelsAppDef *manifest = CelsGetAppManifest();
+    extern const struct CelsAppManifest *CelsGetAppManifest(void);
+    const struct CelsAppManifest *manifest = CelsGetAppManifest();
     if (manifest != NULL) {
         engine->manifest = manifest;
         return CelsEngineStart(engine);
@@ -352,7 +363,7 @@ static inline CelsResult CelsEngineLoadApp(CelsEngine *engine, const char *appNa
     if (engine == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
     }
-    extern const struct CelsAppDef *CelsGetAppManifest(void);
+    extern const struct CelsAppManifest *CelsGetAppManifest(void);
     engine->manifest = CelsGetAppManifest();
     return CelsEngineStart(engine);
 }
@@ -437,7 +448,64 @@ static inline void CelsEngineQuit(CelsEngine *engine)
  * @param config   Optional session configuration, or NULL for defaults.
  * @return CELS_OK on success, or CelsResult error code.
  */
-CelsResult CelsEngineRunStandalone(const struct CelsAppDef *manifest, const CelsSessionConfig *config);
+CelsResult CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessionConfig *config);
+
+/* ========================================================================= */
+/* Engine Ambient Context API (cel_engine_set_context / cel_engine_context)  */
+/* ========================================================================= */
+
+/**
+ * Registers an engine subsystem or platform context instance with the host engine.
+ *
+ * Platform services (input context, audio device, window handle, renderer) registered
+ * here are ambiently accessible across all sessions and composables via cel_context(Type).
+ *
+ * @param engine    Target host engine. Non-NULL.
+ * @param key       Unique 64-bit context type key.
+ * @param name      Human-readable identifier for diagnostics. Non-NULL.
+ * @param instance  Pointer to developer-allocated context struct. Non-NULL.
+ * @param onDestroy Cleanup callback invoked when engine shuts down. Safe if NULL.
+ */
+void CelsEngineSetContext(CelsEngine *engine,
+                          uint64_t key,
+                          const char *name,
+                          void *instance,
+                          void (*onDestroy)(void *instance));
+
+/**
+ * Retrieves a registered context pointer by its 64-bit key from the engine.
+ *
+ * @param engine Target host engine. Safe if NULL.
+ * @param key    Unique 64-bit context type key.
+ * @return Pointer to context instance, or NULL if not found.
+ */
+void *CelsEngineGetContext(const CelsEngine *engine, uint64_t key);
+
+#define _CEL_ENG_SET_CTX_3(engine, Type, ptr) \
+    CelsEngineSetContext((engine), CelsHashKey(#Type), #Type, (void*)(ptr), NULL)
+
+#define _CEL_ENG_SET_CTX_2(Type, ptr) \
+    CelsEngineSetContext(CelsGetCurrentEngine(), CelsHashKey(#Type), #Type, (void*)(ptr), NULL)
+
+#define cel_engine_set_context(...) \
+    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_ENG_SET_CTX_3, _CEL_ENG_SET_CTX_2)(__VA_ARGS__)
+
+#define _CEL_ENG_GET_CTX_2(engine, Type) \
+    ((Type*)CelsEngineGetContext((engine), CelsHashKey(#Type)))
+
+#define _CEL_ENG_GET_CTX_1(Type) \
+    ((Type*)CelsEngineGetContext(CelsGetCurrentEngine(), CelsHashKey(#Type)))
+
+#define cel_engine_context(...) \
+    _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_ENG_GET_CTX_2, _CEL_ENG_GET_CTX_1)(__VA_ARGS__)
+
+/**
+ * Creates or retrieves a named session supervised by the engine.
+ *
+ * Automatically binds session->engine = engine and sets the ambient thread session.
+ */
+#define cel_engine_create_session(engine, name, profile) \
+    CelsEngineCreateSession((engine), (name), (profile))
 
 /* ========================================================================= */
 /* Module Access Dispatch Helpers                                            */

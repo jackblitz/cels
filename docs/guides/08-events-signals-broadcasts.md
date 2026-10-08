@@ -111,10 +111,10 @@ cel_signal(cel_get_session(&engine, "hud"), DamageSignal, {
 ```
 
 > [!TIP]
-> Inside your application code, `CEL_OnStart` automatically receives the primary root session directly:
+> Inside your application `onStart`, create or retrieve the session via `cel_engine_create_session`:
 > ```c
-> CEL_OnStart(App_OnStart) {
->     /* 'session' is the root primary session */
+> static void App_OnStart(CelsEngine *engine) {
+>     CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
 >     cel_attach(session, WindowComposition, WindowEval);
 > }
 > ```

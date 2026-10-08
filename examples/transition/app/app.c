@@ -76,7 +76,18 @@ CEL_Composition(TransitionAppComposition) {
     HealthBarHUD(gauge);
 }
 
+static void TransitionApp_OnStart(CelsEngine *engine)
+{
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+    cel_attach(session, TransitionAppComposition);
+}
+
 /**
- * Declarative Application Root.
+ * Application Manifest.
  */
-CEL_App(TransitionApp, TransitionAppComposition);
+CEL_App_Manifest(TransitionApp,
+    .title      = "CELS Temporal Transition Demo",
+    .appVersion = "0.5.0",
+    .onStart    = TransitionApp_OnStart,
+    .onReload   = TransitionApp_OnStart
+);

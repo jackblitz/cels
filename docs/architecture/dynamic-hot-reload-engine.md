@@ -46,25 +46,27 @@ CELS supports two distinct compilation modes via the `CELS_HOT_RELOAD` preproces
 | **Monolithic Release** | `0` | Single `.exe` | Application code links statically into the executable. `CelsAppCheckReload` compiles to a no-op (`return false`). Zero overhead, zero dynamic symbols, deterministic shipping binary. |
 | **Dynamic Debug** | `1` | `.exe` + `.dll` | Host engine compiles as a shell or multi-app orchestrator. Application logic compiles into one or more reloadable shared libraries. Polls file timestamps and hot-reloads on disk writes. |
 
-### 2.1 The Application Definition Handshake (`CelsAppDef`)
+### 2.1 The Application Manifest Handshake (`CelsAppManifest`)
 
-Communication across the host-module boundary is governed by an ABI-stable application definition declared via `CEL_App` or `CEL_App_Def`:
+Communication across the host-module boundary is governed by an ABI-stable application manifest declared via `CEL_App_Manifest` (or `CEL_App_Define`):
 
 ```c
-struct CelsAppDef {
-    uint32_t version;                               /**< App definition version (defaults to 1) */
-    const char *name;                               /**< Application identifier / display name */
-    void (*setSession)(CelsSession *s);             /**< Internal session synchronization across DLL boundary */
-    void (*onStart)(CelsEngine *engine, CelsSession *session);  /**< Setup callback: attach compositions via cel_attach */
-    void (*onReload)(CelsEngine *engine, CelsSession *session); /**< Optional callback fired after code hot-swap */
-    void (*onEnd)(CelsEngine *engine, CelsSession *session);    /**< Teardown callback on shutdown / unload */
+struct CelsAppManifest {
+    uint32_t     version;                /**< ABI version identifier (defaults to 1) */
+    const char  *name;                   /**< Module internal name / identifier */
+    const char  *title;                  /**< Human-readable application title (e.g. window / terminal caption) */
+    const char  *appVersion;             /**< Semantic version string (e.g. "1.0.0") */
+    void       (*setSession)(CelsSession *s); /**< Internal session synchronization across DLL boundary */
+    void       (*onStart)(CelsEngine *engine); /**< App setup: create/get session and attach compositions */
+    void       (*onReload)(CelsEngine *engine);/**< Optional callback fired after code hot-swap */
+    void       (*onEnd)(CelsEngine *engine);   /**< App teardown callback */
 };
 
-#define CELS_APP_ENTRY_SYMBOL "CelsGetAppDef"
-#define CELS_APP_LEGACY_ENTRY_SYMBOL "CelsGetAppManifest"
-typedef const CelsAppDef *(*CelsAppEntryFn)(void);
-typedef struct CelsAppDef CelsAppDef;
-typedef struct CelsAppDef CelsAppManifest; /* Backwards compatibility alias */
+#define CELS_APP_ENTRY_SYMBOL        "CelsGetAppManifest"
+#define CELS_APP_LEGACY_ENTRY_SYMBOL "CelsGetAppDef"
+typedef const CelsAppManifest *(*CelsAppEntryFn)(void);
+typedef struct CelsAppManifest CelsAppManifest;
+typedef struct CelsAppManifest CelsAppDef; /* Backwards compatibility alias */
 ```
 
 ---
@@ -224,27 +226,30 @@ When code is split across a host executable and a dynamic library on Windows:
 CELS bridges this gap via the application definition's `setSession` callback:
 
 ```c
-/* Generated inside the DLL by CEL_App or CEL_App_Def macro: */
+/* Generated inside the DLL by CEL_App_Manifest macro: */
 static void _cels_app_set_session_MyApp(CelsSession *session) {
     CelsSetCurrentSession(session);
 }
 
-CELS_APP_EXPORT const CelsAppDef *CelsGetAppDef(void) {
-    static const CelsAppDef def = {
+CELS_APP_EXPORT const CelsAppManifest *CelsGetAppManifest(void) {
+    static const CelsAppManifest manifest = {
+        .version = CELS_APP_MANIFEST_VERSION,
         .name = "MyApp",
+        .title = "My Application",
+        .appVersion = "1.0.0",
         .setSession = _cels_app_set_session_MyApp,
         .onStart = MyApp_OnStart,
         .onReload = MyApp_OnReload,
         .onEnd = MyApp_OnEnd
     };
-    return &def;
+    return &manifest;
 }
 ```
 
 Immediately after loading the dynamic module:
 ```c
-if (app->module.def->setSession != NULL) {
-    app->module.def->setSession(app->session); /* Passes host session pointer into DLL's TLS */
+if (app->module.manifest->setSession != NULL) {
+    app->module.manifest->setSession(app->session); /* Passes host session pointer into DLL's TLS */
 }
 ```
 

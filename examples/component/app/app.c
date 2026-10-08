@@ -170,7 +170,18 @@ CEL_Composition(ComponentAppComposition)
     CombatEntityHUD(ent);
 }
 
+static void ComponentApp_OnStart(CelsEngine *engine)
+{
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+    cel_attach(session, ComponentAppComposition);
+}
+
 /**
- * Declarative Application Module Definition.
+ * Application Manifest.
  */
-CEL_App(ComponentApp, ComponentAppComposition);
+CEL_App_Manifest(ComponentApp,
+    .title      = "CELS Component & ECS Demo",
+    .appVersion = "0.5.0",
+    .onStart    = ComponentApp_OnStart,
+    .onReload   = ComponentApp_OnStart
+);

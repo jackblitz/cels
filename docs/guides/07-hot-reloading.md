@@ -119,27 +119,30 @@ int main(void) {
 }
 ```
 
-### Application Definition (`CEL_App_Def`)
+### Application Manifest (`CEL_App_Manifest`)
 
-Applications define their lifecycle hooks and composition root without needing complex manifests:
+Applications define their metadata, lifecycle hooks, and composition root:
 
 ```c
 #include "cels.h"
 #include "cels/app.h"
 
-CEL_OnStart(MyApp_OnStart) {
-    /* Developers access host subsystem modules via CEL_GetModule */
-    MyRenderer *renderer = CEL_GetModule(MyRenderer);
+static void MyApp_OnStart(CelsEngine *engine) {
+    /* Create/bind session and access ambient host services */
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
 
-    /* Attach root composition to the bound session */
+    /* Attach root composition to the session */
     cel_attach(session, MyRootView);
 }
 
-CEL_OnEnd(MyApp_OnEnd) {
+static void MyApp_OnEnd(CelsEngine *engine) {
+    (void)engine;
     /* Cleanup application-specific state */
 }
 
-CEL_App_Def(MyApp,
+CEL_App_Manifest(MyApp,
+    .title = "My App",
+    .appVersion = "1.0.0",
     .onStart = MyApp_OnStart,
     .onReload = MyApp_OnStart, // Optional post-reload refresh hook
     .onEnd   = MyApp_OnEnd

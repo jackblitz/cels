@@ -91,8 +91,8 @@ typedef struct CelsAppModule {
     uint64_t lastWriteTime;
     uint32_t instanceId;
     uint32_t reloadCount;
-    const struct CelsAppDef *def;
-    const struct CelsAppDef *manifest;
+    const struct CelsAppManifest *def;
+    const struct CelsAppManifest *manifest;
     uint64_t attachedKey;
     bool isLoaded;
 } CelsAppModule;
@@ -136,7 +136,7 @@ CelsResult CelsAppLoad(CelsApp *app, struct CelsEngine *engine, struct CelsSessi
  * @param engine      Owning host engine. Non-NULL.
  * @param session     Target session. Non-NULL.
  * @param dllPath     Path or target name of the dynamic library. Non-NULL.
- * @param entrySymbol Exported entry symbol (defaults to "CelsGetAppDef" if NULL).
+ * @param entrySymbol Exported entry symbol (defaults to "CelsGetAppManifest" if NULL).
  * @return CELS_OK on success, or CelsResult error code.
  */
 CelsResult CelsAppLoadEntry(CelsApp *app, struct CelsEngine *engine, struct CelsSession *session, const char *dllPath, const char *entrySymbol);
@@ -147,10 +147,10 @@ CelsResult CelsAppLoadEntry(CelsApp *app, struct CelsEngine *engine, struct Cels
  * @param app     Pointer to uninitialized CelsApp handle. Non-NULL.
  * @param engine  Owning host engine. Non-NULL.
  * @param session Target session. Non-NULL.
- * @param def     Static application definition. Non-NULL.
+ * @param def     Static application manifest. Non-NULL.
  * @return CELS_OK on success.
  */
-CelsResult CelsAppBindStatic(CelsApp *app, struct CelsEngine *engine, struct CelsSession *session, const struct CelsAppDef *def);
+CelsResult CelsAppBindStatic(CelsApp *app, struct CelsEngine *engine, struct CelsSession *session, const struct CelsAppManifest *def);
 
 /**
  * Starts execution of a loaded application.

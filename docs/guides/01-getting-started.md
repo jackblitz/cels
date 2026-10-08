@@ -20,7 +20,7 @@ CELS separates your software into two distinct components:
                               │ loads & swaps at runtime
 ┌─────────────────────────────▼──────────────────────────────┐
 │ APPLICATION MODULE (cel_dll)                               │
-│ - Exports `CEL_App` manifest                               │
+│ - Exports `CEL_App_Manifest`                               │
 │ - Defines Compositions & Composable UI trees               │
 │ - Mounts lifecycles, states, and tasks                     │
 └────────────────────────────────────────────────────────────┘
@@ -65,7 +65,7 @@ find_package(CELS REQUIRED)
 # Declare host executable and dynamic application target
 cels_add_application(
     HOST cel_host
-    DLL  cel_dll
+    APP  cel_dll
     HOST_SOURCES
         src/host.c
     APP_SOURCES
@@ -83,19 +83,35 @@ cels_add_application(
 
 ## 4. Step 2: The Application (`src/app.c`)
 
-Your application module declares its root composition cleanly using the declarative `CEL_App` macro:
+Your application module declares its metadata and root composition cleanly using the declarative `CEL_App_Manifest` macro:
 
 ```c
 #include "cels.h"
+#include "cels/app.h"
 
 /* Forward declaration of your root composition */
-void MainView(void *userData);
+CEL_Composition(MainView);
 
-/* Declarative root: binds MainView as the application root composition */
-CEL_App(MyApplication, MainView);
+/* Application startup hook */
+static void MyApp_OnStart(CelsEngine *engine) {
+    /* Create or bind application session with dimensioning capacity profile */
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+
+    /* Attach the root composition */
+    cel_attach(session, MainView);
+}
+
+/* Declarative Application Manifest */
+CEL_App_Manifest(MyApplication,
+    .title = "My Application",
+    .appVersion = "1.0.0",
+    .onStart = MyApp_OnStart,
+    .onReload = MyApp_OnStart,
+    .onEnd = NULL
+);
 ```
 
-> If your application root requires a lifecycle evaluation predicate (to control when it mounts or despawns), pass it as the second argument: `CEL_App(MyApplication, MainView, MainEval)`. For custom application definitions with setup and teardown lifecycle hooks, use `CEL_App_Def(MyApplication, .onStart = ..., .onReload = ..., .onEnd = ...)`. The host loop controls frame cadence directly, calling `CelsEngineRecompose()` continuously in game loops or conditionally via `CelsEngineNeedsRecompose()` in event-driven loops.
+> If your application root requires a lifecycle evaluation predicate (to control when it mounts or despawns), pass it as the second argument to `cel_attach(session, MainView, MainEval)`. The host loop controls frame cadence directly, calling `CelsEngineRecompose()` continuously in game loops or conditionally via `CelsEngineNeedsRecompose()` in event-driven loops.
 
 Now create `src/main_view.c` to declare your root composition and a simple composable:
 

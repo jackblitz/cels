@@ -27,7 +27,7 @@ Practical, snippet-heavy, task-oriented guides designed to take you from a blank
 
 | Guide | Description | Key Concepts |
 | :--- | :--- | :--- |
-| **[`01-getting-started.md`](guides/01-getting-started.md)** | Build your first CELS application in under 5 minutes. | CMake `cels_add_application`, minimal host loop, `CEL_App`. |
+| **[`01-getting-started.md`](guides/01-getting-started.md)** | Build your first CELS application in under 5 minutes. | CMake `cels_add_application`, minimal host loop, `CEL_App_Manifest`. |
 | **[`02-compositions-and-tree.md`](guides/02-compositions-and-tree.md)** | Structure hierarchical component trees and handle dynamic branches. | Compositions vs. Composables, passing props, `if/else` control flow, multi-file translation units. |
 | **[`03-reactive-state.md`](guides/03-reactive-state.md)** | Master reactive state management and State Hoisting. | `cel_state`, `cel_watch(ptr)`, `cel_mutate(ptr)`, zero string IDs, double-buffering mental model, `cel_remember`. |
 | **[`04-lifecycles.md`](guides/04-lifecycles.md)** | Automate native hardware and OS resource management. | `CEL_Lifecycle`, `mount` and `unmount` blocks, GPU buffers, audio voices, reverse-order teardown. |

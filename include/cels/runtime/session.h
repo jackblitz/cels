@@ -88,11 +88,11 @@
 /* Forward declarations */
 struct CelsEngine;
 typedef struct CelsEngine CelsEngine;
-struct CelsAppDef;
-#ifndef CELS_APP_DEF_TYPEDEF_DEFINED
-#define CELS_APP_DEF_TYPEDEF_DEFINED
-typedef struct CelsAppDef CelsAppDef;
-typedef struct CelsAppDef CelsAppManifest;
+struct CelsAppManifest;
+#ifndef CELS_APP_MANIFEST_TYPEDEF_DEFINED
+#define CELS_APP_MANIFEST_TYPEDEF_DEFINED
+typedef struct CelsAppManifest CelsAppManifest;
+typedef struct CelsAppManifest CelsAppDef;
 #endif
 struct CelsApp;
 #ifndef CELS_APP_TYPEDEF_DEFINED

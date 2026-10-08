@@ -2287,6 +2287,17 @@ CelsResult CelsContextResolve(const CelsSession *session, uint64_t typeId, const
     }
     const void *data = CelsScopeFind(session->ambientScope, typeId);
     if (data == NULL) {
+        if (session->engine != NULL) {
+            data = CelsEngineGetContext(session->engine, typeId);
+        }
+        if (data == NULL) {
+            CelsEngine *curEngine = CelsGetCurrentEngine();
+            if (curEngine != NULL && curEngine != session->engine) {
+                data = CelsEngineGetContext(curEngine, typeId);
+            }
+        }
+    }
+    if (data == NULL) {
         return CELS_ERROR_NOT_FOUND;
     }
     *outData = data;

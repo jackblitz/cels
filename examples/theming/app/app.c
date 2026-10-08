@@ -181,7 +181,18 @@ CEL_Composition(ThemingAppComposition)
     ThemingHUD(state);
 }
 
+static void ThemingApp_OnStart(CelsEngine *engine)
+{
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+    cel_attach(session, ThemingAppComposition);
+}
+
 /**
- * Declarative Application Module Definition.
+ * Application Manifest.
  */
-CEL_App(ThemingApp, ThemingAppComposition);
+CEL_App_Manifest(ThemingApp,
+    .title      = "CELS Theming & Ambient Context Demo",
+    .appVersion = "0.5.0",
+    .onStart    = ThemingApp_OnStart,
+    .onReload   = ThemingApp_OnStart
+);

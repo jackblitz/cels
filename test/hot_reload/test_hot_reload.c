@@ -230,23 +230,25 @@ CEL_Composition(TestAppRoot, void *userData) {
     assert(mod->value == 4242);
 }
 
-static void TestApp_OnStart(CelsEngine *engine, CelsSession *session)
+static void TestApp_OnStart(CelsEngine *engine)
 {
     s_testAppStartFired++;
     static CustomAppTestModule mod = { .value = 4242 };
-    CEL_RegisterModule(engine, CustomAppTestModule, &mod);
+    cel_engine_set_context(engine, CustomAppTestModule, &mod);
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, TestAppRoot);
 }
 
-static void TestApp_OnEnd(CelsEngine *engine, CelsSession *session)
+static void TestApp_OnEnd(CelsEngine *engine)
 {
     (void)engine;
-    (void)session;
     s_testAppEndFired++;
 }
 
 CEL_App_Manifest(TestAppDefinition,
+    .title = "TestAppDefinition",
     .onStart = TestApp_OnStart,
+    .onReload = TestApp_OnStart,
     .onEnd = TestApp_OnEnd
 );
 
@@ -329,21 +331,19 @@ static void TestDynamicAppLoader(void)
 static int s_staticAppStartFired = 0;
 static int s_staticAppEndFired = 0;
 
-CEL_OnStart(StaticTestApp_OnStart)
+static void StaticTestApp_OnStart(CelsEngine *engine)
 {
     (void)engine;
-    (void)session;
     s_staticAppStartFired++;
 }
 
-CEL_OnEnd(StaticTestApp_OnEnd)
+static void StaticTestApp_OnEnd(CelsEngine *engine)
 {
     (void)engine;
-    (void)session;
     s_staticAppEndFired++;
 }
 
-static const CelsAppDef s_staticAppDef = {
+static const CelsAppManifest s_staticAppDef = {
     .name = "StaticTestApp",
     .onStart = StaticTestApp_OnStart,
     .onEnd = StaticTestApp_OnEnd

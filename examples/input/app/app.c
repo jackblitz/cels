@@ -218,4 +218,18 @@ CEL_Composition(InputAppComposition)
     TuiFooter("Workspace Controls: [Tab] Switch Mode | [Q] Quit Application");
 }
 
-CEL_App(InputApp, InputAppComposition);
+static void InputApp_OnStart(CelsEngine *engine)
+{
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+    cel_attach(session, InputAppComposition);
+}
+
+/**
+ * Application Manifest.
+ */
+CEL_App_Manifest(InputApp,
+    .title      = "CELS Input & Focus Demo",
+    .appVersion = "0.5.0",
+    .onStart    = InputApp_OnStart,
+    .onReload   = InputApp_OnStart
+);

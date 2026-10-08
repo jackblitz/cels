@@ -20,6 +20,13 @@ void CelsTerminalInit(bool interactive);
 void CelsTerminalRestore(void);
 
 /**
+ * Sets the terminal window title bar text.
+ *
+ * @param title Title string. Safe if NULL.
+ */
+void CelsTerminalSetTitle(const char *title);
+
+/**
  * Polls for a key press without blocking.
  *
  * @return Key character code, or 0 if no key available.

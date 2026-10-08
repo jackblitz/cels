@@ -431,7 +431,7 @@ In CELS, the host executable (`cel_host`) controls all platform lifecycles and h
 |  | Slab: 128 KiB             |       | Slab: 256 KiB                      | |
 |  | CelsApp (game_app.dll)    |       | CelsApp (editor_tooling.dll)       | |
 |  | - instanceId = 1          |       | - instanceId = 2                   | |
-|  | - CEL_App_Def(GameApp)    |       | - CEL_App_Def(EditorApp)           | |
+|  | - CEL_App_Manifest(GameApp) |   | - CEL_App_Manifest(EditorApp)      | |
 |  +---------------------------+       +------------------------------------+ |
 +=============================================================================+
 ```

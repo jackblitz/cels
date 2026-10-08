@@ -42,9 +42,9 @@ CELS cleanly separates the **Host** (the native runtime harness and loop) from t
                                   v
 +--------------------------------------------------------------------+
 |  APPLICATION (cel_app)                                             |
-|  - Declares CEL_App or CEL_App_Def application definition          |
-|  - Implements onStart / onReload / onEnd hooks                     |
-|  - Defines Compositions & Composable UI trees                      |
+|  - Declares CEL_App_Manifest (or CEL_App_Define)                   |
+|  - Implements onStart / onReload / onEnd lifecycle callbacks       |
+|  - Creates engine session and attaches root compositions           |
 +--------------------------------------------------------------------+
 ```
 
@@ -54,31 +54,53 @@ CELS cleanly separates the **Host** (the native runtime harness and loop) from t
 
 An application requires:
 1. One or more Compositions (e.g. `WindowComposition`).
-2. The `CEL_App` declarative macro binding the root composition directly (or `CEL_App_Def` for custom hooks).
-3. Optional evaluation predicate (e.g. `WindowEval`) or custom lifecycle callbacks via `CEL_App_Def`.
+2. An `onStart(CelsEngine *engine)` callback that creates or gets the application session via `cel_engine_create_session(engine, "main", profile)` and attaches root compositions with `cel_attach`.
+3. The `CEL_App_Manifest` (or `CEL_App_Define`) macro exporting application metadata (`title`, `appVersion`) and lifecycle callbacks (`onStart`, `onReload`, `onEnd`).
 
-### Minimal Application Example (`app.c`)
+### Canonical Application Example (`app.c`)
 ```c
 #include "cels.h"
+#include "cels/app.h"
 #include "composition/window.h"
 
-/* Declarative root: binds WindowComposition and WindowEval directly */
-CEL_App(WindowApp, WindowComposition, WindowEval);
+static void WindowApp_OnStart(CelsEngine *engine)
+{
+    /* Create or bind application session with dimensioning capacity profile */
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+
+    /* Attach root composition and lifecycle evaluation predicate */
+    cel_attach(session, WindowComposition, WindowEval);
+}
+
+static void WindowApp_OnEnd(CelsEngine *engine)
+{
+    (void)engine;
+}
+
+/*
+ * Application Manifest.
+ * Communicates metadata and lifecycle hooks to the host engine.
+ */
+CEL_App_Manifest(WindowApp,
+    .title = "Window Application",
+    .appVersion = "1.0.0",
+    .onStart = WindowApp_OnStart,
+    .onReload = WindowApp_OnStart,
+    .onEnd = WindowApp_OnEnd
+);
 ```
 
-### Declarative `CEL_App` Signatures
-- `CEL_App(AppName, RootComp)`: Direct 1-line root attachment.
-- `CEL_App(AppName, RootComp, EvalPred)`: Direct root attachment with lifecycle evaluation predicate.
-- `CEL_App(AppName, RootComp, EvalPred, UserData)`: Direct root attachment with evaluation and injected instance context.
-- `CEL_App_Def(AppName, ...)`: Clean designated initializers for application definition (`.onStart = OnStart, .onReload = OnReload, .onEnd = OnEnd`). Exported automatically as `CelsGetAppDef` and `CelsGetAppManifest`.
-- `CEL_App_Manifest(AppName, ...)`: Legacy alias for `CEL_App_Def`.
+### Manifest Definition Signatures
+- `CEL_App_Manifest(AppName, ...)`: Canonical designated initializer defining application metadata and hooks (`.title`, `.appVersion`, `.onStart`, `.onReload`, `.onEnd`).
+- `CEL_App_Define(AppName, ...)`: Direct alias for `CEL_App_Manifest`.
+- `CEL_App_Def(AppName, ...)`: Backwards-compatible shorthand alias.
 
 ### Root Compositions and `userData`: How, When, and Why
 
 In CELS, root compositions can be declared in two ways depending on whether they need external instance data:
 
 #### 1. Standard Root Composition (Zero Arguments - Recommended)
-Most application windows and UI trees do not need external parameters because state is hoisted locally with `cel_state(...)` or accessed via ambient context (`cel_user_data(Type)`):
+Most application windows and UI trees do not need external parameters because state is hoisted locally with `cel_state(...)` or accessed via ambient context (`cel_context(Type)`):
 
 ```c
 // Zero parameters, zero (void)userData boilerplate
@@ -88,7 +110,8 @@ CEL_Composition(MainWindow) {
 }
 
 // In onStart:
-CEL_OnStart(App_OnStart) {
+static void App_OnStart(CelsEngine *engine) {
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, MainWindow);
 }
 ```
@@ -111,7 +134,8 @@ CEL_Composition(ViewportView, ViewportConfig*, cfg) {
 // In onStart:
 static ViewportConfig g_mainView = { .cameraIndex = 0, .label = "Primary 3D View" };
 
-CEL_OnStart(App_OnStart) {
+static void App_OnStart(CelsEngine *engine) {
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     // Injects g_mainView into ViewportView via cel_attach
     cel_attach(session, ViewportView, NULL, &g_mainView);
 }
@@ -200,10 +224,7 @@ int multi_dll_host_main(void)
     CelsEngine engine;
     CelsEngineInit(&engine, NULL);
 
-    /* 1. Host chooses execution mode: Immediate (continuous) vs Retained (event-driven) */
-    CelsEngineSetMode(&engine, CELS_MODE_RETAINED);
-
-    /* 2. Create secondary session for auxiliary tool/inspector window */
+    /* 1. Create secondary session for auxiliary tool/inspector window */
     CelsSession *toolSession = CelsEngineCreateSession(&engine, "inspector", CELS_PROFILE_512);
 
     /* 3. Bind and load independent application DLLs */
@@ -259,7 +280,7 @@ find_package(CELS REQUIRED) # Or include(path/to/cmake/Cels.cmake)
 # Define Application Pair (**_host executable + **_dll shared library)
 cels_add_application(
     HOST cel_host
-    DLL cel_dll
+    APP cel_dll
     HOST_SOURCES
         src/host.c
     APP_SOURCES
@@ -304,13 +325,13 @@ CELS adapts automatically based on the `CELS_HOT_RELOAD` CMake option:
 
 ```cmake
 # WRONG: Creating 3rd custom targets or separate app aliases
-cels_add_application(HOST my_host DLL my_dll ...)
+cels_add_application(HOST my_host APP my_dll ...)
 add_custom_target(my_app DEPENDS my_dll) # Bad! Confuses IDE configurations and generates redundant targets
 
 # CORRECT: Strictly two targets per application (host and dll)
 cels_add_application(
     HOST cel_host
-    DLL cel_dll
+    APP cel_dll
     HOST_SOURCES examples/window/host.c
     APP_SOURCES examples/window/app/app.c
 )
@@ -333,18 +354,24 @@ while (!engine.shouldQuit) {
 }
 ```
 
-### Pattern 3: Application Definition Export
+### Pattern 3: Application Manifest Export
  
 ```c
-// WRONG: Using manual symbol exports, custom structs, or boilerplate onStart
+// WRONG: Using manual symbol exports, hidden magic macros, or custom structs
 __declspec(dllexport) void* MyCustomInit() { ... }
 
-// CORRECT: Declarative root composition attachment
-CEL_App(WindowApp, WindowComposition, WindowEval);
+// CORRECT: Canonical Application Manifest with explicit session creation & attachment
+static void App_OnStart(CelsEngine *engine) {
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+    cel_attach(session, WindowComposition, WindowEval);
+}
 
-// Or when custom application hooks are needed:
-// CEL_OnStart(App_OnStart) { cel_attach(session, WindowComposition); }
-// CEL_OnEnd(App_OnEnd) { /* teardown */ }
-// CEL_App_Def(WindowApp, .onStart = App_OnStart, .onReload = App_OnStart, .onEnd = App_OnEnd);
+CEL_App_Manifest(WindowApp,
+    .title = "Window App",
+    .appVersion = "1.0.0",
+    .onStart = App_OnStart,
+    .onReload = App_OnStart,
+    .onEnd = NULL
+);
 ```
 

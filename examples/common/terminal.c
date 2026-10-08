@@ -29,6 +29,19 @@ void CelsTerminalRestore(void)
     }
 }
 
+void CelsTerminalSetTitle(const char *title)
+{
+    if (title == NULL || title[0] == '\0') {
+        return;
+    }
+#if defined(_WIN32)
+    SetConsoleTitleA(title);
+#else
+    printf("\033]0;%s\007", title);
+    fflush(stdout);
+#endif
+}
+
 void CelsTerminalInit(bool interactive)
 {
     s_interactive = interactive;

@@ -540,32 +540,14 @@ bool CelsAppModuleLoadEntryInternal(CelsAppModule *app, const char *libraryPath,
     app->def = getDef();
     app->manifest = app->def;
     if (app->def != NULL) {
-        /* Reconfigure session slab if manifest declares a specific slab size before initial composition
-           and the host is currently using the default slab size (CLI overrides take precedence) */
-        if (app->def->slabSize > 0 && !session->hasComposedOnce && session->slabSize == CELS_DEFAULT_SLAB_SIZE) {
-            if (session->slabSize != app->def->slabSize ||
-                (app->def->maxGroups > 0 && session->maxGroups != app->def->maxGroups)) {
-                CelsSessionConfig newCfg = {
-                    .slabSize = app->def->slabSize,
-                    .maxGroups = app->def->maxGroups,
-                    .engine = session->engine,
-                    .maxDrainIterations = session->maxDrainIterations
-                };
-                CelsEngine *eng = session->engine;
-                CelsSessionDestroy(session);
-                CelsSessionInit(session, &newCfg);
-                session->engine = eng;
-            }
-        }
-
         /* Synchronize ambient session across dynamic library boundary */
         if (app->def->setSession != NULL) {
             app->def->setSession(session);
         }
 
-        /* Execute onStart: developer sets up custom modules and attaches compositions */
+        /* Execute onStart: developer creates session and attaches compositions */
         if (autoStart && app->def->onStart != NULL) {
-            app->def->onStart(session->engine, session);
+            app->def->onStart(session->engine);
             if (session->attachedCount > 0) {
                 app->attachedKey = session->attachedCompositions[0].key;
             }
@@ -699,9 +681,9 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
 
         /* Refresh function pointers: invoke onReload if defined, or fallback to onStart */
         if (app->def->onReload != NULL) {
-            app->def->onReload(session->engine, session);
+            app->def->onReload(session->engine);
         } else if (app->def->onStart != NULL) {
-            app->def->onStart(session->engine, session);
+            app->def->onStart(session->engine);
         }
         if (session->attachedCount > 0) {
             app->attachedKey = session->attachedCompositions[0].key;
@@ -747,7 +729,7 @@ void CelsAppModuleUnload(CelsAppModule *app, CelsSession *session)
     CelsUnregisterActiveModule(app);
 
     if (app->def != NULL && app->def->onEnd != NULL && session != NULL) {
-        app->def->onEnd(session->engine, session);
+        app->def->onEnd(session->engine);
     }
 
     if (app->attachedKey != 0 && session != NULL) {
@@ -994,7 +976,7 @@ CelsResult CelsAppLoadEntry(CelsApp *app, CelsEngine *engine, CelsSession *sessi
  * @param def     Static application definition. Non-NULL.
  * @return CELS_OK on success.
  */
-CelsResult CelsAppBindStatic(CelsApp *app, CelsEngine *engine, CelsSession *session, const struct CelsAppDef *def)
+CelsResult CelsAppBindStatic(CelsApp *app, CelsEngine *engine, CelsSession *session, const struct CelsAppManifest *def)
 {
     if (app == NULL || engine == NULL || session == NULL || def == NULL) {
         return CELS_ERROR_INVALID_ARGUMENT;
@@ -1024,7 +1006,7 @@ CelsResult CelsAppBindStatic(CelsApp *app, CelsEngine *engine, CelsSession *sess
  * Starts execution of a loaded application.
  *
  * Synchronizes ambient session across the binary boundary, invokes the app's onStart hook
- * passing (engine, session), and executes the initial composition pass.
+ * passing engine, and executes the initial composition pass.
  *
  * @param app Target application handle. Non-NULL.
  * @return CELS_OK on success, or CelsResult error code.
@@ -1038,13 +1020,13 @@ CelsResult CelsAppStart(CelsApp *app)
         return CELS_OK;
     }
 
-    const CelsAppDef *def = app->module.def;
+    const CelsAppManifest *def = app->module.def;
     if (def != NULL) {
         if (def->setSession != NULL) {
             def->setSession(app->session);
         }
         if (def->onStart != NULL) {
-            def->onStart(app->engine, app->session);
+            def->onStart(app->engine);
             if (app->session->attachedCount > 0) {
                 app->module.attachedKey = app->session->attachedCompositions[0].key;
             }
@@ -1095,7 +1077,7 @@ CelsResult CelsAppReload(CelsApp *app)
 /**
  * Stops execution, unloads the dynamic library, and cleans up shadow copy files.
  *
- * Invokes the app's onEnd hook passing (engine, session) and detaches its root composition.
+ * Invokes the app's onEnd hook passing engine and detaches its root composition.
  *
  * @param app Target application handle. Safe if NULL.
  */
@@ -1107,7 +1089,7 @@ void CelsAppDestroy(CelsApp *app)
 
     if (app->isStatic) {
         if (app->module.def != NULL && app->module.def->onEnd != NULL && app->session != NULL) {
-            app->module.def->onEnd(app->engine, app->session);
+            app->module.def->onEnd(app->engine);
         }
         if (app->module.attachedKey != 0 && app->session != NULL) {
             CelsPruneSubtreeByKey(app->session, app->module.attachedKey);

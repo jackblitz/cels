@@ -11,23 +11,25 @@ CEL_Composition(FixtureRoot, void *userData) {
     (void)mod;
 }
 
-static void Fixture_OnStart(CelsEngine *engine, CelsSession *session)
+static void Fixture_OnStart(CelsEngine *engine)
 {
     static FixtureModule mod = {
         .sampleRate = 48000,
         .volume = 90
     };
-    CEL_RegisterModule(engine, FixtureModule, &mod);
+    cel_engine_set_context(engine, FixtureModule, &mod);
+    CelsSession *session = cel_engine_create_session(engine, NULL, CELS_PROFILE_1K);
     cel_attach(session, FixtureRoot);
 }
 
-static void Fixture_OnEnd(CelsEngine *engine, CelsSession *session)
+static void Fixture_OnEnd(CelsEngine *engine)
 {
     (void)engine;
-    (void)session;
 }
 
 CEL_App_Manifest(FixtureApp,
+    .title = "FixtureApp",
     .onStart = Fixture_OnStart,
+    .onReload = Fixture_OnStart,
     .onEnd = Fixture_OnEnd
 );

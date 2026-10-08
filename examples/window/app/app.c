@@ -1,23 +1,26 @@
 #include "cels.h"
 #include "composition/window.h"
 
-CEL_OnStart(WindowApp_OnStart)
+static void WindowApp_OnStart(CelsEngine *engine)
 {
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, WindowComposition, WindowEval);
 }
 
-CEL_OnEnd(WindowApp_OnEnd)
+static void WindowApp_OnEnd(CelsEngine *engine)
 {
+    (void)engine;
     /* Application teardown resources if needed */
 }
 
 /**
- * Application Definition.
+ * Application Manifest.
  * Attaches WindowComposition with WindowEval lifecycle evaluation.
  */
-CEL_App_Def(WindowApp,
-    .onStart = WindowApp_OnStart,
-    .onReload = WindowApp_OnStart,
-    .onEnd = WindowApp_OnEnd
+CEL_App_Manifest(WindowApp,
+    .title      = "CELS Window & Layout Demo",
+    .appVersion = "0.5.0",
+    .onStart    = WindowApp_OnStart,
+    .onReload   = WindowApp_OnStart,
+    .onEnd      = WindowApp_OnEnd
 );
-

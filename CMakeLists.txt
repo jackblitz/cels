@@ -152,7 +152,7 @@ if(CELS_BUILD_EXAMPLES)
     # 1. Window Example (cel_host + cel_dll)
     cels_add_application(
         HOST cel_host
-        DLL cel_dll
+        APP  cel_dll
         HOST_SOURCES
             examples/window/host.c
         APP_SOURCES
@@ -170,7 +170,7 @@ if(CELS_BUILD_EXAMPLES)
     # 2. Task / Network Example (cel_task_host + cel_task_dll)
     cels_add_application(
         HOST cel_task_host
-        DLL cel_task_dll
+        APP  cel_task_dll
         HOST_SOURCES
             examples/task/host.c
         APP_SOURCES
@@ -185,7 +185,7 @@ if(CELS_BUILD_EXAMPLES)
     # 3. Temporal Transition Example (cel_transition_host + cel_transition_dll)
     cels_add_application(
         HOST cel_transition_host
-        DLL cel_transition_dll
+        APP  cel_transition_dll
         HOST_SOURCES
             examples/transition/host.c
         APP_SOURCES
@@ -200,7 +200,7 @@ if(CELS_BUILD_EXAMPLES)
     # 4. Events, Signals & Broadcasts Example (cel_event_host + cel_event_dll)
     cels_add_application(
         HOST cel_event_host
-        DLL cel_event_dll
+        APP  cel_event_dll
         HOST_SOURCES
             examples/event/host.c
         APP_SOURCES
@@ -215,7 +215,7 @@ if(CELS_BUILD_EXAMPLES)
     # 5. Declarative Component & ECS Example (cel_component_host + cel_component_dll)
     cels_add_application(
         HOST cel_component_host
-        DLL cel_component_dll
+        APP  cel_component_dll
         HOST_SOURCES
             examples/component/host.c
         APP_SOURCES
@@ -230,7 +230,7 @@ if(CELS_BUILD_EXAMPLES)
     # 6. Ambient Theming Example (cel_theming_host + cel_theming_dll)
     cels_add_application(
         HOST cel_theming_host
-        DLL cel_theming_dll
+        APP  cel_theming_dll
         HOST_SOURCES
             examples/theming/host.c
         APP_SOURCES
@@ -245,7 +245,7 @@ if(CELS_BUILD_EXAMPLES)
     # 7. Declarative Input & Focus Scoping Example (cel_input_host + cel_input_dll)
     cels_add_application(
         HOST cel_input_host
-        DLL cel_input_dll
+        APP  cel_input_dll
         HOST_SOURCES
             examples/input/host.c
         APP_SOURCES

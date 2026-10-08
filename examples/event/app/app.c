@@ -243,4 +243,18 @@ CEL_Composition(EventAppComposition) {
     }
 }
 
-CEL_App(EventApp, EventAppComposition);
+static void EventApp_OnStart(CelsEngine *engine)
+{
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+    cel_attach(session, EventAppComposition);
+}
+
+/**
+ * Application Manifest.
+ */
+CEL_App_Manifest(EventApp,
+    .title      = "CELS Events & Signals Demo",
+    .appVersion = "0.5.0",
+    .onStart    = EventApp_OnStart,
+    .onReload   = EventApp_OnStart
+);

@@ -43,8 +43,8 @@ Macros used to declare types, structural composition nodes, tasks, lifecycles, a
 | [`CEL_Evaluate`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L213) | `CEL_Evaluate(Predicate, ctx)` | `PREDICATE`, `HOST_LOOP` | `bool` | Evaluates whether a composition branch should mount or execute. |
 | [`CEL_Evaluation`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L240) | `CEL_Evaluation(Name)`<br>`CEL_Evaluation(Name, ArgDecl)`<br>`CEL_Evaluation(Name, Type, Param)` | `FILE` | `bool Name(void *cels_evalCtx)`<br>`bool Name(ArgDecl)` | Declares a lifecycle evaluation predicate function. 1-arg form eliminates unused context warnings. |
 | [`CEL_EvaluateFn`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L242) | `CEL_EvaluateFn(...)` | `FILE` | Alias for `CEL_Evaluation` | Alias for `CEL_Evaluation`. |
-| [`CEL_OnStart`](file:///D:/cels-workspace/library/cels/include/cels/app.h#L73) | `CEL_OnStart(Name)` | `FILE` | `static void Name(CelsEngine*, CelsSession*)` | Declares an application startup lifecycle callback without unused parameter warnings. |
-| [`CEL_OnEnd`](file:///D:/cels-workspace/library/cels/include/cels/app.h#L89) | `CEL_OnEnd(Name)` | `FILE` | `static void Name(CelsEngine*, CelsSession*)` | Declares an application teardown lifecycle callback without unused parameter warnings. |
+| [`CEL_App_Manifest`](file:///D:/cels-workspace/library/cels/include/cels/app.h#L52) | `CEL_App_Manifest(Name, ...)` | `FILE` | `CelsAppManifest` export | Canonical macro exporting application manifest (`.title`, `.appVersion`, `.onStart`, `.onReload`, `.onEnd`). |
+| [`CEL_App_Define`](file:///D:/cels-workspace/library/cels/include/cels/app.h#L69) | `CEL_App_Define(Name, ...)` | `FILE` | Alias for `CEL_App_Manifest` | Direct alias for `CEL_App_Manifest`. |
 | [`CEL_RegisterModule`](file:///D:/cels-workspace/library/cels/include/cels/engine.h#L333) | `CEL_RegisterModule(Type, ptr)`<br>`CEL_RegisterModule(target, Type, ptr)` | `HOST_LOOP` | `void` | Registers an engine subsystem module binding with host or session. |
 | [`CEL_RegisterModuleWithHooks`](file:///D:/cels-workspace/library/cels/include/cels/engine.h#L335) | `CEL_RegisterModuleWithHooks(target, Type, ptr, onReload, onDestroy)` | `HOST_LOOP` | `void` | Registers subsystem module with explicit reload and destroy callbacks. |
 | [`CEL_GetModule`](file:///D:/cels-workspace/library/cels/include/cels/engine.h#L344) | `CEL_GetModule(Type)`<br>`CEL_GetModule(ctx, Type)` | `COMPOSABLE`, `COMPOSITION`, `HOST_LOOP` | `Type*` | Resolves a registered subsystem module pointer from ambient/target engine. |
@@ -152,7 +152,7 @@ Direct C functions, engine coordinators, slot table dual gap buffers, and intern
 | `CelsEngineCreateSession` | `CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsSessionProfile profile)` | `HOST_LOOP` | `CelsSession*` | Creates and registers named secondary session supervised by engine. |
 | `CelsEngineGetSession` | `CelsSession *CelsEngineGetSession(CelsEngine *engine, const char *name)` | `HOST_LOOP`, `ANY_THREAD` | `CelsSession*` | Retrieves supervised session by name ("main", "root", or secondary). |
 | `CelsEngineQuit` | `void CelsEngineQuit(CelsEngine *engine)` | `HOST_LOOP`, `COMPOSABLE` | `void` | Requests engine to terminate main loop (`engine->shouldQuit = true`). |
-| `CelsEngineRunStandalone` | `CelsResult CelsEngineRunStandalone(const CelsAppDef *m, const CelsSessionConfig *c)` | `HOST_LOOP` | `CelsResult` | Runs complete monolithic standalone runtime loop until exit. |
+| `CelsEngineRunStandalone` | `CelsResult CelsEngineRunStandalone(const CelsAppManifest *m, const CelsSessionConfig *c)` | `HOST_LOOP` | `CelsResult` | Runs complete monolithic standalone runtime loop until exit. |
 
 ### 3.2 Session Coordinator & Workload Capacity Profiles (`include/cels/runtime/session.h`)
 
@@ -324,8 +324,8 @@ Direct C functions, engine coordinators, slot table dual gap buffers, and intern
 | :--- | :--- | :--- | :--- | :--- |
 | `CelsAppLoad` | `CelsResult CelsAppLoad(CelsApp *app, CelsEngine *engine, CelsSession *session, const char *dllPath)` | `HOST_LOOP` | `CelsResult` | Loads dynamic application module and binds it to engine and target session. |
 | `CelsAppLoadEntry` | `CelsResult CelsAppLoadEntry(CelsApp *app, CelsEngine *engine, CelsSession *session, const char *dllPath, const char *entrySymbol)` | `HOST_LOOP` | `CelsResult` | Loads dynamic library with specific entry symbol for multiple apps per DLL. |
-| `CelsAppBindStatic` | `CelsResult CelsAppBindStatic(CelsApp *app, CelsEngine *engine, CelsSession *session, const CelsAppDef *def)` | `HOST_LOOP` | `CelsResult` | Binds static application definition for monolithic builds. |
-| `CelsAppStart` | `CelsResult CelsAppStart(CelsApp *app)` | `HOST_LOOP` | `CelsResult` | Synchronizes ambient session, calls `onStart(engine, session)`, runs initial composition pass. |
+| `CelsAppBindStatic` | `CelsResult CelsAppBindStatic(CelsApp *app, CelsEngine *engine, CelsSession *session, const CelsAppManifest *def)` | `HOST_LOOP` | `CelsResult` | Binds static application manifest for monolithic builds. |
+| `CelsAppStart` | `CelsResult CelsAppStart(CelsApp *app)` | `HOST_LOOP` | `CelsResult` | Synchronizes ambient session, calls `onStart(engine)`, runs initial composition pass. |
 | `CelsAppCheckReload` | `bool CelsAppCheckReload(CelsApp *app)` | `HOST_LOOP` | `bool` | Detects disk modifications, shadow-copies new binary, re-links symbols, calls `onReload`. |
 | `CelsAppReload` | `CelsResult CelsAppReload(CelsApp *app)` | `HOST_LOOP` | `CelsResult` | Forces immediate hot-swap reload of the application dynamic library. |
 | `CelsEngineNeedsRecompose` | `bool CelsEngineNeedsRecompose(const CelsEngine *engine)` | `HOST_LOOP` | `bool` | Checks if primary session, secondary sessions, or global broadcasts require recomposition. |

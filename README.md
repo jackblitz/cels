@@ -84,7 +84,7 @@ FetchContent_MakeAvailable(cels)
 # In Release: compiles everything into a single standalone monolithic .exe
 cels_add_application(
     HOST cel_host
-    DLL  cel_dll
+    APP  cel_dll
     HOST_SOURCES src/host.c
     APP_SOURCES  src/app.c
 )
@@ -93,6 +93,7 @@ cels_add_application(
 ### 2. Write Your Application (`src/app.c`)
 ```c
 #include <cels/cels.h>
+#include <cels/app.h>
 
 CEL_Composable(Greeting) {
     printf("Hello from live-reloaded CELS!\n");
@@ -102,11 +103,14 @@ CEL_Composition(AppRoot) {
     Greeting();
 }
 
-CEL_OnStart(App_OnStart) {
+static void App_OnStart(CelsEngine *engine) {
+    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, AppRoot);
 }
 
-CEL_App_Def(MyApp,
+CEL_App_Manifest(MyApp,
+    .title = "My App",
+    .appVersion = "1.0.0",
     .onStart = App_OnStart
 );
 ```
@@ -143,7 +147,7 @@ Comprehensive guides and technical documentation are available in the **[`docs/`
 ## Testing & Verification
 
 ```bash
-# Run all 73 tests across 12 architectural features
+# Run all 86 tests across 13 architectural features
 ./build/windows/test_cli.exe all
 
 # Run performance benchmark suite
