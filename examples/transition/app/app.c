@@ -76,9 +76,8 @@ CEL_Composition(TransitionAppComposition) {
     HealthBarHUD(gauge);
 }
 
-static void TransitionApp_OnStart(CelsEngine *engine)
+static void TransitionApp_OnStart(CelsSession *session)
 {
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, TransitionAppComposition);
 }
 

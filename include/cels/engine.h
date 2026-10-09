@@ -63,6 +63,7 @@ struct CelsAppManifest;
 #ifndef CELS_APP_MANIFEST_TYPEDEF_DEFINED
 #define CELS_APP_MANIFEST_TYPEDEF_DEFINED
 typedef struct CelsAppManifest CelsAppManifest;
+/** @deprecated Deprecated legacy alias for CelsAppManifest. */
 typedef struct CelsAppManifest CelsAppDef;
 #endif
 struct CelsAppModule;
@@ -449,63 +450,6 @@ static inline void CelsEngineQuit(CelsEngine *engine)
  * @return CELS_OK on success, or CelsResult error code.
  */
 CelsResult CelsEngineRunStandalone(const struct CelsAppManifest *manifest, const CelsSessionConfig *config);
-
-/* ========================================================================= */
-/* Engine Ambient Context API (cel_engine_set_context / cel_engine_context)  */
-/* ========================================================================= */
-
-/**
- * Registers an engine subsystem or platform context instance with the host engine.
- *
- * Platform services (input context, audio device, window handle, renderer) registered
- * here are ambiently accessible across all sessions and composables via cel_context(Type).
- *
- * @param engine    Target host engine. Non-NULL.
- * @param key       Unique 64-bit context type key.
- * @param name      Human-readable identifier for diagnostics. Non-NULL.
- * @param instance  Pointer to developer-allocated context struct. Non-NULL.
- * @param onDestroy Cleanup callback invoked when engine shuts down. Safe if NULL.
- */
-void CelsEngineSetContext(CelsEngine *engine,
-                          uint64_t key,
-                          const char *name,
-                          void *instance,
-                          void (*onDestroy)(void *instance));
-
-/**
- * Retrieves a registered context pointer by its 64-bit key from the engine.
- *
- * @param engine Target host engine. Safe if NULL.
- * @param key    Unique 64-bit context type key.
- * @return Pointer to context instance, or NULL if not found.
- */
-void *CelsEngineGetContext(const CelsEngine *engine, uint64_t key);
-
-#define _CEL_ENG_SET_CTX_3(engine, Type, ptr) \
-    CelsEngineSetContext((engine), CelsHashKey(#Type), #Type, (void*)(ptr), NULL)
-
-#define _CEL_ENG_SET_CTX_2(Type, ptr) \
-    CelsEngineSetContext(CelsGetCurrentEngine(), CelsHashKey(#Type), #Type, (void*)(ptr), NULL)
-
-#define cel_engine_set_context(...) \
-    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_ENG_SET_CTX_3, _CEL_ENG_SET_CTX_2)(__VA_ARGS__)
-
-#define _CEL_ENG_GET_CTX_2(engine, Type) \
-    ((Type*)CelsEngineGetContext((engine), CelsHashKey(#Type)))
-
-#define _CEL_ENG_GET_CTX_1(Type) \
-    ((Type*)CelsEngineGetContext(CelsGetCurrentEngine(), CelsHashKey(#Type)))
-
-#define cel_engine_context(...) \
-    _CEL_GET_MACRO_2(__VA_ARGS__, _CEL_ENG_GET_CTX_2, _CEL_ENG_GET_CTX_1)(__VA_ARGS__)
-
-/**
- * Creates or retrieves a named session supervised by the engine.
- *
- * Automatically binds session->engine = engine and sets the ambient thread session.
- */
-#define cel_engine_create_session(engine, name, profile) \
-    CelsEngineCreateSession((engine), (name), (profile))
 
 /* ========================================================================= */
 /* Module Access Dispatch Helpers                                            */

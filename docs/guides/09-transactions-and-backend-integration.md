@@ -1,21 +1,21 @@
-# Flecs ECS Integration Guide
+# Transactions & External Backend Integration Guide
 
-This guide details how **CELS** declarative UI and composition trees integrate with **Flecs** (or any external Entity Component System). It explains how developers write clean, declarative composables using `cel_has`, `cel_has_tag`, `cel_get`, and `cel_is`, and how engine hosts bridge these operations to live Flecs entities without locking or boilerplate.
+This guide details how **CELS** declarative UI and composition trees integrate with external execution engines and backends (such as Entity Component Systems, GPU render pipelines, audio engines, or physics simulations). It explains how developers write clean, declarative composables using `cel_has`, `cel_has_tag`, `cel_get`, and `cel_is`, and how engine hosts bridge these operations to external backends without locking or boilerplate.
 
 ---
 
 ## 1. Architectural Mental Model
 
-CELS and Flecs serve complementary roles:
-- **Flecs**: Authoritative simulation backend, cache-dense archetype tables, multi-threaded systems, queries, and physics.
+CELS and external backends serve complementary roles:
+- **External Backend**: Authoritative execution backend, cache-dense arrays, multi-threaded simulation, GPU drawing, or physics.
 - **CELS**: Reactive declarative frontend, hierarchical trees, UI layout, temporal easing, and declarative component state.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                             CELS Composable Tree                            │
-│  CEL_Composable(EnemyView, id, const EnemyState *enemy) {                   │
-│      cel_has(Position, { enemy->x, enemy->y, enemy->z });                   │
-│      if (enemy->isBurning) cel_has(BurnDebuff, { .dps = 25.0f });           │
+│  CEL_Composable(EntityView, id, const EntityState *entity) {                │
+│      cel_has(Position, { entity->x, entity->y, entity->z });                │
+│      if (entity->isBurning) cel_has(BurnDebuff, { .dps = 25.0f });          │
 │  }                                                                          │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │ Declarative Intra-Frame Diffing
@@ -28,9 +28,8 @@ CELS and Flecs serve complementary roles:
                                        │ CelsSessionCommitTransactions (Frame Sync)
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Flecs ECS World                                │
-│  - ecs_set_id(world, 0x1001, ecs_id(Position), sizeof(Position), &pos)     │
-│  - ecs_remove_id(world, 0x1001, ecs_id(BurnDebuff))                         │
+│                         External Engine Backend                             │
+│  (Renderer, Physics Engine, Audio DSP Graph, or ECS Archetype Storage)      │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -38,15 +37,15 @@ CELS and Flecs serve complementary roles:
 
 ## 2. Writing Declarative Composables with Components
 
-Developers building application UI or entity views **never** interact directly with Flecs handles, mutexes, or manual remove calls. Instead, they use declarative composables:
+Developers building application UI or entity views **never** interact directly with backend mutexes, handles, or manual remove calls. Instead, they use declarative composables:
 
 ### 2.1 Keyed Composables (`CEL_Composable(Name, id, ...)`)
 
-When declaring a composable that represents an ECS entity, declare `id` directly in the signature:
+When declaring a composable that represents an external target entity, declare `id` directly in the signature:
 
 ```c
 #include "cels.h"
-#include "combat_components.h"
+#include "entity_components.h"
 
 CEL_Composable(CombatEntityNode, id, const CombatEntityState*, ent)
 {
@@ -109,9 +108,9 @@ CEL_Composition(CombatAppComposition)
 }
 ```
 
-### 2.3 List Reconciliation with Flecs Entities
+### 2.3 List Reconciliation with External Entities
 
-For lists of entities, iterate over items and invoke each keyed composable:
+For dynamic lists of entities, iterate over items and invoke each keyed composable:
 
 ```c
 CEL_Composable(EnemyListView, const EnemyModel *model)
@@ -126,113 +125,99 @@ CEL_Composable(EnemyListView, const EnemyModel *model)
 
 ## 3. The Declarative Reconciliation Invariant
 
-In traditional imperative ECS programming, omitting a component requires remembering to manually remove it:
+In traditional imperative backend programming, omitting a component requires remembering to manually remove it:
 ```c
 // IMPERATIVE (Error-Prone):
 if (ent->hasShield) {
-    ecs_set(world, e, EnergyShield, { ... });
+    backend_set(world, e, EnergyShield, { ... });
 } else {
-    ecs_remove(world, e, EnergyShield); // Forgetting this causes stale component leaks!
+    backend_remove(world, e, EnergyShield); // Forgetting this causes stale leaks!
 }
 ```
 
 In CELS, component presence is **declarative**:
 1. **Mount (Frame 1)**: When `cel_has` executes, it records the component type in the active composable's `currTypes` set and stages `CELS_OP_SET`.
 2. **Recomposition Diff (Frame 2)**: If `ent->hasShield` becomes `false`, the `if` block does not execute. On exiting the composable scope, CELS diffs `prevTypes` against `currTypes`. Any type present in `prevTypes` but omitted from `currTypes` is **automatically staged as `CELS_OP_REMOVE`**.
-3. **Unmount (Frame 3)**: When `ent->isAlive` becomes `false` or an item is deleted from a dynamic list, the composable node is pruned from the slot table. CELS invokes the entity tracker unmount destructor, which **automatically stages `CELS_OP_DELETE`** to destroy the Flecs entity!
+3. **Unmount (Frame 3)**: When `ent->isAlive` becomes `false` or an item is deleted from a dynamic list, the composable node is pruned from the slot table. CELS invokes the entity tracker unmount destructor, which **automatically stages `CELS_OP_DELETE`** to destroy the backend entity.
 
 ---
 
-## 4. Host Engine Integration: Bridging CELS to Flecs
+## 4. Host Engine Integration: Bridging CELS to Backends
 
-To connect CELS to your Flecs world in the host executable, configure two hooks during session setup:
+To connect CELS to your external backend in the host executable, configure two hooks during session setup:
 
-### 4.1 Step 1: Register the ECS Lookup Hook (Tier 2 Queries)
+### 4.1 Step 1: Register the Backend Lookup Hook (Tier 2 Queries)
 
-Register a callback so `cel_get` and `cel_is` can inspect live Flecs components when intra-frame staged data is not present:
+Register a callback so `cel_get` and `cel_is` can inspect live backend components when intra-frame staged data is not present:
 
 ```c
-static const void *FlecsLookupHook(uint64_t entityId, uint64_t typeKey, void *userData)
+static const void *BackendLookupHook(uint64_t entityId, uint64_t typeKey, void *userData)
 {
-    ecs_world_t *world = (ecs_world_t*)userData;
-    ecs_entity_t e = (ecs_entity_t)entityId;
+    AppBackend *backend = (AppBackend*)userData;
 
-    if (!ecs_is_alive(world, e)) return NULL;
+    if (!backend->isEntityAlive(backend->world, entityId)) return NULL;
 
-    /* Map 64-bit typeKey hash to Flecs component ID */
-    if (typeKey == CelsHashKey("Position")) {
-        return ecs_get(world, e, Position);
-    } else if (typeKey == CelsHashKey("Health")) {
-        return ecs_get(world, e, Health);
-    } else if (typeKey == CelsHashKey("EnergyShield")) {
-        return ecs_get(world, e, EnergyShield);
-    }
-
-    return NULL;
+    /* Map 64-bit typeKey hash to backend component memory */
+    return backend->getComponent(backend->world, entityId, typeKey);
 }
 
 // In host setup:
-CelsSessionSetEcsLookupHook(&session, FlecsLookupHook, ecsWorld);
+CelsSessionSetEcsLookupHook(&session, BackendLookupHook, backendWorld);
 ```
 
 ### 4.2 Step 2: Commit Staged Transactions Post-Recompose
 
-At the frame synchronization boundary (after `CelsSessionRecompose`), commit all staged operations directly to Flecs:
+At the frame synchronization boundary (after `CelsSessionRecompose`), commit all staged operations to the backend:
 
 ```c
-static void FlecsCommitHandler(CelsOpCode op,
-                               uint64_t entityId,
-                               uint64_t typeKey,
-                               const void *data,
-                               size_t size,
-                               void *userData)
+static void BackendCommitHandler(CelsOpCode op,
+                                 uint64_t entityId,
+                                 uint64_t typeKey,
+                                 const void *data,
+                                 size_t size,
+                                 void *userData)
 {
-    ecs_world_t *world = (ecs_world_t*)userData;
-    ecs_entity_t e = (ecs_entity_t)entityId;
+    AppBackend *backend = (AppBackend*)userData;
 
     switch (op) {
         case CELS_OP_SET: {
-            ecs_id_t compId = ResolveFlecsComponentId(world, typeKey);
-            if (size > 0 && data != NULL) {
-                ecs_set_id(world, e, compId, size, data);
-            } else {
-                /* Zero-sized tag component */
-                ecs_add_id(world, e, compId);
-            }
+            backend->setComponent(backend->world, entityId, typeKey, data, size);
             break;
         }
 
         case CELS_OP_REMOVE: {
-            ecs_id_t compId = ResolveFlecsComponentId(world, typeKey);
-            ecs_remove_id(world, e, compId);
+            backend->removeComponent(backend->world, entityId, typeKey);
             break;
         }
 
         case CELS_OP_DELETE: {
-            if (ecs_is_alive(world, e)) {
-                ecs_delete(world, e);
-            }
+            backend->destroyEntity(backend->world, entityId);
             break;
         }
 
         default:
+            if (op > CELS_OP_CUSTOM) {
+                backend->dispatchCustom(backend, op, entityId, data, size);
+            }
             break;
     }
 }
 
 // In host tick loop:
-void HostFrameTick(CelsSession *session, ecs_world_t *world)
+void HostFrameTick(CelsSession *session, AppBackend *backend)
 {
     /* 1. Recompose declarative trees */
     CelsSessionRecompose(session);
 
-    /* 2. Commit all staged operations to Flecs */
-    CelsSessionCommitTransactions(session, FlecsCommitHandler, world);
+    /* 2. Commit all staged operations to the backend */
+    CelsSessionCommitTransactions(session, BackendCommitHandler, backend);
 
-    /* 3. Advance Flecs simulation */
-    ecs_progress(world, deltaTime);
+    /* 3. Advance backend simulation or render frame */
+    backend->tick(backend->world, deltaTime);
 }
 ```
+
+*(Note: When integrating with an ECS framework like Flecs, `BackendCommitHandler` simply maps `CELS_OP_SET` to `ecs_set_id`, `CELS_OP_REMOVE` to `ecs_remove_id`, and `CELS_OP_DELETE` to `ecs_delete`.)*
 
 ---
 
@@ -242,6 +227,6 @@ void HostFrameTick(CelsSession *session, ecs_world_t *world)
 | :--- | :--- |
 | **Pass `id` in `CEL_Composable(Name, id, ...)`** | Always declare entity composables with an explicit `id` parameter. |
 | **Use `cel_has` for Data, `cel_has_tag` for Flags** | Components hold POD structs; tags are zero-sized marker structs. |
-| **Never Imperatively Call `ecs_remove`** | Let CELS omission diffing stage removals automatically. |
-| **Commit Transactions in the Host Loop** | Keep composables free of transaction hooks and Flecs world pointers. |
+| **Never Imperatively Call Backend Remove** | Let CELS omission diffing stage removals automatically. |
+| **Commit Transactions in the Host Loop** | Keep composables free of transaction hooks and external backend pointers. |
 | **Use `cel_is` & `cel_get` for Immediate Reads** | Query staged state immediately within the active frame. |

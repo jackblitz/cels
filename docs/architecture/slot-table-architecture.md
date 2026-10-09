@@ -242,7 +242,7 @@ for (uint32_t i = 0; i < shiftGroups; i++) {
 
 ## 5. Nonmoving Arena & Pinned Address Guarantees
 
-In user composables, values allocated via `cel_remember(Type, default)` or `cel_lifecycle_state` must have **pinned memory addresses**. If an insertion caused memory pointers to move, any user pointers, callbacks, or hardware buffers retaining references to those structures would instantly become dangling pointers.
+In user composables, values allocated via `cel_remember(Type, default)` or tracked via `cel_lifecycle` must have **pinned memory addresses**. If an insertion caused memory pointers to move, any user pointers, callbacks, or hardware buffers retaining references to those structures would instantly become dangling pointers.
 
 CELS solves this through a dedicated, nonmoving data arena partition.
 

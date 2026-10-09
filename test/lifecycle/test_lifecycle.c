@@ -319,6 +319,194 @@ static void TestChildLifecycleDecoupledFromRootEvaluation(void) {
     CelsEngineDestroy(&engine);
 }
 
+typedef struct FrameMetrics {
+    int mountCount;
+    int beforeChildrenCount;
+    int afterChildrenCount;
+    int unmountCount;
+    uint32_t lastSettledChildren;
+} FrameMetrics;
+
+CEL_Lifecycle(MetricsLifecycle, FrameMetrics*, m) {
+    mount {
+        m->mountCount++;
+    }
+    before_children {
+        m->beforeChildrenCount++;
+    }
+    after_children(childCount) {
+        m->afterChildrenCount++;
+        m->lastSettledChildren = childCount;
+    }
+    unmount {
+        m->unmountCount++;
+    }
+}
+
+CEL_Composable(LeafChild, int, id) {
+    (void)id;
+}
+
+CEL_State(MetricsRootState) {
+    int childCount;
+    bool isVisible;
+};
+
+CEL_Composable(MetricsParentComposable, FrameMetrics*, m) {
+    cel_lifecycle(MetricsLifecycle, m);
+    const MetricsRootState *st = cel_watch(MetricsRootState, CEL_ID("MetricsState"));
+    if (st != NULL) {
+        for (int i = 0; i < st->childCount; ++i) {
+            LeafChild(i);
+        }
+    }
+}
+
+CEL_Composition(MetricsRootApp, void*, userData) {
+    FrameMetrics *m = (FrameMetrics*)userData;
+    const MetricsRootState *st = cel_watch(MetricsRootState, CEL_ID("MetricsState"));
+    if (st != NULL && st->isVisible) {
+        MetricsParentComposable(m);
+    }
+}
+
+static void TestBeforeAndAfterChildrenPhases(void)
+{
+    FrameMetrics m = {0};
+
+    CelsSession session;
+    CelsSessionInit(&session, NULL);
+
+    MetricsRootState initState = { .childCount = 4, .isVisible = true };
+    CelsSessionRememberState(&session, CEL_ID("MetricsState"), sizeof(MetricsRootState), &initState);
+
+    cel_attach(&session, MetricsRootApp, NULL, &m);
+
+    /* Frame 0: First mount pass with 4 children */
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(m.mountCount == 1);
+    assert(m.beforeChildrenCount == 1);
+    assert(m.afterChildrenCount == 1);
+    assert(m.lastSettledChildren == 4);
+    assert(m.unmountCount == 0);
+
+    /* Frame 1: Recompose with 7 children */
+    cels_session_mutate(&session, CEL_ID("MetricsState"), MetricsRootState) {
+        this->childCount = 7;
+    }
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(m.mountCount == 1);          /* Mount only runs once on fresh mount */
+    assert(m.beforeChildrenCount == 2); /* before_children runs every frame before children */
+    assert(m.afterChildrenCount == 2);  /* after_children runs every frame after children */
+    assert(m.lastSettledChildren == 7); /* after_children receives the exact settled child count */
+    assert(m.unmountCount == 0);
+
+    /* Frame 2: Hide parent -> unmounts */
+    cels_session_mutate(&session, CEL_ID("MetricsState"), MetricsRootState) {
+        this->isVisible = false;
+    }
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(m.mountCount == 1);
+    assert(m.beforeChildrenCount == 2);
+    assert(m.afterChildrenCount == 2);
+    assert(m.unmountCount == 1); /* Unmount runs when node is pruned */
+
+    CelsSessionDestroy(&session);
+}
+
+typedef struct InlineMetrics {
+    int attachCount;
+    int enterCount;
+    int exitCount;
+    int lastChildCount;
+    int detachCount;
+} InlineMetrics;
+
+static InlineMetrics s_inlineMetrics = {0};
+
+CEL_Composable(TestInlineLeaf, int, val) {
+    (void)val;
+}
+
+CEL_Composable(TestInlineContainer, int, multiplier) {
+    on_attach {
+        s_inlineMetrics.attachCount++;
+    }
+
+    enter {
+        s_inlineMetrics.enterCount++;
+    }
+
+    on_exit(childCount) {
+        s_inlineMetrics.exitCount++;
+        s_inlineMetrics.lastChildCount = (int)childCount * multiplier;
+    }
+
+    on_detach {
+        s_inlineMetrics.detachCount++;
+    }
+}
+
+CEL_State(InlineRootState) {
+    int count;
+    bool visible;
+};
+
+CEL_Composition(InlineTestApp, void *userData) {
+    (void)userData;
+    const InlineRootState *st = cel_watch_state(InlineRootState);
+    if (st && st->visible) {
+        cel_scope(TestInlineContainer, 2) {
+            for (int i = 0; i < st->count; i++) {
+                TestInlineLeaf(i);
+            }
+        }
+    }
+}
+
+static void TestInlineComposableLifecycle(void) {
+    memset(&s_inlineMetrics, 0, sizeof(s_inlineMetrics));
+
+    CelsSession session;
+    CelsSessionInit(&session, NULL);
+
+    InlineRootState initState = { .count = 3, .visible = true };
+    CelsSessionRememberState(&session, CelsHashKey("InlineRootState"), sizeof(InlineRootState), &initState);
+
+    cel_attach(&session, InlineTestApp, NULL, NULL);
+
+    /* Pass 1: Fresh mount with 3 children */
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(s_inlineMetrics.attachCount == 1);
+    assert(s_inlineMetrics.enterCount == 1);
+    assert(s_inlineMetrics.exitCount == 1);
+    assert(s_inlineMetrics.lastChildCount == 6); /* 3 * 2 */
+    assert(s_inlineMetrics.detachCount == 0);
+
+    /* Pass 2: Recompose with 5 children */
+    cels_session_mutate(&session, InlineRootState) {
+        this->count = 5;
+    }
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(s_inlineMetrics.attachCount == 1);    /* on_attach runs only on fresh mount */
+    assert(s_inlineMetrics.enterCount == 2);     /* scope entry runs every execution */
+    assert(s_inlineMetrics.exitCount == 2);      /* on_exit runs at scope exit */
+    assert(s_inlineMetrics.lastChildCount == 10); /* 5 * 2 */
+    assert(s_inlineMetrics.detachCount == 0);
+
+    /* Pass 3: Hide container -> pruned from tree */
+    cels_session_mutate(&session, InlineRootState) {
+        this->visible = false;
+    }
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(s_inlineMetrics.attachCount == 1);
+    assert(s_inlineMetrics.enterCount == 2);
+    assert(s_inlineMetrics.exitCount == 2);
+    assert(s_inlineMetrics.detachCount == 1);    /* on_detach runs when omitted */
+
+    CelsSessionDestroy(&session);
+}
+
 static const TestCase s_lifecycleTests[] = {
     { "TestInitialMount", "Initial mount and observer attachment", TestInitialMount },
     { "TestNonFatalMutation", "Non-fatal state mutation preserving observers", TestNonFatalMutation },
@@ -326,7 +514,9 @@ static const TestCase s_lifecycleTests[] = {
     { "TestSubsequentQuietRecompose", "Quiet recomposition check on pruned empty tree", TestSubsequentQuietRecompose },
     { "TestFullLifecycleProgression", "Complete multi-step entity lifecycle progression flow", TestFullLifecycleProgression },
     { "TestEngineEvaluationTeardownTriggerQuit", "Root composition evaluation destruction triggers engine shouldQuit", TestEngineEvaluationTeardownTriggerQuit },
-    { "TestChildLifecycleDecoupledFromRootEvaluation", "Child component mounts/unmounts independently of root window evaluation teardown", TestChildLifecycleDecoupledFromRootEvaluation }
+    { "TestChildLifecycleDecoupledFromRootEvaluation", "Child component mounts/unmounts independently of root window evaluation teardown", TestChildLifecycleDecoupledFromRootEvaluation },
+    { "TestBeforeAndAfterChildrenPhases", "CEL_Lifecycle before_children frame hook and after_children(childCount) child settlement reflection", TestBeforeAndAfterChildrenPhases },
+    { "TestInlineComposableLifecycle", "Inline CEL_Composable on_attach, on_exit(childCount), and on_detach hooks", TestInlineComposableLifecycle }
 };
 
 static const TestSuite s_lifecycleSuite = {
@@ -339,3 +529,4 @@ static const TestSuite s_lifecycleSuite = {
 const TestSuite *GetLifecycleTestSuite(void) {
     return &s_lifecycleSuite;
 }
+

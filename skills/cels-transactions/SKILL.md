@@ -1,304 +1,295 @@
 ---
 name: cels-transactions
-description: Provide technical guidance on CELS transaction batch staging, lock-free double-buffering, and external backend bridging. Use when staging mutations during recomposition, integrating external ECS (Flecs) or render backends (Vulkan), passing cross-thread command buffers, or configuring post-recomposition frame commit hooks.
+description: Provide technical guidance on CELS declarative reconciliation, transaction batch staging, lock-free double-buffering, and external backend bridging. Use when binding composables to external entities, attaching declarative components (cel_has, cel_has_tag), performing 2-tier intra-frame queries (cel_get, cel_is), managing entity identity (cel_id, cel_key), or staging transactions to external backends like renderers, physics, audio, or simulation systems (cel_stage_*, commit hooks).
 license: Apache-2.0
 compatibility: ANSI C99, CMake 3.20+, GCC/Clang/MSVC
 metadata:
   author: CELS Authors
-  version: "0.3.0"
-  last-updated: '2026-09-30'
+  version: "0.5.0"
+  last-updated: '2026-10-07'
   category: transactions-and-staging
   keywords:
     - transactions
     - staging
+    - reconciliation
+    - cel_has
+    - cel_has_tag
+    - cel_get
+    - cel_is
+    - cel_id
+    - cel_key
+    - cel_stage_set
     - commit-hooks
-    - command-buffers
-    - lock-free
     - double-buffering
-    - ECS
-    - Flecs
-    - Vulkan
-    - cross-thread
+    - backends
     - C99
 ---
 
-# CELS Transactions & Cross-Thread Staging Guide
+# CELS Declarative Reconciliation & Transaction Staging Guide
 
-CELS provides a lock-free, zero-allocation staging pipeline for external mutations (ECS systems, GPU command buffers, audio queues, physics impulses). This allows composables and tasks to stage changes during recomposition without lock contention or cache churn.
+CELS acts as a declarative orchestrator. It bridges declarative UI, scene hierarchies, and simulation nodes to external engines—such as GPU renderers, physics simulations, audio graphs, or Entity Component Systems—via an atomic, lock-free transaction staging pipeline.
 
 ---
 
 ## 1. Core Mental Model: Staging vs. Committing
 
-- **Recomposition Walk**: Single-threaded and fast. Composables declare what components or commands should exist using `cel_stage_set`, `cel_stage_remove`, and `cel_stage_delete`. Operations are appended into the active `CelsTransactionBatch`.
-- **Pipeline Boundary**: At the end of recomposition (or during dedicated engine phases), the batch is committed atomically to the external backend via `CelsSessionCommitTransactions` or swapped locklessly to worker threads via `CelsSessionSwapTransactionBatches`.
-
 ```
 [ Composable Tree ]
        │
-       ├── cel_stage_set(it, Position, { .x = 10, .y = 20 })
-       ├── cel_stage_remove(it, RigidBody)
-       └── cel_stage_delete(it)
+       ├── cel_has(Transform, { .x = 10, .y = 20 })   ──> stages CELS_OP_SET
+       ├── (omitted conditional block)               ──> stages CELS_OP_REMOVE (auto-diff)
+       └── (node unmounted from tree)                ──> stages CELS_OP_DELETE
        │
        ▼
-[ CelsTransactionBatch (Linear Buffer) ]
+[ CelsTransactionBatch (Contiguous Linear Buffer) ]
        │
-       ▼ (Recomposition converges)
+       ▼ (Recomposition completes)
        │
-[ Commit Handler (Atomic Sync Point) ]
+[ Commit Point / Frame Hook ]
+       ├── Direct Commit: CelsSessionCommitTransactions -> External Backend Handlers
+       │   (Renderer, Physics Engine, Audio Queue, or ECS)
+       │
+       └── Cross-Thread Handoff: CelsSessionSwapTransactionBatches -> Worker Thread
+```
+
+### Architectural Separation:
+1. **Recomposition Pass**: Pure, single-threaded, cache-friendly CELS execution. Composables declaratively express what properties, components, or commands *should* exist on target entities.
+2. **Transaction Batch**: Operations are appended to a contiguous `CelsTransactionBatch` without calling external backend APIs mid-walk (preventing lock contention, cache churn, and ordering bugs).
+3. **Commit Phase**: Transactions are committed atomically to external backends at the frame boundary, or swapped locklessly to dedicated worker threads.
+
+---
+
+## 2. Composable Identity (`cel_id`, `cel_key`, `cel_call`)
+
+Every composable node in CELS is an identified entity with a 64-bit ID representing an external object, render node, or simulation entity:
+
+### 1. Auto-Generated Identity (`cel_id`)
+When unkeyed (`CEL_Composable(MyWidget)`), CELS assigns a unique stable 64-bit ID based on slot address and callsite hash. Read it inside the composable via `cel_id()`:
+```c
+CEL_Composable(DefaultWidget) {
+    uint64_t targetId = cel_id();
+    cel_has(Transform, { .x = 0, .y = 0 });
+}
+```
+
+### 2. Explicit Keyed Composable Signature
+Keyed composables declare `id` directly as the first parameter:
+```c
+CEL_Composable(RenderObjectNode, id, const ObjectState*, obj) {
+    cel_watch(obj);
+    // cel_id() evaluates to 'id' passed by caller
+    cel_has(Transform,  { obj->x, obj->y, obj->z });
+    cel_has(RenderMesh, { obj->meshId, obj->materialId });
+}
+
+// Callers invoke with explicit ID:
+RenderObjectNode(entityId, objectState);
+```
+
+### 3. Dynamic List Reconciliation (`cel_key` & `cel_call`)
+In dynamic loops where item order changes between frames, preserve slot memory and component bindings with `cel_key` or `cel_call`:
+```c
+CEL_Composable(EntityHierarchy, const EntityItem *items, int count) {
+    for (int i = 0; i < count; i++) {
+        /* Block form */
+        cel_key(items[i].id) {
+            cel_has(Transform, { items[i].x, items[i].y, 0.0f });
+            EntitySprite(&items[i]);
+        }
+
+        /* Or single-line form */
+        cel_call(EntitySprite, items[i].id, &items[i]);
+    }
+}
 ```
 
 ---
 
-## 2. Core Staging Macros
+## 3. Declarative Component Reconciliation (`cel_has` & `cel_has_tag`)
 
-Include `<cels/transaction.h>` (or `<cels/cels.h>`).
+Instead of writing imperative glue code with manual update and removal checks, declare components directly inside composables:
 
-### `cel_stage_set(targetId, Type, { ... })`
-Stages a component addition or value update on `targetId`:
+### Attaching Components: `cel_has`
 ```c
-cel_stage_set(it, Position, { .x = 100.0f, .y = 0.0f, .z = 50.0f });
-cel_stage_set(it, Health,   { .hp = 100, .maxHp = 100 });
+cel_has(Transform, { .x = obj->x, .y = obj->y, .z = 0.0f });
+cel_has(Health,    { .current = obj->hp, .max = obj->maxHp });
 ```
 
-### `cel_stage_remove(targetId, Type)`
-Stages the removal of a component/tag from `targetId`:
+### Attaching Zero-Sized Tags: `cel_has_tag`
 ```c
-cel_stage_remove(it, RigidBody);
+if (obj->isSelected) {
+    cel_has_tag(SelectedTag);
+}
 ```
 
-### `cel_stage_delete(targetId)`
-Stages the destruction/deletion of a target entity or native resource:
+### The Declarative Reconciliation Invariants
+1. **Mount / First Declaration**: Stages a `CELS_OP_SET` transaction.
+2. **Automatic Omission Removal**: If a component was declared in frame $N$, but is **omitted** in frame $N+1$ (e.g. an `if` condition evaluates to `false`), CELS **automatically stages a `CELS_OP_REMOVE` transaction** on scope exit!
+3. **Automatic Unmount Cleanup**: If the composable or keyed entity leaves the slot table, CELS **automatically stages a `CELS_OP_DELETE` transaction**.
+
 ```c
-cel_stage_delete(it);
+CEL_Composable(SceneEntity, id, const EntityState*, entity) {
+    cel_watch(entity);
+
+    cel_has(Transform, { entity->x, entity->y, 0.0f });
+
+    /* When isHighlighted transitions true -> false, CELS AUTO-REMOVES HighlightEffect! */
+    if (entity->isHighlighted) {
+        cel_has(HighlightEffect, { .color = 0xFFFFCC00, .intensity = 1.5f });
+    }
+
+    if (entity->hasPhysics) {
+        cel_has(RigidBody, { .mass = 10.0f, .isStatic = false });
+    }
+}
 ```
 
-### `cel_stage_custom(opCode, targetId, Type, { ... })`
-Stages an application-defined opcode transaction with typed payload:
+---
+
+## 4. Intra-Frame Queries & External Fallback (`cel_get` & `cel_is`)
+
+During recomposition, a composable or child may need to inspect attached components before transactions are committed to the external backend.
+
+CELS provides **2-Tier Resolution**:
+- **Tier 1 (Intra-Frame)**: Checks the active frame's staged transaction batch. If a component was staged in this frame, returns the staged payload immediately.
+- **Tier 2 (External Backend Fallback)**: If not present in the staged batch, queries the external backend via `CelsSessionSetEcsLookupHook`.
+
 ```c
+// Intra-frame query on current node (implicit cel_id()):
+const Health *hp = cel_get(Health);
+if (hp && hp->current < 25) {
+    cel_has_tag(LowHealthAlert);
+}
+
+// Intra-frame query on explicit target ID:
+const Transform *targetTransform = cel_get(targetEntityId, Transform);
+
+// Boolean tag check:
+if (cel_is(SelectedTag)) {
+    cel_has(SelectionBox, { .lineWidth = 2.0f });
+}
+```
+
+---
+
+## 5. Low-Level Transaction Staging Pipeline (`cel_stage_*`)
+
+When dispatching custom commands, audio cues, or GPU drawing primitives without composables:
+
+```c
+#include "cels/runtime/transaction.h"
+
+/* Stage component set */
+cel_stage_set(targetId, Transform, { .x = 100.0f, .y = 50.0f });
+
+/* Stage component remove */
+cel_stage_remove(targetId, RigidBody);
+
+/* Stage entity destruction */
+cel_stage_delete(targetId);
+
+/* Stage custom application opcode */
 #define CMD_PLAY_AUDIO (CELS_OP_CUSTOM + 1)
 cel_stage_custom(CMD_PLAY_AUDIO, channelId, AudioCue, { .clipId = 42, .gain = 1.0f });
 ```
 
 ---
 
-## 3. High-Level Declarative Composable Identity & ECS (`cel_id`, `cel_key`, `cel_has`, `cel_get`)
+## 6. Post-Recomposition Commit Hook
 
-While `cel_stage_*` provides direct manual staging, CELS provides a unified **Composable Identity & Declarative Component System**:
-
-- **`cel_id()`**: Strictly a query/getter macro returning the active 64-bit entity/node ID (explicit from keyed composable, or auto-generated by CELS).
-- **`CEL_Composable(Name, id, ...)`**: Keyed composables declare `id` directly as first parameter. Callers invoke `Name(entityId, ...)`. Binds the composable's `cel_id()` to `id`.
-- **`cel_key(id) { ... }`**: Establishes an explicit identity scope for dynamic list reconciliation and component attachment.
-- **`cel_call(Fn, id, ...)`**: Invokes any composable with an explicit key on a single line.
-- **`cel_has(Type, { ... })`**: Declaratively binds a component to the active composable's `cel_id()`. Stages `CELS_OP_SET`.
-- **`cel_has_tag(Type)`**: Declaratively binds a zero-sized tag component.
-- **`cel_get(Type)` / `cel_get(id, Type)`**: Queries attached component with 2-tier resolution (Tier 1: active CELS staged batch; Tier 2: registered ECS lookup hook / Flecs).
-- **`cel_is(Type)` / `cel_is(id, Type)`**: Checks if a component or tag is attached.
-
-### The Declarative Invariant & Automatic Removal:
-1. **Mount**: Stages `CELS_OP_SET` for all declared components.
-2. **Recomposition Diff**: If a component was declared in frame $N$, but is **omitted** in frame $N+1$ (e.g. an `if` condition evaluates to `false`), CELS **automatically stages a `CELS_OP_REMOVE` transaction** to remove that component from Flecs!
-3. **Unmount**: If the entire composable or keyed entity leaves the tree, CELS **automatically stages a `CELS_OP_DELETE` transaction**.
+To automatically commit transactions to your target backend whenever `CelsSessionRecompose` finishes:
 
 ```c
-// Direct Keyed Composable:
-CEL_Composable(PlayerEntityNode, id, const PlayerState *player) {
-    cel_watch(player);
-
-    cel_has(Position, { .x = player->x, .y = player->y, .z = player->z });
-
-    // Automatically added when true, and AUTOMATICALLY REMOVED when false!
-    if (player->isBurning) {
-        cel_has(BurnDebuff, { .dps = 15.0f });
-    }
-
-    if (player->hasShield) {
-        cel_has(EnergyShield, { .capacity = 100.0f });
-    }
-
-    // Immediate intra-frame inspection:
-    const Health *hp = cel_get(Health);
-    if (hp && hp->hp < 20) {
-        cel_has_tag(LowHealthAlert);
-    }
-}
-
-// Dynamic List Reconciliation with cel_key:
-CEL_Composable(EnemyHUD, const Enemy *enemies, int count) {
-    for (int i = 0; i < count; i++) {
-        cel_key(enemies[i].id) {
-            cel_has(Position, { enemies[i].x, enemies[i].y });
-            EnemySprite(&enemies[i]);
-        }
-    }
-}
-```
-
----
-
-## 4. Ambient Context (`cel_context`)
-
-Cascades read-only environmental context (themes, input maps, biome environments, worlds) down the composable subtree with zero heap allocations:
-
-```c
-// Subtree provider (attaches context to current composable scope; auto-restores ancestor scope on exit):
-CEL_Composable(SettingsScreen) {
-    cel_context(AppTheme, &darkTheme);
-    SettingsPanel();
-}
-
-// Descendant consumer:
-CEL_Composable(SettingsItem) {
-    const AppTheme *theme = cel_context(AppTheme);
-}
-```
-
-For global session-wide singletons, use `CelsSessionSetUserData`:
-```c
-/* Host Setup */
-CelsSessionSetUserData(session, engineWorld);
-
-/* Inside any Composable or Task */
-EngineWorld *world = cel_user_data(EngineWorld);
-```
-
----
-
-## 4. Post-Recomposition Commit Hook
-
-To automatically commit transactions whenever `CelsSessionRecompose` finishes its frame without host loop boilerplate:
-
-```c
-static void BackendCommitHandler(CelsOpCode opCode,
-                                 uint64_t targetId,
-                                 uint64_t typeKey,
-                                 const void *data,
-                                 size_t size,
-                                 void *userData)
+static void GenericBackendCommitHandler(CelsOpCode opCode,
+                                        uint64_t targetId,
+                                        uint64_t typeKey,
+                                        const void *data,
+                                        size_t size,
+                                        void *userData)
 {
-    BackendWorld *world = (BackendWorld *)userData;
-    /* Dispatch opCode: SET, REMOVE, DELETE, or CUSTOM */
+    AppBackend *backend = (AppBackend *)userData;
+
+    switch (opCode) {
+        case CELS_OP_SET:
+            backend->setComponent(backend->world, targetId, typeKey, data, size);
+            break;
+        case CELS_OP_REMOVE:
+            backend->removeComponent(backend->world, targetId, typeKey);
+            break;
+        case CELS_OP_DELETE:
+            backend->destroyEntity(backend->world, targetId);
+            break;
+        default:
+            if (opCode > CELS_OP_CUSTOM) {
+                backend->dispatchCustomCommand(backend, opCode, targetId, data, size);
+            }
+            break;
+    }
 }
 
 static void OnFrameComplete(CelsSession *session, void *userData)
 {
-    CelsSessionCommitTransactions(session, BackendCommitHandler, userData);
+    CelsSessionCommitTransactions(session, GenericBackendCommitHandler, userData);
 }
 
-/* Register once on session */
-CelsSessionSetPostRecomposeHook(session, OnFrameComplete, backendWorld);
+/* Register once on session during host initialization */
+CelsSessionSetPostRecomposeHook(session, OnFrameComplete, appBackend);
 ```
+
+*(Note: If integrating with an ECS library such as Flecs, `GenericBackendCommitHandler` simply maps `CELS_OP_SET` to `ecs_set_id`, `CELS_OP_REMOVE` to `ecs_remove_id`, and `CELS_OP_DELETE` to `ecs_delete`.)*
 
 ---
 
-## 5. Lockless Cross-Thread Handoff (Double-Buffering)
+## 7. Lockless Cross-Thread Double-Buffering Handoff
 
-To pass staged commands across threads (e.g. main thread UI -> render/physics worker thread) without locks:
+To hand off staged transactions across threads without lock contention (e.g. UI main thread -> render or physics worker thread):
 
 1. **Main Thread**: Call `CelsSessionSwapTransactionBatches(session)` at frame end.
 2. **Worker Thread**: Read and process `CelsSessionGetReadyBatch(session)`.
 3. **Worker Thread**: Call `CelsSessionClearReadyBatch(session)` once drained.
 
----
-
-## 6. Slot Memory Unmount Cleanups
-
-To trigger cleanup when a composable leaves the tree, use `cel_remember` with an optional 3rd argument for the destructor callback:
-
 ```c
-static void OnResourceUnmount(void *ptr, CelsSession *session CELS_UNUSED) {
-    uint64_t *resId = (uint64_t *)ptr;
-    cel_stage_delete(*resId);
-}
+/* In Main Thread Loop (at end of frame): */
+CelsSessionSwapTransactionBatches(&engine.session);
 
-/* With unmount cleanup: */
-uint64_t *res = cel_remember(uint64_t, initialId, OnResourceUnmount);
-
-/* Without unmount cleanup (omit or pass NULL): */
-int *counter = cel_remember(int, 0);
-int *counter_explicit = cel_remember(int, 0, NULL);
-```
-
----
-
-## 7. Staging Transactions from `CEL_Lifecycle`
-
-Transactions can also be staged directly inside `CEL_Lifecycle` blocks:
-- **`mount`**: Stage initial component sets or resource additions (`cel_stage_set`).
-- **`unmount`**: Stage resource deletions (`cel_stage_delete`) or component removals (`cel_stage_remove`).
-
-```c
-CEL_Lifecycle(EntityTransactionLifecycle, uint64_t, entityId) {
-    mount {
-        /* Add/set operations staged on initial mount */
-        cel_stage_set(entityId, Position, { .x = 100.0f, .y = 200.0f, .z = 0.0f });
-        cel_stage_set(entityId, Health,   { .hp = 100, .maxHp = 100 });
+/* In Worker Thread Loop: */
+const CelsTransactionBatch *batch = CelsSessionGetReadyBatch(&engine.session);
+if (batch && batch->count > 0) {
+    for (uint32_t i = 0; i < batch->count; ++i) {
+        const CelsTransactionHeader *tx = &batch->headers[i];
+        ApplyWorkerCommand(tx);
     }
-    unmount {
-        /* Delete operation staged when omitted from the tree */
-        cel_stage_delete(entityId);
-    }
-}
-
-CEL_Composable(EnemyNode, uint64_t, entityId) {
-    cel_lifecycle(EntityTransactionLifecycle, entityId);
+    CelsSessionClearReadyBatch(&engine.session);
 }
 ```
 
 ---
 
-## 8. Core Patterns & Anti-Patterns (Best for LLMs)
+## 8. Anti-Patterns to Avoid
 
-### Pattern 1: Staging vs. Direct Mutation of External Systems
-
+### ❌ Anti-Pattern 1: Calling External Backend APIs Directly During Recomposition
 ```c
-// WRONG: Directly modifying external engine systems during recomposition walk
-CEL_Composable(PlayerEntity, uint64_t, entityId) {
-    ecs_world_t *world = GetExternalEcsWorld();
-    ecs_set(world, entityId, Position, { 10.0f, 20.0f, 0.0f }); // Bad! Lock contention, cache churn, non-atomic!
-}
-
-// CORRECT: Stage mutations to the linear transaction buffer
-CEL_Composable(PlayerEntity, uint64_t, entityId) {
-    cel_stage_set(entityId, Position, { .x = 10.0f, .y = 20.0f, .z = 0.0f }); // Lock-free, zero-allocation
+// BAD: Mutating external backend directly inside composable
+CEL_Composable(MyNode) {
+    MyExternalRenderer_Draw(mesh); // Bad! Violates pipeline purity
 }
 ```
+**Fix**: Use `cel_has` or `cel_stage_*`. Let the staged transaction batch commit at the frame sync point.
 
-### Pattern 2: Atomic Dispatch at Pipeline Boundary
-
+### ❌ Anti-Pattern 2: Manual Imperative Removal Branches
 ```c
-// WRONG: Manually committing transactions inside individual composables
-CEL_Composable(PlayerEntity, uint64_t, entityId) {
-    cel_stage_set(entityId, Position, { 10.0f, 20.0f, 0.0f });
-    CelsSessionCommitTransactions(session, Dispatcher, NULL); // Bad! Breaks batching & partial state corruption!
-}
-
-// CORRECT: Commit atomically after recomposition via post-recompose hook
-static void OnFrameComplete(CelsSession *session, void *userData) {
-    // Drains the entire frame's staged operations in a single atomic batch
-    CelsSessionCommitTransactions(session, BackendCommitHandler, userData);
-}
-
-CelsSessionSetPostRecomposeHook(session, OnFrameComplete, backendWorld);
-```
-
-### Pattern 3: Lock-Free Worker Thread Handoff
-
-```c
-// WRONG: Sharing the active transaction batch across threads while recomposition writes to it
-void RenderThread(CelsSession *session) {
-    // Race condition! session->activeBatch is concurrently being written by the UI thread!
-    ProcessBatch(session->activeBatch);
-}
-
-// CORRECT: Double-buffer swap at frame boundary
-// Main Thread:
-CelsSessionSwapTransactionBatches(session);
-
-// Worker / Render Thread:
-CelsTransactionBatch *batch = CelsSessionGetReadyBatch(session);
-if (batch) {
-    ProcessBatch(batch);
-    CelsSessionClearReadyBatch(session);
+// BAD: Manually writing imperative removal branches
+if (entity->isHighlighted) {
+    backend->addHighlight(entity->id);
+} else {
+    backend->removeHighlight(entity->id); // Easily forgotten!
 }
 ```
+**Fix**: Use `cel_has`. When the condition evaluates to `false`, CELS automatically detects the omitted component and stages `CELS_OP_REMOVE` for you!
+
+### ❌ Anti-Pattern 3: Trying to Overwrite `cel_id()`
+```c
+// BAD: Trying to assign to cel_id()
+cel_id() = 1234; // Compiler error! cel_id() is strictly a query macro
+```
+**Fix**: Use keyed composables `CEL_Composable(Name, id, ...)` or scoped blocks `cel_key(id) { ... }`.

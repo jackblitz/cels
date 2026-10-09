@@ -35,8 +35,8 @@ Practical, snippet-heavy, task-oriented guides designed to take you from a blank
 | **[`06-transitions-and-motion.md`](guides/06-transitions-and-motion.md)** | Implement smooth visual motion and continuous interpolation. | `cel_transition()`, in-flight retargeting, 0% CPU idle, built-in easing curves (`CEL_EASE_OUT_QUAD`). |
 | **[`07-hot-reloading.md`](guides/07-hot-reloading.md)** | Set up live DLL code reloading without losing runtime state. | Sub-50ms hot swaps, host runtime checks, shadow-copying, state retention. |
 | **[`08-events-signals-broadcasts.md`](guides/08-events-signals-broadcasts.md)** | Master discrete events, session signals, and engine-wide broadcasts. | `cel_event` / `cel_listen` tree bubbling, `cel_signal` / `cel_connect` cross-session delivery, `cel_broadcast` / `cel_bind` thread-safe bus, non-blocking task awaiting (`cel_wait_for`, `cel_wait_for_timeout`). |
-| **[`09-flecs-integration.md`](guides/09-flecs-integration.md)** | Declarative ECS component attachment and Flecs engine bridging. | Keyed composables `CEL_Composable(Name, id, ...)`, `cel_has`, `cel_has_tag`, `cel_get`, `cel_is`, automatic omission diffing, host commit hooks. |
-| **[`10-authoring-primitives-and-archetypes.md`](guides/10-authoring-primitives-and-archetypes.md)** | Author custom layout containers, DSL primitives, and base archetypes. | Macro `#define` rules, dual-loop expansion, `cel_container`, `cel_key`, `cel_has`, zero-heap layout engines (`CEL_FlexBox`, `CEL_Layout`). |
+| **[`09-transactions-and-backend-integration.md`](guides/09-transactions-and-backend-integration.md)** | Declarative component attachment and external backend bridging. | Keyed composables `CEL_Composable(Name, id, ...)`, `cel_has`, `cel_has_tag`, `cel_get`, `cel_is`, automatic omission diffing, host commit hooks. |
+| **[`10-authoring-primitives-and-archetypes.md`](guides/10-authoring-primitives-and-archetypes.md)** | Author custom layout containers, DSL primitives, and base archetypes. | Macro `#define` rules, scoped loop expansion, `CelsEnterComposable`, `cel_key`, `cel_has`, zero-heap layout engines (`CEL_FlexBox`, `CEL_Layout`). |
 
 ---
 

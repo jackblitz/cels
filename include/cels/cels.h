@@ -10,7 +10,7 @@
  * Core Concepts & Mental Model:
  * - C: Composition
  *      Root compositions (`CEL_Composition`, `cel_attach`), child composable widgets
- *      (`CEL_Composable`), and inline child-aware container blocks (`cel_container`).
+ *      (`CEL_Composable`).
  * - E: Evaluation
  *      Fine-grained, dirty-driven recomposition walks (`CelsSessionRecompose`, `CEL_Evaluate`).
  *      Only composables observing mutated state are re-evaluated; untouched subtrees are skipped.
@@ -27,8 +27,8 @@
  *      Attach and reconcile entity components and tags within composables (`cel_key`,
  *      `cel_has`, `cel_has_tag`, `cel_get`, `cel_is`, `cel_id`).
  * - Custom Layout Primitives:
- *      Engine and library authors author custom container archetypes (like `CEL_Layout`,
- *      `CEL_FlexBox`, `CEL_Grid`) using `cel_container(Name, onStart, onEnd, layoutData)`.
+ *      Engine and library authors author custom layout archetypes (like `CEL_Layout`,
+ *      `CEL_FlexBox`, `CEL_Grid`) using composables, scopes, and ambient context.
  *
  * Typical Usage Guide:
  * @code
@@ -341,136 +341,496 @@ extern "C" {
 #endif
 
 #define _CEL_COMPOSABLE_VOID(FnName, ...) \
-    static void _cels_body_##FnName(void); \
+    static void _cels_body_##FnName(CelsSession *sess, int _cels_lifecycle_phase, uint32_t _cels_child_count); \
+    static void _cels_exit_trampoline_##FnName(uint32_t childCount, void *instance CELS_UNUSED, CelsSession *sess) { \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_EXIT, childCount); \
+    } \
+    static void _cels_detach_trampoline_##FnName(void *instance CELS_UNUSED, CelsSession *sess) { \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_DETACH, 0); \
+    } \
+    static inline bool _cels_enter_##FnName(CelsSession *sess) { \
+        if (sess == NULL) sess = CelsGetCurrentSession(); \
+        if (sess == NULL || sess->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return false; \
+        if (!CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            CelsExitGroup(sess); \
+            return false; \
+        } \
+        int _cels_phase = CelsIsFreshMount(sess) ? (CEL_LIFECYCLE_PHASE_ATTACH | CEL_LIFECYCLE_PHASE_ENTER) : CEL_LIFECYCLE_PHASE_ENTER; \
+        _cels_body_##FnName(sess, _cels_phase, 0); \
+        uint32_t flags = sess->groupLifecycleFlags[sess->currentDepth]; \
+        if (flags != 0) { \
+            void (*exitHook)(uint32_t, void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_EXIT) ? _cels_exit_trampoline_##FnName : NULL; \
+            void (*detachHook)(void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_DETACH) ? _cels_detach_trampoline_##FnName : NULL; \
+            if (CelsIsFreshMount(sess)) { \
+                CelsSessionRegisterLifecycleExt(sess, NULL, NULL, exitHook, detachHook); \
+            } else { \
+                CelsSessionUpdateLifecycleExt(sess, NULL, exitHook, detachHook); \
+            } \
+        } \
+        return true; \
+    } \
     static inline void FnName(void) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
-            _cels_body_##FnName(); \
+        if (_cels_enter_##FnName(sess)) { \
+            CelsExitGroup(sess); \
         } \
-        CelsExitGroup(sess); \
     } \
-    static void _cels_body_##FnName(void)
+    static void _cels_body_##FnName(CelsSession *sess CELS_UNUSED, int _cels_lifecycle_phase CELS_UNUSED, uint32_t _cels_child_count CELS_UNUSED)
 
 #define _CEL_COMPOSABLE_1_ARG(FnName, Type1, Arg1) \
-    static void _cels_body_##FnName(Type1 Arg1); \
+    static void _cels_body_##FnName(CelsSession *sess, int _cels_lifecycle_phase, uint32_t _cels_child_count, Type1 Arg1); \
+    typedef struct { Type1 a1; } _cels_args_##FnName; \
+    static void _cels_exit_trampoline_##FnName(uint32_t childCount, void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_EXIT, childCount, args ? args->a1 : (Type1){0}); \
+    } \
+    static void _cels_detach_trampoline_##FnName(void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_DETACH, 0, args ? args->a1 : (Type1){0}); \
+    } \
+    static inline bool _cels_enter_##FnName(CelsSession *sess, Type1 Arg1) { \
+        if (sess == NULL) sess = CelsGetCurrentSession(); \
+        if (sess == NULL || sess->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return false; \
+        if (!CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            CelsExitGroup(sess); \
+            return false; \
+        } \
+        int _cels_phase = CelsIsFreshMount(sess) ? (CEL_LIFECYCLE_PHASE_ATTACH | CEL_LIFECYCLE_PHASE_ENTER) : CEL_LIFECYCLE_PHASE_ENTER; \
+        _cels_body_##FnName(sess, _cels_phase, 0, Arg1); \
+        uint32_t flags = sess->groupLifecycleFlags[sess->currentDepth]; \
+        if (flags != 0) { \
+            _cels_args_##FnName *_args = (_cels_args_##FnName*)CelsResolveSlot(sess, sizeof(_cels_args_##FnName), &(const _cels_args_##FnName){ Arg1 }); \
+            if (_args) { _args->a1 = Arg1; } \
+            void (*exitHook)(uint32_t, void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_EXIT) ? _cels_exit_trampoline_##FnName : NULL; \
+            void (*detachHook)(void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_DETACH) ? _cels_detach_trampoline_##FnName : NULL; \
+            if (CelsIsFreshMount(sess)) { \
+                CelsSessionRegisterLifecycleExt(sess, _args, NULL, exitHook, detachHook); \
+            } else { \
+                CelsSessionUpdateLifecycleExt(sess, _args, exitHook, detachHook); \
+            } \
+        } \
+        return true; \
+    } \
     static inline void FnName(Type1 Arg1) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
-            _cels_body_##FnName(Arg1); \
+        if (_cels_enter_##FnName(sess, Arg1)) { \
+            CelsExitGroup(sess); \
         } \
-        CelsExitGroup(sess); \
     } \
-    static void _cels_body_##FnName(Type1 Arg1)
+    static void _cels_body_##FnName(CelsSession *sess CELS_UNUSED, int _cels_lifecycle_phase CELS_UNUSED, uint32_t _cels_child_count CELS_UNUSED, Type1 Arg1)
 
 #define _CEL_COMPOSABLE_2_ARGS(FnName, Type1, Arg1, Type2, Arg2) \
-    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2); \
+    static void _cels_body_##FnName(CelsSession *sess, int _cels_lifecycle_phase, uint32_t _cels_child_count, Type1 Arg1, Type2 Arg2); \
+    typedef struct { Type1 a1; Type2 a2; } _cels_args_##FnName; \
+    static void _cels_exit_trampoline_##FnName(uint32_t childCount, void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_EXIT, childCount, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}); \
+    } \
+    static void _cels_detach_trampoline_##FnName(void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_DETACH, 0, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}); \
+    } \
+    static inline bool _cels_enter_##FnName(CelsSession *sess, Type1 Arg1, Type2 Arg2) { \
+        if (sess == NULL) sess = CelsGetCurrentSession(); \
+        if (sess == NULL || sess->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return false; \
+        if (!CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            CelsExitGroup(sess); \
+            return false; \
+        } \
+        int _cels_phase = CelsIsFreshMount(sess) ? (CEL_LIFECYCLE_PHASE_ATTACH | CEL_LIFECYCLE_PHASE_ENTER) : CEL_LIFECYCLE_PHASE_ENTER; \
+        _cels_body_##FnName(sess, _cels_phase, 0, Arg1, Arg2); \
+        uint32_t flags = sess->groupLifecycleFlags[sess->currentDepth]; \
+        if (flags != 0) { \
+            _cels_args_##FnName *_args = (_cels_args_##FnName*)CelsResolveSlot(sess, sizeof(_cels_args_##FnName), &(const _cels_args_##FnName){ Arg1, Arg2 }); \
+            if (_args) { _args->a1 = Arg1; _args->a2 = Arg2; } \
+            void (*exitHook)(uint32_t, void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_EXIT) ? _cels_exit_trampoline_##FnName : NULL; \
+            void (*detachHook)(void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_DETACH) ? _cels_detach_trampoline_##FnName : NULL; \
+            if (CelsIsFreshMount(sess)) { \
+                CelsSessionRegisterLifecycleExt(sess, _args, NULL, exitHook, detachHook); \
+            } else { \
+                CelsSessionUpdateLifecycleExt(sess, _args, exitHook, detachHook); \
+            } \
+        } \
+        return true; \
+    } \
     static inline void FnName(Type1 Arg1, Type2 Arg2) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
-            _cels_body_##FnName(Arg1, Arg2); \
+        if (_cels_enter_##FnName(sess, Arg1, Arg2)) { \
+            CelsExitGroup(sess); \
         } \
-        CelsExitGroup(sess); \
     } \
-    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2)
+    static void _cels_body_##FnName(CelsSession *sess CELS_UNUSED, int _cels_lifecycle_phase CELS_UNUSED, uint32_t _cels_child_count CELS_UNUSED, Type1 Arg1, Type2 Arg2)
 
 #define _CEL_COMPOSABLE_3_ARGS(FnName, Type1, Arg1, Type2, Arg2, Type3, Arg3) \
-    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3); \
+    static void _cels_body_##FnName(CelsSession *sess, int _cels_lifecycle_phase, uint32_t _cels_child_count, Type1 Arg1, Type2 Arg2, Type3 Arg3); \
+    typedef struct { Type1 a1; Type2 a2; Type3 a3; } _cels_args_##FnName; \
+    static void _cels_exit_trampoline_##FnName(uint32_t childCount, void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_EXIT, childCount, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}, args ? args->a3 : (Type3){0}); \
+    } \
+    static void _cels_detach_trampoline_##FnName(void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_DETACH, 0, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}, args ? args->a3 : (Type3){0}); \
+    } \
+    static inline bool _cels_enter_##FnName(CelsSession *sess, Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
+        if (sess == NULL) sess = CelsGetCurrentSession(); \
+        if (sess == NULL || sess->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return false; \
+        if (!CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            CelsExitGroup(sess); \
+            return false; \
+        } \
+        int _cels_phase = CelsIsFreshMount(sess) ? (CEL_LIFECYCLE_PHASE_ATTACH | CEL_LIFECYCLE_PHASE_ENTER) : CEL_LIFECYCLE_PHASE_ENTER; \
+        _cels_body_##FnName(sess, _cels_phase, 0, Arg1, Arg2, Arg3); \
+        uint32_t flags = sess->groupLifecycleFlags[sess->currentDepth]; \
+        if (flags != 0) { \
+            _cels_args_##FnName *_args = (_cels_args_##FnName*)CelsResolveSlot(sess, sizeof(_cels_args_##FnName), &(const _cels_args_##FnName){ Arg1, Arg2, Arg3 }); \
+            if (_args) { _args->a1 = Arg1; _args->a2 = Arg2; _args->a3 = Arg3; } \
+            void (*exitHook)(uint32_t, void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_EXIT) ? _cels_exit_trampoline_##FnName : NULL; \
+            void (*detachHook)(void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_DETACH) ? _cels_detach_trampoline_##FnName : NULL; \
+            if (CelsIsFreshMount(sess)) { \
+                CelsSessionRegisterLifecycleExt(sess, _args, NULL, exitHook, detachHook); \
+            } else { \
+                CelsSessionUpdateLifecycleExt(sess, _args, exitHook, detachHook); \
+            } \
+        } \
+        return true; \
+    } \
     static inline void FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
-            _cels_body_##FnName(Arg1, Arg2, Arg3); \
+        if (_cels_enter_##FnName(sess, Arg1, Arg2, Arg3)) { \
+            CelsExitGroup(sess); \
         } \
-        CelsExitGroup(sess); \
     } \
-    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3)
+    static void _cels_body_##FnName(CelsSession *sess CELS_UNUSED, int _cels_lifecycle_phase CELS_UNUSED, uint32_t _cels_child_count CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3)
 
 #define _CEL_COMPOSABLE_4_ARGS(FnName, Type1, Arg1, Type2, Arg2, Type3, Arg3, Type4, Arg4) \
-    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4); \
+    static void _cels_body_##FnName(CelsSession *sess, int _cels_lifecycle_phase, uint32_t _cels_child_count, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4); \
+    typedef struct { Type1 a1; Type2 a2; Type3 a3; Type4 a4; } _cels_args_##FnName; \
+    static void _cels_exit_trampoline_##FnName(uint32_t childCount, void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_EXIT, childCount, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}, args ? args->a3 : (Type3){0}, args ? args->a4 : (Type4){0}); \
+    } \
+    static void _cels_detach_trampoline_##FnName(void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_DETACH, 0, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}, args ? args->a3 : (Type3){0}, args ? args->a4 : (Type4){0}); \
+    } \
+    static inline bool _cels_enter_##FnName(CelsSession *sess, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
+        if (sess == NULL) sess = CelsGetCurrentSession(); \
+        if (sess == NULL || sess->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return false; \
+        if (!CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
+            CelsExitGroup(sess); \
+            return false; \
+        } \
+        int _cels_phase = CelsIsFreshMount(sess) ? (CEL_LIFECYCLE_PHASE_ATTACH | CEL_LIFECYCLE_PHASE_ENTER) : CEL_LIFECYCLE_PHASE_ENTER; \
+        _cels_body_##FnName(sess, _cels_phase, 0, Arg1, Arg2, Arg3, Arg4); \
+        uint32_t flags = sess->groupLifecycleFlags[sess->currentDepth]; \
+        if (flags != 0) { \
+            _cels_args_##FnName *_args = (_cels_args_##FnName*)CelsResolveSlot(sess, sizeof(_cels_args_##FnName), &(const _cels_args_##FnName){ Arg1, Arg2, Arg3, Arg4 }); \
+            if (_args) { _args->a1 = Arg1; _args->a2 = Arg2; _args->a3 = Arg3; _args->a4 = Arg4; } \
+            void (*exitHook)(uint32_t, void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_EXIT) ? _cels_exit_trampoline_##FnName : NULL; \
+            void (*detachHook)(void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_DETACH) ? _cels_detach_trampoline_##FnName : NULL; \
+            if (CelsIsFreshMount(sess)) { \
+                CelsSessionRegisterLifecycleExt(sess, _args, NULL, exitHook, detachHook); \
+            } else { \
+                CelsSessionUpdateLifecycleExt(sess, _args, exitHook, detachHook); \
+            } \
+        } \
+        return true; \
+    } \
     static inline void FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        if (CelsEnterComposable(sess, CelsHashKey(#FnName))) { \
-            _cels_body_##FnName(Arg1, Arg2, Arg3, Arg4); \
+        if (_cels_enter_##FnName(sess, Arg1, Arg2, Arg3, Arg4)) { \
+            CelsExitGroup(sess); \
         } \
-        CelsExitGroup(sess); \
     } \
-    static void _cels_body_##FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4)
+    static void _cels_body_##FnName(CelsSession *sess CELS_UNUSED, int _cels_lifecycle_phase CELS_UNUSED, uint32_t _cels_child_count CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4)
 
 #define _CEL_COMPOSABLE_KEYED_0_ARG(FnName, IdName) \
-    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED); \
+    static void _cels_body_##FnName(CelsSession *sess, int _cels_lifecycle_phase, uint32_t _cels_child_count, uint64_t IdName); \
+    typedef struct { uint64_t id; } _cels_args_##FnName; \
+    static void _cels_exit_trampoline_##FnName(uint32_t childCount, void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_EXIT, childCount, args ? args->id : 0); \
+    } \
+    static void _cels_detach_trampoline_##FnName(void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_DETACH, 0, args ? args->id : 0); \
+    } \
+    static inline bool _cels_enter_##FnName(CelsSession *sess, uint64_t IdName) { \
+        if (sess == NULL) sess = CelsGetCurrentSession(); \
+        if (sess == NULL || sess->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return false; \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (!CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsExitGroup(sess); \
+            return false; \
+        } \
+        CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+        int _cels_phase = CelsIsFreshMount(sess) ? (CEL_LIFECYCLE_PHASE_ATTACH | CEL_LIFECYCLE_PHASE_ENTER) : CEL_LIFECYCLE_PHASE_ENTER; \
+        _cels_body_##FnName(sess, _cels_phase, 0, IdName); \
+        uint32_t flags = sess->groupLifecycleFlags[sess->currentDepth]; \
+        if (flags != 0) { \
+            _cels_args_##FnName *_args = (_cels_args_##FnName*)CelsResolveSlot(sess, sizeof(_cels_args_##FnName), &(const _cels_args_##FnName){ (uint64_t)IdName }); \
+            if (_args) { _args->id = (uint64_t)IdName; } \
+            void (*exitHook)(uint32_t, void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_EXIT) ? _cels_exit_trampoline_##FnName : NULL; \
+            void (*detachHook)(void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_DETACH) ? _cels_detach_trampoline_##FnName : NULL; \
+            if (CelsIsFreshMount(sess)) { \
+                CelsSessionRegisterLifecycleExt(sess, _args, NULL, exitHook, detachHook); \
+            } else { \
+                CelsSessionUpdateLifecycleExt(sess, _args, exitHook, detachHook); \
+            } \
+        } \
+        return true; \
+    } \
     static inline void FnName(uint64_t IdName) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
-        if (CelsEnterComposable(sess, _cels_grp_key)) { \
-            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
-            _cels_body_##FnName(IdName); \
+        if (_cels_enter_##FnName(sess, IdName)) { \
+            CelsExitGroup(sess); \
         } \
-        CelsExitGroup(sess); \
     } \
-    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED)
+    static void _cels_body_##FnName(CelsSession *sess CELS_UNUSED, int _cels_lifecycle_phase CELS_UNUSED, uint32_t _cels_child_count CELS_UNUSED, uint64_t IdName CELS_UNUSED)
 
 #define _CEL_COMPOSABLE_KEYED_1_ARG(FnName, IdName, Type1, Arg1) \
-    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1); \
+    static void _cels_body_##FnName(CelsSession *sess, int _cels_lifecycle_phase, uint32_t _cels_child_count, uint64_t IdName, Type1 Arg1); \
+    typedef struct { uint64_t id; Type1 a1; } _cels_args_##FnName; \
+    static void _cels_exit_trampoline_##FnName(uint32_t childCount, void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_EXIT, childCount, args ? args->id : 0, args ? args->a1 : (Type1){0}); \
+    } \
+    static void _cels_detach_trampoline_##FnName(void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_DETACH, 0, args ? args->id : 0, args ? args->a1 : (Type1){0}); \
+    } \
+    static inline bool _cels_enter_##FnName(CelsSession *sess, uint64_t IdName, Type1 Arg1) { \
+        if (sess == NULL) sess = CelsGetCurrentSession(); \
+        if (sess == NULL || sess->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return false; \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (!CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsExitGroup(sess); \
+            return false; \
+        } \
+        CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+        int _cels_phase = CelsIsFreshMount(sess) ? (CEL_LIFECYCLE_PHASE_ATTACH | CEL_LIFECYCLE_PHASE_ENTER) : CEL_LIFECYCLE_PHASE_ENTER; \
+        _cels_body_##FnName(sess, _cels_phase, 0, IdName, Arg1); \
+        uint32_t flags = sess->groupLifecycleFlags[sess->currentDepth]; \
+        if (flags != 0) { \
+            _cels_args_##FnName *_args = (_cels_args_##FnName*)CelsResolveSlot(sess, sizeof(_cels_args_##FnName), &(const _cels_args_##FnName){ (uint64_t)IdName, Arg1 }); \
+            if (_args) { _args->id = (uint64_t)IdName; _args->a1 = Arg1; } \
+            void (*exitHook)(uint32_t, void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_EXIT) ? _cels_exit_trampoline_##FnName : NULL; \
+            void (*detachHook)(void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_DETACH) ? _cels_detach_trampoline_##FnName : NULL; \
+            if (CelsIsFreshMount(sess)) { \
+                CelsSessionRegisterLifecycleExt(sess, _args, NULL, exitHook, detachHook); \
+            } else { \
+                CelsSessionUpdateLifecycleExt(sess, _args, exitHook, detachHook); \
+            } \
+        } \
+        return true; \
+    } \
     static inline void FnName(uint64_t IdName, Type1 Arg1) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
-        if (CelsEnterComposable(sess, _cels_grp_key)) { \
-            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
-            _cels_body_##FnName(IdName, Arg1); \
+        if (_cels_enter_##FnName(sess, IdName, Arg1)) { \
+            CelsExitGroup(sess); \
         } \
-        CelsExitGroup(sess); \
     } \
-    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1)
+    static void _cels_body_##FnName(CelsSession *sess CELS_UNUSED, int _cels_lifecycle_phase CELS_UNUSED, uint32_t _cels_child_count CELS_UNUSED, uint64_t IdName CELS_UNUSED, Type1 Arg1)
 
 #define _CEL_COMPOSABLE_KEYED_2_ARGS(FnName, IdName, Type1, Arg1, Type2, Arg2) \
-    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2); \
+    static void _cels_body_##FnName(CelsSession *sess, int _cels_lifecycle_phase, uint32_t _cels_child_count, uint64_t IdName, Type1 Arg1, Type2 Arg2); \
+    typedef struct { uint64_t id; Type1 a1; Type2 a2; } _cels_args_##FnName; \
+    static void _cels_exit_trampoline_##FnName(uint32_t childCount, void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_EXIT, childCount, args ? args->id : 0, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}); \
+    } \
+    static void _cels_detach_trampoline_##FnName(void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_DETACH, 0, args ? args->id : 0, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}); \
+    } \
+    static inline bool _cels_enter_##FnName(CelsSession *sess, uint64_t IdName, Type1 Arg1, Type2 Arg2) { \
+        if (sess == NULL) sess = CelsGetCurrentSession(); \
+        if (sess == NULL || sess->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return false; \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (!CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsExitGroup(sess); \
+            return false; \
+        } \
+        CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+        int _cels_phase = CelsIsFreshMount(sess) ? (CEL_LIFECYCLE_PHASE_ATTACH | CEL_LIFECYCLE_PHASE_ENTER) : CEL_LIFECYCLE_PHASE_ENTER; \
+        _cels_body_##FnName(sess, _cels_phase, 0, IdName, Arg1, Arg2); \
+        uint32_t flags = sess->groupLifecycleFlags[sess->currentDepth]; \
+        if (flags != 0) { \
+            _cels_args_##FnName *_args = (_cels_args_##FnName*)CelsResolveSlot(sess, sizeof(_cels_args_##FnName), &(const _cels_args_##FnName){ (uint64_t)IdName, Arg1, Arg2 }); \
+            if (_args) { _args->id = (uint64_t)IdName; _args->a1 = Arg1; _args->a2 = Arg2; } \
+            void (*exitHook)(uint32_t, void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_EXIT) ? _cels_exit_trampoline_##FnName : NULL; \
+            void (*detachHook)(void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_DETACH) ? _cels_detach_trampoline_##FnName : NULL; \
+            if (CelsIsFreshMount(sess)) { \
+                CelsSessionRegisterLifecycleExt(sess, _args, NULL, exitHook, detachHook); \
+            } else { \
+                CelsSessionUpdateLifecycleExt(sess, _args, exitHook, detachHook); \
+            } \
+        } \
+        return true; \
+    } \
     static inline void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
-        if (CelsEnterComposable(sess, _cels_grp_key)) { \
-            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
-            _cels_body_##FnName(IdName, Arg1, Arg2); \
+        if (_cels_enter_##FnName(sess, IdName, Arg1, Arg2)) { \
+            CelsExitGroup(sess); \
         } \
-        CelsExitGroup(sess); \
     } \
-    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2)
+    static void _cels_body_##FnName(CelsSession *sess CELS_UNUSED, int _cels_lifecycle_phase CELS_UNUSED, uint32_t _cels_child_count CELS_UNUSED, uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2)
 
 #define _CEL_COMPOSABLE_KEYED_3_ARGS(FnName, IdName, Type1, Arg1, Type2, Arg2, Type3, Arg3) \
-    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3); \
+    static void _cels_body_##FnName(CelsSession *sess, int _cels_lifecycle_phase, uint32_t _cels_child_count, uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3); \
+    typedef struct { uint64_t id; Type1 a1; Type2 a2; Type3 a3; } _cels_args_##FnName; \
+    static void _cels_exit_trampoline_##FnName(uint32_t childCount, void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_EXIT, childCount, args ? args->id : 0, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}, args ? args->a3 : (Type3){0}); \
+    } \
+    static void _cels_detach_trampoline_##FnName(void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_DETACH, 0, args ? args->id : 0, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}, args ? args->a3 : (Type3){0}); \
+    } \
+    static inline bool _cels_enter_##FnName(CelsSession *sess, uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
+        if (sess == NULL) sess = CelsGetCurrentSession(); \
+        if (sess == NULL || sess->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return false; \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (!CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsExitGroup(sess); \
+            return false; \
+        } \
+        CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+        int _cels_phase = CelsIsFreshMount(sess) ? (CEL_LIFECYCLE_PHASE_ATTACH | CEL_LIFECYCLE_PHASE_ENTER) : CEL_LIFECYCLE_PHASE_ENTER; \
+        _cels_body_##FnName(sess, _cels_phase, 0, IdName, Arg1, Arg2, Arg3); \
+        uint32_t flags = sess->groupLifecycleFlags[sess->currentDepth]; \
+        if (flags != 0) { \
+            _cels_args_##FnName *_args = (_cels_args_##FnName*)CelsResolveSlot(sess, sizeof(_cels_args_##FnName), &(const _cels_args_##FnName){ (uint64_t)IdName, Arg1, Arg2, Arg3 }); \
+            if (_args) { _args->id = (uint64_t)IdName; _args->a1 = Arg1; _args->a2 = Arg2; _args->a3 = Arg3; } \
+            void (*exitHook)(uint32_t, void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_EXIT) ? _cels_exit_trampoline_##FnName : NULL; \
+            void (*detachHook)(void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_DETACH) ? _cels_detach_trampoline_##FnName : NULL; \
+            if (CelsIsFreshMount(sess)) { \
+                CelsSessionRegisterLifecycleExt(sess, _args, NULL, exitHook, detachHook); \
+            } else { \
+                CelsSessionUpdateLifecycleExt(sess, _args, exitHook, detachHook); \
+            } \
+        } \
+        return true; \
+    } \
     static inline void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
-        if (CelsEnterComposable(sess, _cels_grp_key)) { \
-            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
-            _cels_body_##FnName(IdName, Arg1, Arg2, Arg3); \
+        if (_cels_enter_##FnName(sess, IdName, Arg1, Arg2, Arg3)) { \
+            CelsExitGroup(sess); \
         } \
-        CelsExitGroup(sess); \
     } \
-    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3)
+    static void _cels_body_##FnName(CelsSession *sess CELS_UNUSED, int _cels_lifecycle_phase CELS_UNUSED, uint32_t _cels_child_count CELS_UNUSED, uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3)
 
 #define _CEL_COMPOSABLE_KEYED_4_ARGS(FnName, IdName, Type1, Arg1, Type2, Arg2, Type3, Arg3, Type4, Arg4) \
-    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4); \
+    static void _cels_body_##FnName(CelsSession *sess, int _cels_lifecycle_phase, uint32_t _cels_child_count, uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4); \
+    typedef struct { uint64_t id; Type1 a1; Type2 a2; Type3 a3; Type4 a4; } _cels_args_##FnName; \
+    static void _cels_exit_trampoline_##FnName(uint32_t childCount, void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_EXIT, childCount, args ? args->id : 0, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}, args ? args->a3 : (Type3){0}, args ? args->a4 : (Type4){0}); \
+    } \
+    static void _cels_detach_trampoline_##FnName(void *instance, CelsSession *sess) { \
+        _cels_args_##FnName *args = (_cels_args_##FnName*)instance; \
+        _cels_body_##FnName(sess, CEL_LIFECYCLE_PHASE_DETACH, 0, args ? args->id : 0, args ? args->a1 : (Type1){0}, args ? args->a2 : (Type2){0}, args ? args->a3 : (Type3){0}, args ? args->a4 : (Type4){0}); \
+    } \
+    static inline bool _cels_enter_##FnName(CelsSession *sess, uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
+        if (sess == NULL) sess = CelsGetCurrentSession(); \
+        if (sess == NULL || sess->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return false; \
+        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
+        if (!CelsEnterComposable(sess, _cels_grp_key)) { \
+            CelsExitGroup(sess); \
+            return false; \
+        } \
+        CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
+        int _cels_phase = CelsIsFreshMount(sess) ? (CEL_LIFECYCLE_PHASE_ATTACH | CEL_LIFECYCLE_PHASE_ENTER) : CEL_LIFECYCLE_PHASE_ENTER; \
+        _cels_body_##FnName(sess, _cels_phase, 0, IdName, Arg1, Arg2, Arg3, Arg4); \
+        uint32_t flags = sess->groupLifecycleFlags[sess->currentDepth]; \
+        if (flags != 0) { \
+            _cels_args_##FnName *_args = (_cels_args_##FnName*)CelsResolveSlot(sess, sizeof(_cels_args_##FnName), &(const _cels_args_##FnName){ (uint64_t)IdName, Arg1, Arg2, Arg3, Arg4 }); \
+            if (_args) { _args->id = (uint64_t)IdName; _args->a1 = Arg1; _args->a2 = Arg2; _args->a3 = Arg3; _args->a4 = Arg4; } \
+            void (*exitHook)(uint32_t, void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_EXIT) ? _cels_exit_trampoline_##FnName : NULL; \
+            void (*detachHook)(void*, CelsSession*) = (flags & CELS_LIFECYCLE_FLAG_DETACH) ? _cels_detach_trampoline_##FnName : NULL; \
+            if (CelsIsFreshMount(sess)) { \
+                CelsSessionRegisterLifecycleExt(sess, _args, NULL, exitHook, detachHook); \
+            } else { \
+                CelsSessionUpdateLifecycleExt(sess, _args, exitHook, detachHook); \
+            } \
+        } \
+        return true; \
+    } \
     static inline void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
-        uint64_t _cels_grp_key = CelsKeyIndex(CelsHashKey(#FnName), (uint64_t)(IdName)); \
-        if (CelsEnterComposable(sess, _cels_grp_key)) { \
-            CelsSetActiveEntityId(sess, (uint64_t)(IdName)); \
-            _cels_body_##FnName(IdName, Arg1, Arg2, Arg3, Arg4); \
+        if (_cels_enter_##FnName(sess, IdName, Arg1, Arg2, Arg3, Arg4)) { \
+            CelsExitGroup(sess); \
         } \
-        CelsExitGroup(sess); \
     } \
-    static void _cels_body_##FnName(uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4)
+    static void _cels_body_##FnName(CelsSession *sess CELS_UNUSED, int _cels_lifecycle_phase CELS_UNUSED, uint32_t _cels_child_count CELS_UNUSED, uint64_t IdName CELS_UNUSED, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4)
 
 #define _CEL_GET_COMPOSABLE_MACRO(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, NAME, ...) NAME
+
+/* ========================================================================= */
+/* Composable Scoped Container (cel_scope)                                    */
+/* ========================================================================= */
+
+#define _CEL_SCOPE_0(FnName) \
+    for (int _cels_sonce = 1; \
+         _cels_sonce && _cels_enter_##FnName(CelsGetCurrentSession()); \
+         CelsExitGroup(CelsGetCurrentSession()), _cels_sonce = 0)
+
+#define _CEL_SCOPE_1(FnName, a1) \
+    for (int _cels_sonce = 1; \
+         _cels_sonce && _cels_enter_##FnName(CelsGetCurrentSession(), (a1)); \
+         CelsExitGroup(CelsGetCurrentSession()), _cels_sonce = 0)
+
+#define _CEL_SCOPE_2(FnName, a1, a2) \
+    for (int _cels_sonce = 1; \
+         _cels_sonce && _cels_enter_##FnName(CelsGetCurrentSession(), (a1), (a2)); \
+         CelsExitGroup(CelsGetCurrentSession()), _cels_sonce = 0)
+
+#define _CEL_SCOPE_3(FnName, a1, a2, a3) \
+    for (int _cels_sonce = 1; \
+         _cels_sonce && _cels_enter_##FnName(CelsGetCurrentSession(), (a1), (a2), (a3)); \
+         CelsExitGroup(CelsGetCurrentSession()), _cels_sonce = 0)
+
+#define _CEL_SCOPE_4(FnName, a1, a2, a3, a4) \
+    for (int _cels_sonce = 1; \
+         _cels_sonce && _cels_enter_##FnName(CelsGetCurrentSession(), (a1), (a2), (a3), (a4)); \
+         CelsExitGroup(CelsGetCurrentSession()), _cels_sonce = 0)
+
+#define _CEL_SCOPE_5(FnName, a1, a2, a3, a4, a5) \
+    for (int _cels_sonce = 1; \
+         _cels_sonce && _cels_enter_##FnName(CelsGetCurrentSession(), (a1), (a2), (a3), (a4), (a5)); \
+         CelsExitGroup(CelsGetCurrentSession()), _cels_sonce = 0)
+
+/**
+ * @def cel_scope
+ * @brief Opens an inline trailing-block scope for any declared CEL_Composable.
+ *
+ * What it does:
+ * Enters the composable's slot group, executes its body (attaching components,
+ * setting ambient context, and registering before_children lifecycle hooks),
+ * evaluates the caller's inline child block { ... }, and on block exit calls
+ * CelsExitGroup() which automatically executes after_children(childCount).
+ *
+ * Example:
+ * @code
+ *     cel_scope(CelsLayout, CEL_LAYOUT_DIR_VERT) {
+ *         VolumeSlider(settings);
+ *         MuteToggle(settings);
+ *     }
+ * @endcode
+ */
+#define cel_scope(...) \
+    _CEL_GET_MACRO_6(__VA_ARGS__, _CEL_SCOPE_5, _CEL_SCOPE_4, _CEL_SCOPE_3, _CEL_SCOPE_2, _CEL_SCOPE_1, _CEL_SCOPE_0)(__VA_ARGS__)
 
 /**
  * @def CEL_Composable
@@ -703,118 +1063,173 @@ extern "C" {
 /* Pure Lifecycles (CEL_Lifecycle & cel_lifecycle)                           */
 /* ========================================================================= */
 
-#define CEL_LIFECYCLE_PHASE_MOUNT   1
-#define CEL_LIFECYCLE_PHASE_UNMOUNT 2
+#ifndef CEL_LIFECYCLE_PHASE_ATTACH
+#define CEL_LIFECYCLE_PHASE_ATTACH          (1 << 0)
+#define CEL_LIFECYCLE_PHASE_ENTER           (1 << 1)
+#define CEL_LIFECYCLE_PHASE_EXIT            (1 << 2)
+#define CEL_LIFECYCLE_PHASE_DETACH          (1 << 3)
+#endif
+
+/* Compatibility aliases */
+#define CEL_LIFECYCLE_PHASE_MOUNT           CEL_LIFECYCLE_PHASE_ATTACH
+#define CEL_LIFECYCLE_PHASE_BEFORE_CHILDREN CEL_LIFECYCLE_PHASE_ENTER
+#define CEL_LIFECYCLE_PHASE_AFTER_CHILDREN  CEL_LIFECYCLE_PHASE_EXIT
+#define CEL_LIFECYCLE_PHASE_UNMOUNT         CEL_LIFECYCLE_PHASE_DETACH
+#define CEL_LIFECYCLE_PHASE_START           CEL_LIFECYCLE_PHASE_ENTER
+#define CEL_LIFECYCLE_PHASE_END             CEL_LIFECYCLE_PHASE_EXIT
 
 /**
- * @def mount
- * @brief Encloses code executed exclusively during node mounting.
- *
- * What it does:
- * Evaluates the enclosed block only during the CEL_LIFECYCLE_PHASE_MOUNT phase, which
- * occurs exactly once when the parent composable is first entered into the session tree.
- *
- * Where to use:
- * Inside a CEL_Lifecycle declaration body.
+ * @def on_attach
+ * @def attach
+ * @brief Encloses code executed once when the composable is first created in the tree.
  */
-#define mount   if (_cels_lifecycle_phase == CEL_LIFECYCLE_PHASE_MOUNT)
+#define on_attach            if ((_cels_lifecycle_phase) & CEL_LIFECYCLE_PHASE_ATTACH)
+#define attach               on_attach
+#define mount                if ((_cels_lifecycle_phase) & CEL_LIFECYCLE_PHASE_ATTACH)
 
 /**
+ * @def enter
+ * @def before_children
+ * @def start
+ * @brief Encloses code executed at scope entry before children execute.
+ */
+#define enter                if ((_cels_lifecycle_phase) & CEL_LIFECYCLE_PHASE_ENTER)
+#define before_children      if ((_cels_lifecycle_phase) & CEL_LIFECYCLE_PHASE_ENTER)
+#define start                enter
+
+/**
+ * @def on_exit
+ * @def exit
+ * @def after_children
+ * @def end
+ * @brief Encloses code executed at scope exit after children have executed.
+ */
+#define on_exit(var) \
+    for (uint32_t var = _cels_child_count, _cels_eonce = CelsSessionFlagLifecycleExit(CelsGetCurrentSession()); \
+         ((_cels_lifecycle_phase) & CEL_LIFECYCLE_PHASE_EXIT) && _cels_eonce; \
+         _cels_eonce = 0)
+#define exit(var)            on_exit(var)
+#define after_children(var)  for (uint32_t var = _cels_child_count, _cels_aonce = 1; ((_cels_lifecycle_phase) & CEL_LIFECYCLE_PHASE_EXIT) && _cels_aonce; _cels_aonce = 0)
+#define end(var)             on_exit(var)
+
+/**
+ * @def on_detach
+ * @def detach
  * @def unmount
- * @brief Encloses code executed exclusively during node unmounting/destruction.
- *
- * What it does:
- * Evaluates the enclosed block only during the CEL_LIFECYCLE_PHASE_UNMOUNT phase, which
- * occurs when the parent composable is pruned, excluded, or the session is destroyed.
- *
- * Where to use:
- * Inside a CEL_Lifecycle declaration body.
+ * @brief Encloses code executed when the composable is omitted / removed from the tree.
  */
-#define unmount if (_cels_lifecycle_phase == CEL_LIFECYCLE_PHASE_UNMOUNT)
+#define on_detach \
+    for (int _cels_donce = CelsSessionFlagLifecycleDetach(CelsGetCurrentSession()); \
+         ((_cels_lifecycle_phase) & CEL_LIFECYCLE_PHASE_DETACH) && _cels_donce; \
+         _cels_donce = 0)
+#define detach               on_detach
+#define unmount              if ((_cels_lifecycle_phase) & CEL_LIFECYCLE_PHASE_DETACH)
 
 /**
  * @def CEL_Lifecycle
- * @brief Declares a reusable, parameterized lifecycle controller with mount and unmount blocks.
+ * @brief Declares a reusable, parameterized lifecycle controller with mount, before_children, after_children, and unmount blocks.
  *
  * What it does:
- * Defines a named lifecycle handler that pairs resource acquisition on mount with
- * guaranteed release on unmount. Unmount destructors are executed in reverse order of mounting.
+ * Defines a named lifecycle handler that pairs resource acquisition on mount, frame setup before children,
+ * child-count reflection after children, and guaranteed release on unmount.
+ * Unmount destructors are executed in reverse order of mounting.
  *
  * Expected outcome:
- * Manages external non-declarative resources (file handles, audio streams, socket connections,
- * native window hooks) tied directly to a composable's lifetime in the slot table.
+ * Manages external non-declarative resources, child settlement, and layout controllers
+ * tied directly to a composable's lifetime in the slot table.
  *
  * Where to use:
  * Declare at file/global scope. Attach within a composable using cel_lifecycle().
  *
  * Example:
  * @code
- *     CEL_Lifecycle(NetworkStreamLifecycle, SocketHandle *socket) {
+ *     CEL_Lifecycle(DialogLifecycle, DialogState *dialog) {
  *         mount {
- *             SocketConnect(socket, "api.example.com", 443);
+ *             printf("Dialog appeared!\n");
+ *         }
+ *         before_children {
+ *             cel_set_context(UITheme, &DarkTheme);
+ *         }
+ *         after_children(childCount) {
+ *             dialog->renderedItems = childCount;
  *         }
  *         unmount {
- *             SocketDisconnect(socket);
+ *             printf("Dialog destroyed!\n");
  *         }
  *     }
  *
- *     CEL_Composable(NetworkWidget, SocketHandle *socket) {
- *         cel_lifecycle(NetworkStreamLifecycle, socket);
- *         // widget UI logic
+ *     CEL_Composable(MyDialog, DialogState *dialog) {
+ *         cel_lifecycle(DialogLifecycle, dialog);
+ *         // children composables
  *     }
  * @endcode
  */
 #define _CEL_LIFECYCLE_1(Name) \
-    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase); \
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, uint32_t _cels_child_count CELS_UNUSED); \
+    static void _cels_lifecycle_end_##Name(uint32_t childCount, void *instance, CelsSession *session) { \
+        (void)instance; (void)session; \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_AFTER_CHILDREN, childCount); \
+    } \
     static void _cels_lifecycle_clean_##Name(void *instance, CelsSession *session) { \
         (void)instance; (void)session; \
-        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_UNMOUNT); \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_UNMOUNT, 0); \
     } \
     static inline void _cels_lifecycle_attach_##Name(CelsSession *session, void *param) { \
         (void)param; \
         if (session == NULL || session->currentDepth == 0) return; \
         if (CelsIsFreshMount(session)) { \
-            _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_MOUNT); \
-            CelsSessionRegisterLifecycle(session, (void*)1, NULL, _cels_lifecycle_clean_##Name); \
+            _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_MOUNT, 0); \
+            CelsSessionRegisterLifecycleExt(session, (void*)1, NULL, _cels_lifecycle_end_##Name, _cels_lifecycle_clean_##Name); \
         } else { \
-            CelsSessionUpdateLifecycle(session, (void*)1, _cels_lifecycle_clean_##Name); \
+            CelsSessionUpdateLifecycleExt(session, (void*)1, _cels_lifecycle_end_##Name, _cels_lifecycle_clean_##Name); \
         } \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_BEFORE_CHILDREN, 0); \
     } \
-    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase)
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, uint32_t _cels_child_count CELS_UNUSED)
 
 #define _CEL_LIFECYCLE_2(Name, ParamDecl) \
-    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, ParamDecl); \
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, uint32_t _cels_child_count CELS_UNUSED, ParamDecl); \
+    static void _cels_lifecycle_end_##Name(uint32_t childCount, void *instance, CelsSession *session) { \
+        (void)session; \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_AFTER_CHILDREN, childCount, instance); \
+    } \
     static void _cels_lifecycle_clean_##Name(void *instance, CelsSession *session) { \
         (void)session; \
-        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_UNMOUNT, instance); \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_UNMOUNT, 0, instance); \
     } \
     static inline void _cels_lifecycle_attach_##Name(CelsSession *session, void *param) { \
         if (session == NULL || session->currentDepth == 0) return; \
         if (CelsIsFreshMount(session)) { \
-            _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_MOUNT, param); \
-            CelsSessionRegisterLifecycle(session, param, NULL, _cels_lifecycle_clean_##Name); \
+            _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_MOUNT, 0, param); \
+            CelsSessionRegisterLifecycleExt(session, param, NULL, _cels_lifecycle_end_##Name, _cels_lifecycle_clean_##Name); \
         } else { \
-            CelsSessionUpdateLifecycle(session, param, _cels_lifecycle_clean_##Name); \
+            CelsSessionUpdateLifecycleExt(session, param, _cels_lifecycle_end_##Name, _cels_lifecycle_clean_##Name); \
         } \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_BEFORE_CHILDREN, 0, param); \
     } \
-    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, ParamDecl)
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, uint32_t _cels_child_count CELS_UNUSED, ParamDecl)
 
 #define _CEL_LIFECYCLE_3(Name, ParamType, ParamName) \
-    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, ParamType ParamName); \
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, uint32_t _cels_child_count CELS_UNUSED, ParamType ParamName); \
+    static void _cels_lifecycle_end_##Name(uint32_t childCount, void *instance, CelsSession *session) { \
+        (void)session; \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_AFTER_CHILDREN, childCount, (ParamType)(uintptr_t)instance); \
+    } \
     static void _cels_lifecycle_clean_##Name(void *instance, CelsSession *session) { \
         (void)session; \
-        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_UNMOUNT, (ParamType)(uintptr_t)instance); \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_UNMOUNT, 0, (ParamType)(uintptr_t)instance); \
     } \
     static inline void _cels_lifecycle_attach_##Name(CelsSession *session, ParamType param) { \
         if (session == NULL || session->currentDepth == 0) return; \
         if (CelsIsFreshMount(session)) { \
-            _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_MOUNT, param); \
-            CelsSessionRegisterLifecycle(session, (void*)(uintptr_t)param, NULL, _cels_lifecycle_clean_##Name); \
+            _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_MOUNT, 0, param); \
+            CelsSessionRegisterLifecycleExt(session, (void*)(uintptr_t)param, NULL, _cels_lifecycle_end_##Name, _cels_lifecycle_clean_##Name); \
         } else { \
-            CelsSessionUpdateLifecycle(session, (void*)(uintptr_t)param, _cels_lifecycle_clean_##Name); \
+            CelsSessionUpdateLifecycleExt(session, (void*)(uintptr_t)param, _cels_lifecycle_end_##Name, _cels_lifecycle_clean_##Name); \
         } \
+        _cels_lifecycle_impl_##Name(CEL_LIFECYCLE_PHASE_BEFORE_CHILDREN, 0, param); \
     } \
-    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, ParamType ParamName)
+    static void _cels_lifecycle_impl_##Name(int _cels_lifecycle_phase, uint32_t _cels_child_count CELS_UNUSED, ParamType ParamName)
 
 #define CEL_Lifecycle(...) \
     _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_LIFECYCLE_3, _CEL_LIFECYCLE_2, _CEL_LIFECYCLE_1)(__VA_ARGS__)
@@ -861,7 +1276,6 @@ extern "C" {
 
 #define CEL_Attach cel_attach
 #define CEL_GetState cel_get_state
-#define CEL_None NULL
 
 /* ========================================================================= */
 /* Addressable Persistent State (cel_remember_state)                         */
@@ -1176,9 +1590,6 @@ extern "C" {
  * @endcode
  */
 #define cel_create_session(engine, name, profile) \
-    CelsEngineCreateSession((engine), (name), (profile))
-
-#define cel_engine_create_session(engine, name, profile) \
     CelsEngineCreateSession((engine), (name), (profile))
 
 /**
@@ -1939,7 +2350,6 @@ static inline CelsResult cel_is_last_child(bool *outIsLast)
 
 /**
  * @def cel_get_context
- * @def cel_getContext
  * @brief Reads ambient context up the ancestor call tree with optional CelsResult protection.
  *
  * Supported Signatures:
@@ -1950,8 +2360,6 @@ static inline CelsResult cel_is_last_child(bool *outIsLast)
 #define cel_get_context(...) \
     _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_GET_CONTEXT_3, _CEL_GET_CONTEXT_2, _CEL_GET_CONTEXT_1)(__VA_ARGS__)
 
-#define cel_getContext(...) cel_get_context(__VA_ARGS__)
-
 #define _CEL_SET_CONTEXT_2(Type, ptr) \
     CelsContextPush(CelsGetCurrentSession(), CelsHashKey(#Type), (const void *)(ptr))
 
@@ -1960,7 +2368,6 @@ static inline CelsResult cel_is_last_child(bool *outIsLast)
 
 /**
  * @def cel_set_context
- * @def cel_setContext
  * @brief Attaches ambient context to the active composable scope.
  *
  * Automatically restores ancestor scope when the current composable exits. Zero heap allocations.
@@ -1971,8 +2378,6 @@ static inline CelsResult cel_is_last_child(bool *outIsLast)
 #define cel_set_context(...) \
     _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_SET_CONTEXT_3, _CEL_SET_CONTEXT_2, _UNUSED)(__VA_ARGS__)
 
-#define cel_setContext(...) cel_set_context(__VA_ARGS__)
-
 /**
  * @def cel_context
  * @brief Unified ambient context API alias (resolves read or write depending on parameter count).
@@ -1980,188 +2385,6 @@ static inline CelsResult cel_is_last_child(bool *outIsLast)
 #define cel_context(...) \
     _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_SET_CONTEXT_3, _CEL_SET_CONTEXT_2, _CEL_GET_CONTEXT_1)(__VA_ARGS__)
 
-/* ========================================================================= */
-/* Core Container Scoping Helper (cel_container)                             */
-/* ========================================================================= */
-
-/**
- * @typedef CelsContainerStartHook
- * @brief Lifecycle callback executed immediately after entering a container scope.
- *
- * @param userData Opaque user context or layout parameters passed into cel_container.
- */
-typedef void (*CelsContainerStartHook)(void *userData);
-
-/**
- * @typedef CelsContainerEndHook
- * @brief Lifecycle callback executed immediately after child composables settle.
- *
- * Receives the exact count of direct child composables executed within the container scope,
- * allowing layout and container engines to perform instant post-layout index clamping,
- * geometry allocation, or directional focus navigation.
- *
- * @param childCount Number of direct child composables executed inside this container.
- * @param userData   Opaque user context or layout parameters passed into cel_container.
- */
-typedef void (*CelsContainerEndHook)(uint32_t childCount, void *userData);
-
-/**
- * @struct CelsContainerScope
- * @brief RAII scope tracking structure for cel_container inline blocks.
- *
- * Sized and ordered from largest alignment to smallest alignment (descending field
- * ordering) to eliminate structure padding and maintain 32-byte cache alignment.
- */
-typedef struct CelsContainerScope {
-    CelsSession           *session;     /**< Active CelsSession pointer (8 bytes). */
-    CelsContainerEndHook   onGroupEnd;  /**< Post-children completion hook (8 bytes). */
-    void                  *userData;    /**< Opaque user or layout parameters (8 bytes). */
-    uint8_t                entered;     /**< Single-iteration loop guard flag (1 byte). */
-    uint8_t                reserved[7]; /**< Alignment padding to 32 bytes (7 bytes). */
-} CelsContainerScope;
-
-/**
- * @brief Enters a container group scope in the session slot table.
- *
- * Resolves the ambient session, sets up the scope RAII tracking struct, enters the
- * composable group with the specified 64-bit key, and executes the onGroupStart hook.
- *
- * @param session       Active session pointer (if NULL, resolves via CelsGetCurrentSession()).
- * @param key           64-bit group key hash.
- * @param onGroupStart  Optional callback invoked on container start.
- * @param onGroupEnd    Optional callback invoked on container exit.
- * @param userData      Opaque user context passed to start and end hooks.
- * @param[out] outScope Pointer to caller-allocated CelsContainerScope structure.
- * @return True if successfully entered; false on failure or session unavailable.
- */
-static inline bool CelsContainerScopeEnter(
-    CelsSession           *session,
-    uint64_t               key,
-    CelsContainerStartHook onGroupStart,
-    CelsContainerEndHook   onGroupEnd,
-    void                  *userData,
-    CelsContainerScope    *outScope)
-{
-    if (session == NULL) session = CelsGetCurrentSession();
-    if (session == NULL || outScope == NULL) return false;
-    outScope->session = session;
-    outScope->entered = 1;
-    outScope->onGroupEnd = onGroupEnd;
-    outScope->userData = userData;
-
-    if (!CelsEnterComposable(session, key)) {
-        return false;
-    }
-    if (onGroupStart != NULL) {
-        onGroupStart(userData);
-    }
-    return true;
-}
-
-/**
- * @brief Exits a container group scope, delivering settled child metrics to onGroupEnd.
- *
- * Queries the frame-accurate settled child counter from the session's child counter stack,
- * delivers the count and userData to onGroupEnd if registered, and invokes CelsExitGroup().
- *
- * @param scope Pointer to active CelsContainerScope.
- */
-static inline void CelsContainerScopeExit(CelsContainerScope *scope)
-{
-    if (scope != NULL && scope->session != NULL) {
-        if (scope->onGroupEnd != NULL) {
-            uint32_t childCount = 0;
-            if (scope->session->currentDepth > 0) {
-                uint32_t depth = scope->session->currentDepth - 1;
-                childCount = scope->session->childCounterStack[depth];
-            }
-            scope->onGroupEnd(childCount, scope->userData);
-        }
-        CelsExitGroup(scope->session);
-    }
-}
-
-#define _CEL_CONTAINER_4(Name, onStart, onEnd, userData) \
-    for (CelsContainerScope _cels_cscope = { 0 }; \
-         !_cels_cscope.entered && CelsContainerScopeEnter(CelsGetCurrentSession(), CelsHashKey(#Name), \
-                                                          (CelsContainerStartHook)(onStart), \
-                                                          (CelsContainerEndHook)(onEnd), \
-                                                          (void*)(userData), &_cels_cscope); \
-         CelsContainerScopeExit(&_cels_cscope))
-
-#define _CEL_CONTAINER_3(Name, onStart, onEnd) \
-    _CEL_CONTAINER_4(Name, onStart, onEnd, NULL)
-
-#define _CEL_CONTAINER_2(Name, onStart) \
-    _CEL_CONTAINER_4(Name, onStart, NULL, NULL)
-
-#define _CEL_CONTAINER_1(Name) \
-    _CEL_CONTAINER_4(Name, NULL, NULL, NULL)
-
-/**
- * @def cel_container
- * @brief Establishes an inline container group in the slot table with optional group hooks.
- *
- * What it does:
- * Enters a composable group in the slot table for the duration of the enclosed block,
- * automatically recording child metrics (cel_child_index, cel_child_count, isFirst, isLast).
- * Supports optional onGroupStart and onGroupEnd lifecycle hooks for custom layout engines.
- * Zero heap allocations.
- *
- * Signatures:
- * - cel_container(Name)
- * - cel_container(Name, onGroupStart)
- * - cel_container(Name, onGroupStart, onGroupEnd)
- * - cel_container(Name, onGroupStart, onGroupEnd, userData)
- *
- * Hook signatures:
- * - void onGroupStart(void *userData);
- * - void onGroupEnd(uint32_t childCount, void *userData);
- *
- * Example:
- * @code
- *     cel_container(Toolbar) {
- *         Button("File");
- *         Button("Edit");
- *     }
- * @endcode
- */
-#define cel_container(...) \
-    _CEL_GET_MACRO_4(__VA_ARGS__, _CEL_CONTAINER_4, _CEL_CONTAINER_3, _CEL_CONTAINER_2, _CEL_CONTAINER_1)(__VA_ARGS__)
-
-#define _CEL_CONTAINER_KEYED_5(Name, id, onStart, onEnd, userData) \
-    for (CelsContainerScope _cels_cscope = { 0 }; \
-         !_cels_cscope.entered && CelsContainerScopeEnter(CelsGetCurrentSession(), CelsKeyIndex(CelsHashKey(#Name), (uint64_t)(id)), \
-                                                          (CelsContainerStartHook)(onStart), \
-                                                          (CelsContainerEndHook)(onEnd), \
-                                                          (void*)(userData), &_cels_cscope); \
-         CelsContainerScopeExit(&_cels_cscope))
-
-#define _CEL_CONTAINER_KEYED_4(Name, id, onStart, onEnd) \
-    _CEL_CONTAINER_KEYED_5(Name, id, onStart, onEnd, NULL)
-
-#define _CEL_CONTAINER_KEYED_3(Name, id, onStart) \
-    _CEL_CONTAINER_KEYED_5(Name, id, onStart, NULL, NULL)
-
-#define _CEL_CONTAINER_KEYED_2(Name, id) \
-    _CEL_CONTAINER_KEYED_5(Name, id, NULL, NULL, NULL)
-
-/**
- * @def cel_container_keyed
- * @brief Establishes an inline container group in the slot table with an explicit 64-bit ID.
- *
- * Identical to cel_container, but derives its slot table identity by compounding the
- * symbolic Name with an explicit 64-bit identifier (via CelsKeyIndex(CelsHashKey(#Name), id)),
- * enabling safe reconciliation of dynamic container lists or entity-bound containers.
- *
- * Signatures:
- * - cel_container_keyed(Name, id)
- * - cel_container_keyed(Name, id, onGroupStart)
- * - cel_container_keyed(Name, id, onGroupStart, onGroupEnd)
- * - cel_container_keyed(Name, id, onGroupStart, onGroupEnd, userData)
- */
-#define cel_container_keyed(...) \
-    _CEL_GET_MACRO_5(__VA_ARGS__, _CEL_CONTAINER_KEYED_5, _CEL_CONTAINER_KEYED_4, _CEL_CONTAINER_KEYED_3, _CEL_CONTAINER_KEYED_2, _UNUSED)(__VA_ARGS__)
 
 /* ========================================================================= */
 /* Composable Identity, Keys & Components (cel_key / CEL_Entity / cel_has)   */

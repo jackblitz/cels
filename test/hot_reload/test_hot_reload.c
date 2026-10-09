@@ -230,18 +230,17 @@ CEL_Composition(TestAppRoot, void *userData) {
     assert(mod->value == 4242);
 }
 
-static void TestApp_OnStart(CelsEngine *engine)
+static void TestApp_OnStart(CelsSession *session)
 {
     s_testAppStartFired++;
     static CustomAppTestModule mod = { .value = 4242 };
-    cel_engine_set_context(engine, CustomAppTestModule, &mod);
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+    CEL_RegisterModule(session, CustomAppTestModule, &mod);
     cel_attach(session, TestAppRoot);
 }
 
-static void TestApp_OnEnd(CelsEngine *engine)
+static void TestApp_OnEnd(CelsSession *session)
 {
-    (void)engine;
+    (void)session;
     s_testAppEndFired++;
 }
 
@@ -331,15 +330,15 @@ static void TestDynamicAppLoader(void)
 static int s_staticAppStartFired = 0;
 static int s_staticAppEndFired = 0;
 
-static void StaticTestApp_OnStart(CelsEngine *engine)
+static void StaticTestApp_OnStart(CelsSession *session)
 {
-    (void)engine;
+    (void)session;
     s_staticAppStartFired++;
 }
 
-static void StaticTestApp_OnEnd(CelsEngine *engine)
+static void StaticTestApp_OnEnd(CelsSession *session)
 {
-    (void)engine;
+    (void)session;
     s_staticAppEndFired++;
 }
 

@@ -103,8 +103,7 @@ CEL_Composition(AppRoot) {
     Greeting();
 }
 
-static void App_OnStart(CelsEngine *engine) {
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+static void App_OnStart(CelsSession *session) {
     cel_attach(session, AppRoot);
 }
 

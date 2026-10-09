@@ -83,6 +83,15 @@
 #define CELS_FLAG_CONTAINS_INVALIDATED (1u << 1)
 #define CELS_FLAG_FRESH_MOUNT (1u << 2)
 
+#define CEL_LIFECYCLE_PHASE_ATTACH (1 << 0)
+#define CEL_LIFECYCLE_PHASE_ENTER  (1 << 1)
+#define CEL_LIFECYCLE_PHASE_EXIT   (1 << 2)
+#define CEL_LIFECYCLE_PHASE_DETACH (1 << 3)
+
+#define CELS_LIFECYCLE_FLAG_NONE   0u
+#define CELS_LIFECYCLE_FLAG_EXIT   (1u << 0)
+#define CELS_LIFECYCLE_FLAG_DETACH (1u << 1)
+
 #define CELS_SESSION_MAGIC 0x53455353u /* 'SESS' */
 
 /* Forward declarations */
@@ -165,6 +174,7 @@ typedef struct CelsCleanupHook {
     uint64_t groupKey;
     uint32_t groupId;
     void *instance;
+    void (*onEnd)(uint32_t childCount, void *instance, CelsSession *session);
     void (*onDestroy)(void *instance, CelsSession *session);
 } CelsCleanupHook;
 
@@ -349,9 +359,15 @@ struct CelsSession {
     /* Generic user context pointer */
     void *userData;
 
+#ifndef CELS_MAX_ROOT_CONTEXTS
+#define CELS_MAX_ROOT_CONTEXTS 8u
+#endif
+
     /* Ambient context scope stack (top of call-stack linked list) */
     CelsScopeNode *ambientScope;
     CelsScopeNode *ambientScopeStack[CELS_MAX_DEPTH];
+    CelsScopeNode  rootContextNodes[CELS_MAX_ROOT_CONTEXTS];
+    uint32_t       rootContextCount;
 
     /* Declarative entity tracking stack */
     CelsEntityTracker *currentEntityTracker;
@@ -367,6 +383,10 @@ struct CelsSession {
     /* Post-recomposition frame completion hook */
     void (*postRecomposeHook)(struct CelsSession *session, void *userData);
     void *postRecomposeUserData;
+
+    /* Active lifecycle execution phase & active group flags */
+    int currentPhase;
+    uint8_t groupLifecycleFlags[CELS_MAX_DEPTH];
 };
 
 typedef const void *(*CelsEcsLookupFn)(uint64_t entityId, uint64_t typeKey, void *userData);
@@ -477,6 +497,40 @@ void CelsSessionRegisterLifecycle(CEL_Session *s,
 void CelsSessionUpdateLifecycle(CEL_Session *s,
                                 void *instance,
                                 void (*onDestroy)(void *instance, CEL_Session *s));
+
+/**
+ * Registers lifecycle creation, group exit, and destruction callbacks for an active group node.
+ *
+ * Invokes onCreate immediately if non-NULL. When all direct children finish and the group exits,
+ * onEnd is invoked with the settled childCount. When the group node is pruned or unmounted,
+ * onDestroy will be invoked in reverse mounting order.
+ *
+ * @param s         Target session. Non-NULL.
+ * @param instance  User resource handle or object pointer. Can be NULL.
+ * @param onCreate  Optional setup callback invoked on mount. Safe if NULL.
+ * @param onEnd     Optional callback invoked each frame when group exits after children. Safe if NULL.
+ * @param onDestroy Destructor callback invoked on unmount or session destruction. Safe if NULL.
+ */
+void CelsSessionRegisterLifecycleExt(CEL_Session *s,
+                                     void *instance,
+                                     void (*onCreate)(void *instance, CEL_Session *s),
+                                     void (*onEnd)(uint32_t childCount, void *instance, CEL_Session *s),
+                                     void (*onDestroy)(void *instance, CEL_Session *s));
+
+/**
+ * Updates lifecycle callback pointers for a remounted node without re-running onCreate.
+ *
+ * Used after hot-reload or remount to refresh code pointers to onEnd and onDestroy handlers.
+ *
+ * @param s         Target session. Non-NULL.
+ * @param instance  User resource handle or object pointer.
+ * @param onEnd     Updated onEnd callback pointer. Safe if NULL.
+ * @param onDestroy Updated destructor callback pointer. Safe if NULL.
+ */
+void CelsSessionUpdateLifecycleExt(CEL_Session *s,
+                                   void *instance,
+                                   void (*onEnd)(uint32_t childCount, void *instance, CEL_Session *s),
+                                   void (*onDestroy)(void *instance, CEL_Session *s));
 
 /* ========================================================================= */
 /* Session Lifecycle Functions                                               */
@@ -1041,4 +1095,26 @@ static inline uint32_t CelsGetMaxCleanups(void)
 {
     return CELS_MAX_CLEANUPS;
 }
+
+static inline int CelsSessionFlagLifecycleExit(CelsSession *s)
+{
+    if (s && s->currentDepth < CELS_MAX_DEPTH) {
+        s->groupLifecycleFlags[s->currentDepth] |= CELS_LIFECYCLE_FLAG_EXIT;
+    }
+    return 1;
+}
+
+static inline int CelsSessionFlagLifecycleDetach(CelsSession *s)
+{
+    if (s && s->currentDepth < CELS_MAX_DEPTH) {
+        s->groupLifecycleFlags[s->currentDepth] |= CELS_LIFECYCLE_FLAG_DETACH;
+    }
+    return 1;
+}
+
+static inline int CelsSessionGetPhase(const CelsSession *s)
+{
+    return s ? s->currentPhase : CEL_LIFECYCLE_PHASE_ENTER;
+}
+
 

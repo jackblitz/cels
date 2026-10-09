@@ -111,10 +111,9 @@ cel_signal(cel_get_session(&engine, "hud"), DamageSignal, {
 ```
 
 > [!TIP]
-> Inside your application `onStart`, create or retrieve the session via `cel_engine_create_session`:
+> Inside your application `onStart`, the host passes the root session directly:
 > ```c
-> static void App_OnStart(CelsEngine *engine) {
->     CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+> static void App_OnStart(CelsSession *session) {
 >     cel_attach(session, WindowComposition, WindowEval);
 > }
 > ```

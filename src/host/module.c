@@ -545,9 +545,9 @@ bool CelsAppModuleLoadEntryInternal(CelsAppModule *app, const char *libraryPath,
             app->def->setSession(session);
         }
 
-        /* Execute onStart: developer creates session and attaches compositions */
+        /* Execute onStart: developer attaches compositions to root session */
         if (autoStart && app->def->onStart != NULL) {
-            app->def->onStart(session->engine);
+            app->def->onStart(session);
             if (session->attachedCount > 0) {
                 app->attachedKey = session->attachedCompositions[0].key;
             }
@@ -681,9 +681,9 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
 
         /* Refresh function pointers: invoke onReload if defined, or fallback to onStart */
         if (app->def->onReload != NULL) {
-            app->def->onReload(session->engine);
+            app->def->onReload(session);
         } else if (app->def->onStart != NULL) {
-            app->def->onStart(session->engine);
+            app->def->onStart(session);
         }
         if (session->attachedCount > 0) {
             app->attachedKey = session->attachedCompositions[0].key;
@@ -729,7 +729,7 @@ void CelsAppModuleUnload(CelsAppModule *app, CelsSession *session)
     CelsUnregisterActiveModule(app);
 
     if (app->def != NULL && app->def->onEnd != NULL && session != NULL) {
-        app->def->onEnd(session->engine);
+        app->def->onEnd(session);
     }
 
     if (app->attachedKey != 0 && session != NULL) {
@@ -935,7 +935,7 @@ CelsResult CelsAppLoad(CelsApp *app, CelsEngine *engine, CelsSession *session, c
  * @param engine      Owning host engine. Non-NULL.
  * @param session     Target session. Non-NULL.
  * @param dllPath     Path or target name of the dynamic library. Non-NULL.
- * @param entrySymbol Exported entry symbol (defaults to "CelsGetAppDef" if NULL).
+ * @param entrySymbol Exported entry symbol (defaults to "CelsGetAppManifest", fallback "CelsGetAppDef" if NULL).
  * @return CELS_OK on success, or CelsResult error code.
  */
 CelsResult CelsAppLoadEntry(CelsApp *app, CelsEngine *engine, CelsSession *session, const char *dllPath, const char *entrySymbol)
@@ -1026,7 +1026,7 @@ CelsResult CelsAppStart(CelsApp *app)
             def->setSession(app->session);
         }
         if (def->onStart != NULL) {
-            def->onStart(app->engine);
+            def->onStart(app->session);
             if (app->session->attachedCount > 0) {
                 app->module.attachedKey = app->session->attachedCompositions[0].key;
             }
@@ -1089,7 +1089,7 @@ void CelsAppDestroy(CelsApp *app)
 
     if (app->isStatic) {
         if (app->module.def != NULL && app->module.def->onEnd != NULL && app->session != NULL) {
-            app->module.def->onEnd(app->engine);
+            app->module.def->onEnd(app->session);
         }
         if (app->module.attachedKey != 0 && app->session != NULL) {
             CelsPruneSubtreeByKey(app->session, app->module.attachedKey);

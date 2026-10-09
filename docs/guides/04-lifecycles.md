@@ -1,77 +1,123 @@
-# Resource Lifecycles (`CEL_Lifecycle`)
+# Resource Lifecycles & Execution Model
 
 In declarative UI and game programming, managing **native resources** (such as GPU textures, shaders, audio voices, network sockets, and file descriptors) is often error-prone. Manual allocation and deallocation quickly lead to memory leaks or use-after-free bugs when views are toggled or unmounted.
 
-CELS solves this with **pure topological lifecycle tracking**: when a composable enters the active tree, it **mounts**; when it is skipped or excluded, it **unmounts**. The `CEL_Lifecycle` macro guarantees that acquisition and release are perfectly paired.
+CELS solves this with **pure topological lifecycle tracking**: when a composable enters the active tree, it **attaches** (mounts); when it is skipped or excluded, it **detaches** (unmounts). Acquisition and release are perfectly paired.
 
 ---
 
-## 1. The Mount & Unmount Mental Model
+## 1. Architectural Mental Model: Code Execution Order vs. Presence in the Tree
 
-Every composable has a lifecycle governed by its presence in the composition hierarchy:
+Rather than visualizing lifecycles around abstract frame ticks or timer loops, CELS lifecycles follow **Code-to-Code Execution**:
 
 ```
-Frame 1: if (isActive) Widget();  ──► MOUNT
-                                      ├── Resource acquired (GPU texture, socket)
-                                      └── Unmount destructor registered
-
-Frame 2..N: Widget() still called  ──► STEADY STATE
-                                      └── Pointer updated; no re-allocation
-
-Frame N+1: isActive is false      ──► UNMOUNT
-                                      ├── Gap buffer detects omitted group
-                                      └── Destructors execute in REVERSE order!
+[Presence in Tree: Lifetime]
+  on_attach (Fresh Mount) ───────────────► on_detach (Omitted / Pruned)
+      │                                            ▲
+      ▼                                            │
+[Code Execution Order: Every Evaluation Pass]      │
+  Scope Entry (Composable body / enter)           │
+      │                                            │
+      ├─── Sets ambient context (cel_set_context)  │
+      ├─── Attaches components (cel_has)          │
+      └─── Allocates / reads state (cel_state)     │
+      │                                            │
+      ▼                                            │
+  Children Execute ({ ... } child composables)     │
+      │                                            │
+      ▼                                            │
+  Scope Exit (on_exit(childCount) at closing }) ───┘
 ```
 
-> [!NOTE]
-> Lifecycles in CELS are **structural, not visual**. A component unmounts whenever the CELS slot table detects that its composable function was not invoked during the current recomposition pass.
+1. **Code Execution Order (Every Recomposition Pass)**:
+   - **Scope Entry (Composable Body)**: Executes *before* any children run. Publishes ambient context, attaches declarative ECS components (`cel_has`), and allocates/reads reactive state.
+   - **Children Execution**: Direct child composables execute sequentially within the group scope.
+   - **Scope Exit (`on_exit(childCount) { ... }`)**: Executes when all children have completed at the closing `}` of the container scope (or when the composable exits). Receives the settled, exact `childCount` of direct children (ideal for layout metrics, directional focus clamping, and grid wrapping).
+2. **Presence in the Tree (Topology Lifetime)**:
+   - **`on_attach { ... }`**: Executes once on the very first pass when the composable is freshly mounted into the session hierarchy.
+   - **`on_detach { ... }`**: Executes when the composable leaves the hierarchy (parent condition evaluates to `false`, or root teardown).
 
 ---
 
-## 2. Declaring a Lifecycle (`CEL_Lifecycle`)
+## 2. Primary Approach: Inline Hooks inside `CEL_Composable`
 
-Declare a lifecycle controller at file scope using `CEL_Lifecycle`. Inside, define two blocks:
-- `mount`: Runs exactly once when the composable is first entered.
-- `unmount`: Runs when the composable is excluded or the session is destroyed.
+You can declare lifecycle hooks directly inside any `CEL_Composable`:
 
 ```c
 #include "cels.h"
 #include <stdio.h>
 
-typedef struct AudioVoice {
-    int voiceId;
-    const char *soundFile;
-} AudioVoice;
-
-CEL_Lifecycle(AudioVoiceLifecycle, AudioVoice *voice) {
-    mount {
-        printf("  [Audio] Acquired audio voice #%d for %s\n",
-               voice->voiceId, voice->soundFile);
-    }
-    unmount {
-        printf("  [Audio] Released audio voice #%d\n", voice->voiceId);
-    }
-}
-```
-
----
-
-## 3. Attaching to a Composable (`cel_lifecycle`)
-
-Attach the lifecycle inside any composable using `cel_lifecycle(LifecycleName, resourcePointer)`:
-
-```c
 CEL_Composable(SoundEmitter, const char*, soundFile) {
-    /* Remember the resource handle across frames in the slot table */
+    /* Remember resource handle across passes in the slot table */
     AudioVoice *voice = cel_remember(AudioVoice, ((AudioVoice){
         .voiceId = 101,
         .soundFile = soundFile
     }));
 
-    /* Bind lifecycle controller to this composable node */
-    cel_lifecycle(AudioVoiceLifecycle, voice);
+    on_attach {
+        /* Runs once when this node is first mounted */
+        voice->handle = AudioEngine_Play(voice->soundFile);
+        printf("  [SoundEmitter] Attached & playing: %s\n", voice->soundFile);
+    }
 
-    printf("  [SoundEmitter] Playing: %s\n", voice->soundFile);
+    on_detach {
+        /* Runs once when this node is omitted or pruned from the tree */
+        AudioEngine_Stop(voice->handle);
+        printf("  [SoundEmitter] Detached & stopped: %s\n", voice->soundFile);
+    }
+}
+```
+
+For container composables that manage children (e.g. `Column`, `Row`, `Toolbar`):
+
+```c
+CEL_Composable(CelsToolbar, CelsLayoutDir, dir, int, cols) {
+    // 1. Scope Entry: Runs before children execute
+    Toolbar config = { .dir = dir, .cols = cols };
+    cel_has(Toolbar, config);
+    cel_set_context(Toolbar, &config);
+
+    // 2. Scope Exit: Runs after all children execute (at closing '}')
+    on_exit(childCount) {
+        printf("Toolbar rendered with %u settled children!\n", childCount);
+    }
+}
+
+#define Toolbar(...) cel_scope(CelsToolbar, ##__VA_ARGS__)
+```
+
+---
+
+## 3. Decoupled Approach: Standalone `CEL_Lifecycle`
+
+When you want to reuse a lifecycle controller across multiple composables or decouple lifecycle logic across separate compilation units, use standalone `CEL_Lifecycle`:
+
+```c
+typedef struct DialogState {
+    int renderedItems;
+    bool isVisible;
+} DialogState;
+
+CEL_Lifecycle(DialogLifecycle, DialogState *dialog) {
+    mount {
+        printf("  [Dialog] Mounted!\n");
+    }
+    before_children {
+        /* Runs every pass before children */
+        cel_set_context(UITheme, &DarkTheme);
+    }
+    after_children(childCount) {
+        /* Runs every pass after children with settled child count */
+        dialog->renderedItems = childCount;
+    }
+    unmount {
+        printf("  [Dialog] Unmounted!\n");
+    }
+}
+
+CEL_Composable(DialogView, DialogState*, dialog) {
+    cel_lifecycle(DialogLifecycle, dialog);
+    // ...
 }
 ```
 
@@ -88,12 +134,12 @@ CEL_Composable(WorldAudioView, bool, soundEnabled) {
 1. **When `soundEnabled` transitions from `false` to `true`**:
    - `SoundEmitter` executes for the first time.
    - Slot memory is allocated for `AudioVoice`.
-   - The `mount` block runs immediately.
+   - The `on_attach` block runs immediately.
 2. **While `soundEnabled` remains `true`**:
-   - `SoundEmitter` runs each recomposition; `mount` does **not** re-run.
+   - `SoundEmitter` runs each recomposition; `on_attach` does **not** re-run.
 3. **When `soundEnabled` transitions to `false`**:
    - `SoundEmitter` is skipped.
-   - CELS detects the omitted node and executes the `unmount` block immediately.
+   - CELS detects the omitted node and executes the `on_detach` block immediately.
 
 ---
 

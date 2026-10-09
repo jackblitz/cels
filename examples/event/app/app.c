@@ -243,9 +243,8 @@ CEL_Composition(EventAppComposition) {
     }
 }
 
-static void EventApp_OnStart(CelsEngine *engine)
+static void EventApp_OnStart(CelsSession *session)
 {
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, EventAppComposition);
 }
 

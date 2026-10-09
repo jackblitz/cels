@@ -168,7 +168,7 @@ CelsResult CelsEngineStart(CelsEngine *engine)
     }
 
     if (engine->manifest->onStart != NULL) {
-        engine->manifest->onStart(engine);
+        engine->manifest->onStart(&engine->session);
     }
 
     engine->isStarted = true;
@@ -203,7 +203,7 @@ void CelsEngineEnd(CelsEngine *engine)
         s_currentEngine = engine;
         CelsSetCurrentSession(&engine->session);
 
-        engine->manifest->onEnd(engine);
+        engine->manifest->onEnd(&engine->session);
 
         s_currentEngine = prevEngine;
         CelsSetCurrentSession(prevSession);

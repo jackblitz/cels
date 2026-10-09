@@ -11,6 +11,18 @@
  * hardcoded application or test logic—all headless testing is encapsulated in test/cli.
  */
 
+/**
+ * Attaches host-level platform services into the root session's ambient context.
+ *
+ * Demonstrates how a host injects platform capabilities (input, window, etc.)
+ * into the root session so any composable in the session tree can resolve them
+ * via cel_context(PdcursesInputContext) without parameter drilling.
+ */
+static void AttachHostContext(CelsSession *session, PdcursesInputContext *inputCtx)
+{
+    cel_set_context(session, PdcursesInputContext, inputCtx);
+}
+
 int CelsRunHostEx(int argc, char **argv, const char *appName)
 {
     bool once = false;
@@ -45,8 +57,8 @@ int CelsRunHostEx(int argc, char **argv, const char *appName)
     PdcursesInputContext inputCtx;
     PdcursesInputInit(&inputCtx);
 
-    /* Bind host platform input service to engine context so all sessions inherit ambiently */
-    cel_engine_set_context(&engine, PdcursesInputContext, &inputCtx);
+    /* Bind host platform input service to the root session */
+    AttachHostContext(session, &inputCtx);
 
     if (playbackKeys != NULL) {
         /* Scripted input playback mode for integration verification */

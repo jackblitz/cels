@@ -215,28 +215,28 @@ static void TestChildBeforeParent(void) {
     cel_attach(&s, TeardownRoot);
 
     assert(CelsSessionRecompose(&s) == CELS_OK);
-    int start = destroys;
+    int baselineDestroys = destroys;
 
     cels_session_mutate(&s, CEL_ID("ShowParent"), ShowParent) {
         this->show = false;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);
-    assert(destroys == start + 2);
+    assert(destroys == baselineDestroys + 2);
     /* Child resource (id 0) destroyed before parent resource (id 9) */
-    assert(destroyedIds[start] == 0 && destroyedIds[start + 1] == 9);
+    assert(destroyedIds[baselineDestroys] == 0 && destroyedIds[baselineDestroys + 1] == 9);
 
     cels_session_mutate(&s, CEL_ID("ShowParent"), ShowParent) {
         this->show = true;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);
 
-    start = destroys;
+    baselineDestroys = destroys;
     CelsSession other;
     CelsSessionInit(&other, NULL);
     CelsSetCurrentSession(&other);
     CelsSessionDestroy(&s);
-    assert(destroys == start + 2);
-    assert(destroyedIds[start] == 0 && destroyedIds[start + 1] == 9);
+    assert(destroys == baselineDestroys + 2);
+    assert(destroyedIds[baselineDestroys] == 0 && destroyedIds[baselineDestroys + 1] == 9);
     assert(CelsGetCurrentSession() == &other);
     CelsSessionDestroy(&other);
     assert(CelsGetCurrentSession() == NULL);

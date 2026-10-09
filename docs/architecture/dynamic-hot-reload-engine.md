@@ -29,7 +29,7 @@ CELS implements a **production-grade, zero-restart dynamic hot-reload engine**:
 |  | app.hot_18420_1_2.tmp.dll                  |<--+ (Copied from game_app.dll)                    |
 |  |  |-- CelsGetAppManifest()                     |                                                  |
 |  |  |-- manifest->setSession(session)          | (Synchronizes TLS ambient session pointer)       |
-|  |  |-- manifest->onStart(engine)              | (Creates session & attaches root compositions)   |
+|  |  |-- manifest->onStart(session)              | (Attaches root compositions to host session)     |
 |  |  `-- Declarative UI & Gameplay Logic       |                                                  |
 |  +--------------------------------------------+                                                   |
 +===================================================================================================+
@@ -57,9 +57,9 @@ struct CelsAppManifest {
     const char  *title;                  /**< Human-readable application title (e.g. window / terminal caption) */
     const char  *appVersion;             /**< Semantic version string (e.g. "1.0.0") */
     void       (*setSession)(CelsSession *s); /**< Internal session synchronization across DLL boundary */
-    void       (*onStart)(CelsEngine *engine); /**< App setup: create/get session and attach compositions */
-    void       (*onReload)(CelsEngine *engine);/**< Optional callback fired after code hot-swap */
-    void       (*onEnd)(CelsEngine *engine);   /**< App teardown callback */
+    void       (*onStart)(CelsSession *session);  /**< App setup: attaches root compositions */
+    void       (*onReload)(CelsSession *session); /**< Optional callback fired after code hot-swap */
+    void       (*onEnd)(CelsSession *session);    /**< App teardown callback */
 };
 
 #define CELS_APP_ENTRY_SYMBOL        "CelsGetAppManifest"

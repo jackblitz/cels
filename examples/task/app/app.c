@@ -114,9 +114,8 @@ CEL_Composition(NetworkAppComposition) {
     NetworkHUD(net);
 }
 
-static void NetworkApp_OnStart(CelsEngine *engine)
+static void NetworkApp_OnStart(CelsSession *session)
 {
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, NetworkAppComposition);
 }
 

@@ -218,9 +218,8 @@ CEL_Composition(InputAppComposition)
     TuiFooter("Workspace Controls: [Tab] Switch Mode | [Q] Quit Application");
 }
 
-static void InputApp_OnStart(CelsEngine *engine)
+static void InputApp_OnStart(CelsSession *session)
 {
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, InputAppComposition);
 }
 

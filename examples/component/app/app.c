@@ -170,9 +170,8 @@ CEL_Composition(ComponentAppComposition)
     CombatEntityHUD(ent);
 }
 
-static void ComponentApp_OnStart(CelsEngine *engine)
+static void ComponentApp_OnStart(CelsSession *session)
 {
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, ComponentAppComposition);
 }
 

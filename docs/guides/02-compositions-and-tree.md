@@ -56,8 +56,7 @@ CEL_Composition(WindowComposition) {
 }
 
 /* Attach directly to the session in onStart */
-static void App_OnStart(CelsEngine *engine) {
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+static void App_OnStart(CelsSession *session) {
     cel_attach(session, WindowComposition, WindowEval);
 }
 ```
@@ -101,17 +100,12 @@ CEL_Composition(PluginView, void *userData) {
 When declaring an application module, bind your root composition in `onStart`:
 
 ```c
-static void App_OnStart(CelsEngine *engine) {
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
-
+static void App_OnStart(CelsSession *session) {
     /* Standard zero-parameter composition */
     cel_attach(session, MainWindow);
 
     /* Or with lifecycle evaluation predicate: */
     // cel_attach(session, MainWindow, WindowEval);
-
-    /* Or with typed userData: */
-    // cel_attach(session, ViewportWindow, NULL, &g_ViewportConfig);
 }
 
 CEL_App_Manifest(MyApp,
@@ -138,7 +132,7 @@ CELS provides two distinct mechanisms for external host context. Choose the righ
 | Mechanism | API | Scope | Best For |
 | :--- | :--- | :--- | :--- |
 | **Ambient Session Context** | `CelsSessionSetUserData` / `cel_user_data(Type)` | Session-wide (accessible anywhere in tree) | Global engine subsystems, Vulkan/DirectX devices, Flecs ECS world, asset caches. |
-| **Composition `userData`** | `cel_root_with_data` / `cel_attach` | Per-Composition instance | Instance-specific configs, multi-window handles, plugin host state, test mocks. |
+| **Composition `userData`** | `cel_attach(s, comp, eval, userData)` | Per-Composition instance | Instance-specific configs, multi-window handles, plugin host state, test mocks. |
 
 #### Pattern A: Ambient Session Context (`cel_user_data`)
 Use ambient context when an external service is a singleton for the session. Any composable anywhere in the subtree can resolve it without prop-drilling:
@@ -470,16 +464,22 @@ Developers often wonder: *Should this be a parameter (prop), reactive state, or 
 ### 1. Ambient Context Theming & Services (`cel_set_context` / `cel_context`)
 Passes visual styling, environment, or platform services down an entire composable subtree or application with zero parameter drilling and zero heap allocations.
 
-#### Two-Tier Cascading Context Architecture
-CELS resolves ambient context across a two-tier hierarchy:
-1. **Tier 1: Composable Subtree Scope (`cel_set_context`)**: Scoped to the active composable and its descendants. Automatically restored when the composable exits. Best for local themes (`UITheme`), layout directions (`CelsLayoutDir`), or modal states.
-2. **Tier 2: Host Engine Scope (`cel_engine_set_context`)**: Scoped across the entire `CelsEngine` and available to all sessions. Best for host platform services (`PdcursesInputContext`, `RendererBackend`, `AudioDevice`, `PlatformWindow`).
-
-When resolving context via `cel_context(Type)` or `cel_get_context(Type, &ptr)`, CELS checks the local composable subtree stack first; if not found, it transparently falls back to the host engine context.
+#### Ambient Context Architecture & Scoping
+CELS resolves ambient context across a unified type-keyed linked list (`ambientScope`):
+1. **Root Session Scope (`cel_set_context(session, Type, &instance)`)**: Attached by the host executable to the root session at startup (depth 0). Inherited by all composables in the session tree. Ideal for platform services (`PdcursesInputContext`, `AudioDevice`, `PlatformWindow`, `RendererBackend`).
+2. **Composable Subtree Scope (`cel_set_context(Type, &instance)`)**: Attached inside any composable body. Automatically scoped down its subtree and popped when the composable exits. Ideal for themes (`UITheme`), layout directions (`CelsLayoutDir`), or modal dialog contexts.
 
 #### Publishing Context:
 
-**In Composable Subtree (Local Override):**
+**In Host Startup (Platform Service on Root Session):**
+```c
+/* Host attaches platform input service to the root session */
+PdcursesInputContext inputCtx;
+PdcursesInputInit(&inputCtx);
+cel_set_context(session, PdcursesInputContext, &inputCtx);
+```
+
+**In Composable Subtree (Local Theming Override):**
 ```c
 CEL_Composable(SettingsContainer) {
     /* Provide dark theme down this entire subtree */
@@ -488,16 +488,31 @@ CEL_Composable(SettingsContainer) {
 }
 ```
 
-**In Host Main Loop (Engine-Wide Service):**
+#### Consuming Multiple Contexts in a Single Composable:
+Because `ambientScope` is type-keyed by 64-bit hash, **a single composable can consume multiple different contexts simultaneously**:
+
 ```c
-/* Host registers platform services on CelsEngine */
-cel_engine_set_context(&engine, PdcursesInputContext, &inputCtx);
+CEL_Composable(InteractiveButton, const char*, label) {
+    /* 1. Host platform input context */
+    const PdcursesInputContext *input = cel_context(PdcursesInputContext);
+
+    /* 2. Ambient theme context */
+    const UITheme *theme = cel_context(UITheme);
+
+    /* 3. Layout direction context */
+    const CelsLayoutDir *layout = cel_context(CelsLayoutDir);
+
+    /* All three contexts resolve cleanly from the ambient chain */
+    if (input && cel_action_pressed(input, "Select")) {
+        // Execute button action with theme->accentColor
+    }
+}
 ```
 
 #### Consuming Context (Two Styles):
 
 1. **Direct Pointer Form (`cel_context(Type) -> const Type*`) [Convenient]**:
-   Returns the nearest ancestor or engine-level context pointer, or `NULL` if absent:
+   Returns the nearest ancestor or session root context pointer, or `NULL` if absent:
    ```c
    CEL_Composable(PlayerInput) {
        const PdcursesInputContext *input = cel_context(PdcursesInputContext);
@@ -508,7 +523,7 @@ cel_engine_set_context(&engine, PdcursesInputContext, &inputCtx);
    ```
 
 2. **Result-Protected Form (`cel_get_context(Type, &outPtr) -> CelsResult`) [Rigorous Safety]**:
-   Returns `CELS_OK` on success, `CELS_ERROR_NOT_FOUND` if neither subtree nor engine provides the type, or `CELS_ERROR_INVALID_STATE` if called outside an active session:
+   Returns `CELS_OK` on success, `CELS_ERROR_NOT_FOUND` if neither subtree nor root session provides the type, or `CELS_ERROR_INVALID_STATE` if called outside an active session:
    ```c
    CEL_Composable(SettingsItem, const char*, title) {
        const UITheme *theme = NULL;
@@ -522,23 +537,12 @@ cel_engine_set_context(&engine, PdcursesInputContext, &inputCtx);
 
 ---
 
-### 2. Layouts & Containers with Children (`cel_container` & `CEL_Layout`)
+### 2. Layouts & Directional Navigation (`CEL_Layout`)
 
-In CELS, **every composable is naturally a container for its children** via the slot table. There is no need for manual `CelsEnterComposable` / `CelsExitGroup` calls or boilerplate plumbing—when a composable invokes other composables in its body, CELS automatically tracks sibling metrics, parent-child hierarchies, and settled child counts in $\mathcal{O}(1)$.
-
-#### Core Primitive: `cel_container(Name)`
-CELS core provides [`cel_container(Name)`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L1982) to establish an inline container group in the slot table with zero heap allocations:
-
-```c
-cel_container(SectionContainer) {
-    HeaderItem("Section 1");
-    SettingsRow("Volume");
-    SettingsRow("Graphics");
-}
-```
+In CELS, **every composable is naturally a container for its children** via the slot table. There is no need for synthetic container wrappers—when a composable invokes other composables in its body, CELS automatically tracks sibling metrics, parent-child hierarchies, and settled child counts in $\mathcal{O}(1)$.
 
 #### Direct Inline Layouts (`CEL_Layout`):
-To manage keyboard/gamepad focus navigation, the example application pattern in [`cels_layout.h`](file:///D:/cels-workspace/library/cels/examples/common/cels_layout.h) builds on `cel_container` to provide scoped directional layouts with zero `#define` boilerplate:
+To manage keyboard/gamepad focus navigation, the example application pattern in [`cels_layout.h`](file:///D:/cels-workspace/library/cels/examples/common/cels_layout.h) provides scoped directional layouts with zero `#define` boilerplate:
 
 ```c
 /* 1. Linear Vertical Menu: W/S or Up/Down cycles focus */
@@ -581,8 +585,8 @@ InventoryGrid(inv);
 
 > [!NOTE]
 > **Application-Level Pattern vs. Core CELS Library**:
-> `cel_container` is a **core CELS primitive** in [`include/cels/cels.h`](file:///D:/cels-workspace/library/cels/include/cels/cels.h). `CEL_Layout` is an **application-level helper pattern** in [`examples/common/cels_layout.h`](file:///D:/cels-workspace/library/cels/examples/common/cels_layout.h) demonstrating how developers combine:
-> - `cel_container`: Enters/exits slot groups with zero custom scope plumbing.
+> `CEL_Layout` is an **application-level layout archetype** in [`examples/common/cels_layout.h`](file:///D:/cels-workspace/library/cels/examples/common/cels_layout.h) demonstrating how developers combine:
+> - `CelsEnterComposable` / `CelsExitGroup`: Enters/exits slot groups with zero heap allocation.
 > - `cel_remember_state`: Allocates double-buffered focus state in slot memory.
 > - `cel_has`: Declaratively attaches ECS components (`cel_has(CelsLayoutDir, { dir })`).
 > - `cel_set_context` / `cel_get_context`: Ambient context passing down subtrees.
@@ -741,7 +745,7 @@ CEL_Composable(CharacterNode, id, const CharacterState*, charState) {
     }
 }
 ```
-For complete details and walkthroughs, see the `cels-modifications` skill and runnable code in [`examples/component/`](file:///D:/cels-workspace/library/cels/examples/component/) and [`examples/theming/`](file:///D:/cels-workspace/library/cels/examples/theming/).
+For complete details and walkthroughs, see the `cels-context` and `cels-transactions` skills and runnable code in [`examples/component/`](file:///D:/cels-workspace/library/cels/examples/component/) and [`examples/theming/`](file:///D:/cels-workspace/library/cels/examples/theming/).
 
 ---
 

@@ -40,7 +40,7 @@ static const UITheme g_criticalAlertTheme = {
 /**
  * ThemedButton has NO theme parameter!
  * It reads the ambient theme dynamically via result-protected cel_get_context(UITheme, &theme).
- * Also introspects its sibling index within the enclosing cel_container.
+ * Also introspects its sibling index within the enclosing composable.
  */
 CEL_Composable(ThemedButton, const char*, label)
 {
@@ -55,6 +55,25 @@ CEL_Composable(ThemedButton, const char*, label)
     } else {
         TuiPrint("    [Btn: %-16s] Accent=#%06X (Inherited: '%s')", label, accent, themeName);
     }
+}
+
+/**
+ * Modal action button group composable.
+ */
+CEL_Composable(ModalActions)
+{
+    ThemedButton("Confirm Action");
+    ThemedButton("Dismiss");
+}
+
+/**
+ * Root toolbar button group composable.
+ */
+CEL_Composable(RootToolbar)
+{
+    ThemedButton("Save Preferences");
+    ThemedButton("Refresh View");
+    ThemedButton("System Settings");
 }
 
 /**
@@ -88,10 +107,7 @@ CEL_Composable(ConfirmationModal, const ThemingAppState*, state)
              theme ? theme->name : "None",
              (unsigned int)(theme ? (theme->bg & 0xFFFFFF) : 0));
 
-    cel_container(ModalActions) {
-        ThemedButton("Confirm Action");
-        ThemedButton("Dismiss");
-    }
+    ModalActions();
 
     /* Multi-Level Nested Override: Critical alert pushes yet another theme */
     if (state->showCriticalAlert) {
@@ -115,12 +131,8 @@ CEL_Composable(ThemingHUD, const ThemingAppState*, state)
     TuiPrint("Modal Subtree:      %s", state->showDarkModal ? "[ MOUNTED / ACTIVE ]" : "[ CLOSED ]");
     TuiPrint("Critical Alert:     %s", state->showCriticalAlert ? "[ MOUNTED / ACTIVE ]" : "[ OFF ]");
     TuiDivider();
-    TuiLine("Root-Level Composable Buttons (Reading cel_get_context inside cel_container):");
-    cel_container(RootToolbar) {
-        ThemedButton("Save Preferences");
-        ThemedButton("Refresh View");
-        ThemedButton("System Settings");
-    }
+    TuiLine("Root-Level Composable Buttons (Reading cel_get_context inside RootToolbar):");
+    RootToolbar();
 
     /* Render modal with ambient subtree overriding */
     if (state->showDarkModal) {
@@ -181,9 +193,8 @@ CEL_Composition(ThemingAppComposition)
     ThemingHUD(state);
 }
 
-static void ThemingApp_OnStart(CelsEngine *engine)
+static void ThemingApp_OnStart(CelsSession *session)
 {
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, ThemingAppComposition);
 }
 

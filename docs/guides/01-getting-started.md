@@ -93,11 +93,8 @@ Your application module declares its metadata and root composition cleanly using
 CEL_Composition(MainView);
 
 /* Application startup hook */
-static void MyApp_OnStart(CelsEngine *engine) {
-    /* Create or bind application session with dimensioning capacity profile */
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
-
-    /* Attach the root composition */
+static void MyApp_OnStart(CelsSession *session) {
+    /* Attach the root composition to the host-provided root session */
     cel_attach(session, MainView);
 }
 
@@ -114,8 +111,12 @@ CEL_App_Manifest(MyApplication,
 > If your application root requires a lifecycle evaluation predicate (to control when it mounts or despawns), pass it as the second argument to `cel_attach(session, MainView, MainEval)`. The host loop controls frame cadence directly, calling `CelsEngineRecompose()` continuously in game loops or conditionally via `CelsEngineNeedsRecompose()` in event-driven loops.
 
 > [!NOTE]
-> **Understanding `cel_engine_create_session`**:
-> `cel_engine_create_session(engine, "main", CELS_PROFILE_1K)` is a core CELS library API (`include/cels/engine.h` and `include/cels/cels.h`). It registers the session with the engine for automatic supervision and recomposition, activates Thread-Local Storage (TLS), and links `session->engine = engine` so that any platform services registered by the host via `cel_engine_set_context` are ambiently available to all composables via `cel_context(Type)`. If the session was already created by the host runner, it idempotently returns the existing instance without resetting state.
+> **Understanding Root Sessions and Platform Context**:
+> In CELS, the host executable owns the engine and creates the primary reactive session (`&engine.session`). The host passes this root session directly to the application via `MyApp_OnStart(CelsSession *session)`. If the host exposes platform services (such as input devices, window handles, or renderers), it attaches them directly to the root session using standard ambient context:
+> ```c
+> cel_set_context(session, PlatformInput, &inputCtx);
+> ```
+> Every composable in the session tree can then resolve this context ambiently via `cel_context(PlatformInput)` without parameter drilling or library-enforced opinionated abstractions. Zero allocations, 100% type-safe.
 
 Now create `src/main_view.c` to declare your root composition and a simple composable:
 
@@ -231,7 +232,7 @@ Notice that `renderCount` kept its state across the reload! CELS slot tables pre
 ### Do This
 - **Keep Host Minimal**: Keep platform glue, OS message pumps, and window management in `host.c`. Place all visual, layout, and UI logic in the application.
 - **Use `cel_remember` for Persisted Data**: Variables declared inside composables should use `cel_remember` to survive recomposition and hot reloads.
-- **Pass Context via Composition References or Ambient Session**: Pass host resources (like GPU contexts or custom memory allocators) through `userData` in `CelsCompositionRef` / `cel_root_with_data` or retrieve ambient session context using `cel_user_data(Type)`.
+- **Pass Context via Composition References or Ambient Session**: Pass host resources (like GPU contexts or custom memory allocators) through `userData` in `CelsCompositionRef` / `cel_attach(session, comp, eval, userData)` or retrieve ambient session context using `cel_user_data(Type)`.
 
 ### Don't Do That
 - **Don't Allocate Heap Memory in Composables without Cleanup**: Never call raw `malloc()` in a composable body without pairing it with an unmount destructor or `cel_lifecycle`.

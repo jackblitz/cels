@@ -1,15 +1,14 @@
 #include "cels.h"
 #include "composition/window.h"
 
-static void WindowApp_OnStart(CelsEngine *engine)
+static void WindowApp_OnStart(CelsSession *session)
 {
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
     cel_attach(session, WindowComposition, WindowEval);
 }
 
-static void WindowApp_OnEnd(CelsEngine *engine)
+static void WindowApp_OnEnd(CelsSession *session)
 {
-    (void)engine;
+    (void)session;
     /* Application teardown resources if needed */
 }
 

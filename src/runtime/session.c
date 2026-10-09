@@ -129,6 +129,8 @@ static void MoveGroupGap(CelsSession *s, uint32_t targetLogical)
  */
 static void FireCleanupsForGroup(CelsSession *s, uint32_t groupId)
 {
+    const int prevPhase = s->currentPhase;
+    s->currentPhase = CEL_LIFECYCLE_PHASE_DETACH;
     for (uint32_t i = s->cleanupCount; i > 0; --i) {
         const uint32_t idx = i - 1;
         if (s->cleanups[idx].groupId == groupId) {
@@ -141,6 +143,7 @@ static void FireCleanupsForGroup(CelsSession *s, uint32_t groupId)
                     (s->cleanupCount - idx) * sizeof(s->cleanups[0]));
         }
     }
+    s->currentPhase = prevPhase;
 }
 
 /**
@@ -528,6 +531,7 @@ void CelsSessionInit(CelsSession *s, const CelsSessionConfig *config)
 {
     assert(s != NULL);
     memset(s, 0, sizeof(*s));
+    s->currentPhase = CEL_LIFECYCLE_PHASE_ENTER;
 
     size_t slabSize = 0;
     uint32_t maxGroups = 0;
@@ -721,44 +725,40 @@ void CelsSessionAttachComposition(CEL_Session *s,
  * @param onCreate  Optional constructor callback invoked immediately upon registration. May be NULL.
  * @param onDestroy Optional destructor callback invoked when the associated group is unmounted. May be NULL.
  */
-void CelsSessionRegisterLifecycle(CelsSession *s, void *instance, void (*onCreate)(void *, CelsSession *), void (*onDestroy)(void *, CelsSession *))
+void CelsSessionRegisterLifecycleExt(CelsSession *s,
+                                     void *instance,
+                                     void (*onCreate)(void *, CelsSession *),
+                                     void (*onEnd)(uint32_t, void *, CelsSession *),
+                                     void (*onDestroy)(void *, CelsSession *))
 {
     if (s == NULL || s->currentDepth == 0) return;
 
     CelsSlotGroup *const group = CelsGetGroup(s, s->currentGroupIndex);
-    
+
     if (s->cleanupCount >= CELS_MAX_CLEANUPS) {
         fprintf(stderr,
                 "[CELS ERROR] Out of session memory: Cleanup hook capacity exceeded (%u / %u).\n",
                 s->cleanupCount, CELS_MAX_CLEANUPS);
         return;
     }
-    
+
     s->cleanups[s->cleanupCount++] = (CelsCleanupHook){
         .groupKey = group->key,
         .groupId = (uint32_t)group->userData,
         .instance = instance,
+        .onEnd = onEnd,
         .onDestroy = onDestroy
     };
-    
+
     if (onCreate != NULL) {
         onCreate(instance, s);
     }
 }
 
-/**
- * Updates the destructor callback and instance pointer for an active lifecycle hook.
- *
- * Searches existing cleanup entries matching the current group's ID or key and refreshes
- * their instance and onDestroy function pointers. This prevents stale code addresses after
- * dynamic module hot-reload without re-triggering constructors. If no matching entry exists,
- * registers a new lifecycle hook without invoking onCreate.
- *
- * @param s         Active session instance. Safe if NULL or outside composition.
- * @param instance  Updated user state or resource instance pointer.
- * @param onDestroy Updated destructor callback pointer to execute when the group unmounts. May be NULL.
- */
-void CelsSessionUpdateLifecycle(CelsSession *s, void *instance, void (*onDestroy)(void *, CelsSession *))
+void CelsSessionUpdateLifecycleExt(CelsSession *s,
+                                   void *instance,
+                                   void (*onEnd)(uint32_t, void *, CelsSession *),
+                                   void (*onDestroy)(void *, CelsSession *))
 {
     if (s == NULL || s->currentDepth == 0) return;
 
@@ -767,16 +767,41 @@ void CelsSessionUpdateLifecycle(CelsSession *s, void *instance, void (*onDestroy
     const uint64_t key = group->key;
 
     for (uint32_t i = 0; i < s->cleanupCount; ++i) {
-        if (s->cleanups[i].groupId == gid || s->cleanups[i].groupKey == key) {
-            s->cleanups[i].groupId = gid;
-            s->cleanups[i].groupKey = key;
-            s->cleanups[i].instance = instance;
-            s->cleanups[i].onDestroy = onDestroy;
-            return;
+        if (s->cleanups[i].groupId == gid) {
+            bool match = false;
+            if (instance != NULL && s->cleanups[i].instance == instance) {
+                match = true;
+            } else if (onDestroy != NULL && s->cleanups[i].onDestroy == onDestroy) {
+                match = true;
+            } else if (onEnd != NULL && s->cleanups[i].onEnd == onEnd) {
+                match = true;
+            }
+            if (match) {
+                s->cleanups[i].groupId = gid;
+                s->cleanups[i].groupKey = key;
+                s->cleanups[i].instance = instance;
+                if (onEnd != NULL) {
+                    s->cleanups[i].onEnd = onEnd;
+                }
+                if (onDestroy != NULL) {
+                    s->cleanups[i].onDestroy = onDestroy;
+                }
+                return;
+            }
         }
     }
 
-    CelsSessionRegisterLifecycle(s, instance, NULL, onDestroy);
+    CelsSessionRegisterLifecycleExt(s, instance, NULL, onEnd, onDestroy);
+}
+
+void CelsSessionRegisterLifecycle(CelsSession *s, void *instance, void (*onCreate)(void *, CelsSession *), void (*onDestroy)(void *, CelsSession *))
+{
+    CelsSessionRegisterLifecycleExt(s, instance, onCreate, NULL, onDestroy);
+}
+
+void CelsSessionUpdateLifecycle(CelsSession *s, void *instance, void (*onDestroy)(void *, CelsSession *))
+{
+    CelsSessionUpdateLifecycleExt(s, instance, NULL, onDestroy);
 }
 
 /**
@@ -840,6 +865,7 @@ bool CelsSessionNeedsRecompose(const CelsSession *s)
 CelsResult CelsSessionRecompose(CelsSession *s)
 {
     assert(s != NULL);
+    s->currentPhase = CEL_LIFECYCLE_PHASE_ENTER;
     if (s->attachedCount == 0) {
         return CELS_ERROR_INVALID_STATE;
     }
@@ -886,7 +912,7 @@ CelsResult CelsSessionRecompose(CelsSession *s)
         s->currentDepth = 0;
         s->currentSlotOffset = 0;
         s->logicalCursor = 0;
-        s->ambientScope = NULL;
+        s->ambientScope = (s->rootContextCount > 0) ? &s->rootContextNodes[s->rootContextCount - 1] : NULL;
 
         for (uint32_t i = 0; i < s->attachedCount; ++i) {
             CelsAttachedComposition *const comp = &s->attachedCompositions[i];
@@ -943,6 +969,7 @@ CelsResult CelsSessionRecompose(CelsSession *s)
     /* Retire consumed events at frame completion */
     CelsEventRetireConsumed(s);
 
+    s->ambientScope = (s->rootContextCount > 0) ? &s->rootContextNodes[s->rootContextCount - 1] : NULL;
     s->hasComposedOnce = true;
     s->isRecomposing = false;
     s->isHandlingEvent = false;
@@ -1209,6 +1236,9 @@ bool CelsEnterComposition(CelsSession *s, uint64_t rootKey)
  */
 bool CelsEnterComposable(CelsSession *s, uint64_t key)
 {
+    if (s == NULL || s->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) {
+        return false;
+    }
     assert(s->currentDepth > 0 && "CEL_Composable must be nested within CEL_Composition");
     if (s->currentDepth >= CELS_MAX_DEPTH) {
         fprintf(stderr,
@@ -1221,6 +1251,7 @@ bool CelsEnterComposable(CelsSession *s, uint64_t key)
     }
 
     const uint32_t depth = s->currentDepth++;
+    s->groupLifecycleFlags[depth] = 0;
     s->slotOffsetStack[depth - 1] = s->currentSlotOffset;
     s->activeStack[depth] = 0;
     s->activeEntityIdStack[depth] = s->activeEntityId;
@@ -1376,8 +1407,12 @@ bool CelsEnterComposable(CelsSession *s, uint64_t key)
  */
 void CelsExitGroup(CelsSession *s)
 {
+    if (s == NULL || s->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) {
+        return;
+    }
     assert(s->currentDepth > 0 && "Unmatched CEL_Close call");
-    const uint32_t depth = --s->currentDepth;
+    const uint32_t depth = s->currentDepth - 1;
+    s->groupLifecycleFlags[depth] = 0;
     const uint32_t groupIdx = s->groupIndexStack[depth];
 
     if (s->activeStack[depth]) {
@@ -1398,6 +1433,19 @@ void CelsExitGroup(CelsSession *s)
         }
         assert(g->groupSize == (s->logicalCursor - 1) - groupIdx);
         g->nodeCount = (uint16_t)s->childCounterStack[depth];
+
+        const uint32_t childCount = s->childCounterStack[depth];
+        const uint32_t currentGroupId = (uint32_t)g->userData;
+
+        /* Execute onEnd lifecycle hooks for this group while depth is still active */
+        const int prevPhase = s->currentPhase;
+        s->currentPhase = CEL_LIFECYCLE_PHASE_EXIT;
+        for (uint32_t i = 0; i < s->cleanupCount; ++i) {
+            if (s->cleanups[i].groupId == currentGroupId && s->cleanups[i].onEnd != NULL) {
+                s->cleanups[i].onEnd(childCount, s->cleanups[i].instance, s);
+            }
+        }
+        s->currentPhase = prevPhase;
 
         /* Reconcile components if any were declared via cel_has in this composable group */
         if (s->currentEntityTracker != NULL) {
@@ -1422,6 +1470,7 @@ void CelsExitGroup(CelsSession *s)
         }
     }
 
+    s->currentDepth = depth;
     s->currentEntityTracker = s->entityTrackerStack[depth];
     s->activeEntityId = s->activeEntityIdStack[depth];
     s->ambientScope = s->ambientScopeStack[depth];
@@ -2096,7 +2145,7 @@ void CelsEntityRegisterComponent(CelsSession *session, uint64_t typeKey, size_t 
     if (session == NULL) {
         session = CelsGetCurrentSession();
     }
-    if (session == NULL) return;
+    if (session == NULL || session->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return;
 
     CelsEntityTracker *tracker = session->currentEntityTracker;
     if (tracker == NULL && session->currentDepth > 0) {
@@ -2226,8 +2275,29 @@ CelsScopeNode *CelsContextPush(CelsSession *session, uint64_t typeId, const void
     if (session == NULL) {
         session = CelsGetCurrentSession();
     }
-    if (session == NULL || session->currentDepth == 0) return NULL;
+    if (session == NULL) return NULL;
+    if (session->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) return session->ambientScope;
 
+    /* 1. At session root (outside composable body, e.g. host configuration) */
+    if (session->currentDepth == 0) {
+        for (uint32_t i = 0; i < session->rootContextCount; ++i) {
+            if (session->rootContextNodes[i].typeId == typeId) {
+                session->rootContextNodes[i].data = data;
+                return &session->rootContextNodes[i];
+            }
+        }
+        if (session->rootContextCount < CELS_MAX_ROOT_CONTEXTS) {
+            CelsScopeNode *node = &session->rootContextNodes[session->rootContextCount++];
+            node->typeId = typeId;
+            node->data = data;
+            node->parent = session->ambientScope;
+            session->ambientScope = node;
+            return node;
+        }
+        return NULL;
+    }
+
+    /* 2. Inside composable group */
     CelsScopeNode initNode = { .typeId = typeId, .data = data, .parent = session->ambientScope };
     CelsScopeNode *node = (CelsScopeNode *)CelsResolveSlot(session, sizeof(CelsScopeNode), &initNode);
     if (node != NULL) {
@@ -2286,17 +2356,6 @@ CelsResult CelsContextResolve(const CelsSession *session, uint64_t typeId, const
         return CELS_ERROR_INVALID_STATE;
     }
     const void *data = CelsScopeFind(session->ambientScope, typeId);
-    if (data == NULL) {
-        if (session->engine != NULL) {
-            data = CelsEngineGetContext(session->engine, typeId);
-        }
-        if (data == NULL) {
-            CelsEngine *curEngine = CelsGetCurrentEngine();
-            if (curEngine != NULL && curEngine != session->engine) {
-                data = CelsEngineGetContext(curEngine, typeId);
-            }
-        }
-    }
     if (data == NULL) {
         return CELS_ERROR_NOT_FOUND;
     }

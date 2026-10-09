@@ -127,16 +127,13 @@ Applications define their metadata, lifecycle hooks, and composition root:
 #include "cels.h"
 #include "cels/app.h"
 
-static void MyApp_OnStart(CelsEngine *engine) {
-    /* Create/bind session and access ambient host services */
-    CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
-
-    /* Attach root composition to the session */
+static void MyApp_OnStart(CelsSession *session) {
+    /* Attach root composition to the host-provided session */
     cel_attach(session, MyRootView);
 }
 
-static void MyApp_OnEnd(CelsEngine *engine) {
-    (void)engine;
+static void MyApp_OnEnd(CelsSession *session) {
+    (void)session;
     /* Cleanup application-specific state */
 }
 

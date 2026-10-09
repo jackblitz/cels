@@ -172,7 +172,7 @@ CEL_Composition(UserDataTestComp, void *userData) {
     assert(testContext != NULL);
     assert(*testContext == 777);
 
-    const DummyState *st = cel_watch(DummyState, CEL_ID("DummyState"));
+    const DummyState *st = cel_watch_state(DummyState);
     (void)st;
 }
 
@@ -180,6 +180,7 @@ static void TestSessionUserDataAndPostRecomposeHook(void)
 {
     CelsSession s;
     CelsSessionInit(&s, NULL);
+    CelsSetCurrentSession(&s);
 
     int myContext = 777;
     CelsSessionSetUserData(&s, &myContext);
@@ -189,7 +190,7 @@ static void TestSessionUserDataAndPostRecomposeHook(void)
     s_receivedUserData = NULL;
     CelsSessionSetPostRecomposeHook(&s, DummyPostRecomposeHook, &myContext);
 
-    CelsSessionRememberState(&s, CEL_ID("DummyState"), sizeof(DummyState), &((DummyState){ .counter = 1 }));
+    cel_remember_state(DummyState, { .counter = 1 });
     cel_attach(&s, UserDataTestComp);
 
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -230,7 +231,7 @@ CEL_Composable(ChildWithCleanup, uint64_t, entityId) {
 
 CEL_Composition(GateComposition, void *userData) {
     (void)userData;
-    const GateState *gate = cel_watch(GateState, CEL_ID("GateState"));
+    const GateState *gate = cel_watch_state(GateState);
     if (gate && gate->open) {
         ChildWithCleanup(9999);
     }
@@ -243,7 +244,8 @@ static void TestCelRememberWithUnmount(void)
 
     CelsSession s;
     CelsSessionInit(&s, NULL);
-    CelsSessionRememberState(&s, CEL_ID("GateState"), sizeof(GateState), &((GateState){ .open = true }));
+    CelsSetCurrentSession(&s);
+    cel_remember_state(GateState, { .open = true });
     cel_attach(&s, GateComposition);
 
     /* Frame 1: Child mounts */
@@ -255,7 +257,7 @@ static void TestCelRememberWithUnmount(void)
     assert(s_unmountCount == 0);
 
     /* Frame 3: Gate closes -> Child unmounts */
-    cels_session_mutate(&s, CEL_ID("GateState"), GateState) {
+    cels_session_mutate(&s, GateState) {
         this->open = false;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -285,7 +287,7 @@ CEL_Composable(LivingEntityNode, uint64_t, entityId) {
 
 CEL_Composition(LifecycleEntityComposition, void *userData) {
     (void)userData;
-    const GateState *gate = cel_watch(GateState, CEL_ID("GateState"));
+    const GateState *gate = cel_watch_state(GateState);
     if (gate && gate->open) {
         LivingEntityNode(4242);
     }
@@ -297,7 +299,8 @@ static void TestLifecycleTransactionStaging(void)
 
     CelsSession s;
     CelsSessionInit(&s, NULL);
-    CelsSessionRememberState(&s, CEL_ID("GateState"), sizeof(GateState), &((GateState){ .open = true }));
+    CelsSetCurrentSession(&s);
+    cel_remember_state(GateState, { .open = true });
     cel_attach(&s, LifecycleEntityComposition);
 
     /* Frame 1: Mount -> mount block stages Set Position and Set Health */
@@ -316,7 +319,7 @@ static void TestLifecycleTransactionStaging(void)
     assert(s_capturedCount == 0);
 
     /* Frame 3: Gate closes -> node is pruned from tree -> unmount stages Delete */
-    cels_session_mutate(&s, CEL_ID("GateState"), GateState) {
+    cels_session_mutate(&s, GateState) {
         this->open = false;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -355,8 +358,6 @@ static void TestAmbientContextScope(void)
     const AppTheme *outTheme = (const AppTheme *)0x1234;
     assert(cel_get_context(AppTheme, &outTheme) == CELS_ERROR_NOT_FOUND);
     assert(outTheme == NULL);
-    assert(cel_getContext(AppTheme, &outTheme) == CELS_ERROR_NOT_FOUND);
-    assert(outTheme == NULL);
     assert(cel_get_context(AppTheme, NULL) == CELS_ERROR_INVALID_ARGUMENT);
 
     /* Test invalid session state */
@@ -379,8 +380,6 @@ static void TestAmbientContextScope(void)
 
     const AppTheme *resTheme = NULL;
     assert(cel_get_context(AppTheme, &resTheme) == CELS_OK);
-    assert(resTheme == theme);
-    assert(cel_getContext(AppTheme, &resTheme) == CELS_OK);
     assert(resTheme == theme);
 
     /* Distinct type is still NULL / NOT_FOUND */
@@ -414,25 +413,25 @@ static void TestAmbientContextScope(void)
     const AppTheme *restoredTheme = cel_get_context(AppTheme);
     assert(restoredTheme != NULL);
     assert(restoredTheme->color == 0x111111);
-    assert(cel_getContext(AppTheme) == restoredTheme);
+    assert(cel_context(AppTheme) == restoredTheme);
 
     /* 6. Exiting child composable restores parent composition scope */
     CelsExitGroup(&s);
     assert(cel_get_context(InputFilter) == NULL);
-    assert(cel_getContext(InputFilter) == NULL);
+    assert(cel_context(InputFilter) == NULL);
     assert(cel_get_context(AppTheme) != NULL);
-    assert(cel_getContext(AppTheme) != NULL);
+    assert(cel_context(AppTheme) != NULL);
 
-    /* 7. Verify explicit cel_set_context / cel_setContext */
+    /* 7. Verify explicit cel_set_context */
     assert(CelsEnterComposable(&s, 0x4000));
     AppTheme explicitTheme = { .color = 0x222222, .fontSize = 24 };
     cel_set_context(AppTheme, &explicitTheme);
     assert(cel_get_context(AppTheme)->color == 0x222222);
 
     assert(CelsEnterComposable(&s, 0x5000));
-    AppTheme camelTheme = { .color = 0x333333, .fontSize = 32 };
-    cel_setContext(AppTheme, &camelTheme);
-    assert(cel_getContext(AppTheme)->color == 0x333333);
+    AppTheme subTheme = { .color = 0x333333, .fontSize = 32 };
+    cel_set_context(AppTheme, &subTheme);
+    assert(cel_get_context(AppTheme)->color == 0x333333);
     CelsExitGroup(&s);
 
     assert(cel_get_context(AppTheme)->color == 0x222222);
@@ -441,9 +440,9 @@ static void TestAmbientContextScope(void)
     /* 8. Exiting composition -> all scopes popped */
     CelsExitGroup(&s);
     assert(cel_get_context(AppTheme) == NULL);
-    assert(cel_getContext(AppTheme) == NULL);
+    assert(cel_context(AppTheme) == NULL);
     assert(cel_get_context(InputFilter) == NULL);
-    assert(cel_getContext(InputFilter) == NULL);
+    assert(cel_context(InputFilter) == NULL);
 
     outTheme = NULL;
     assert(cel_get_context(AppTheme, &outTheme) == CELS_ERROR_NOT_FOUND);
@@ -464,7 +463,7 @@ CEL_State(PlayerLogicState) {
 };
 
 CEL_Composition(DeclarativeEntityComposition) {
-    const PlayerLogicState *logic = cel_watch(PlayerLogicState, CEL_ID("PlayerLogicState"));
+    const PlayerLogicState *logic = cel_watch_state(PlayerLogicState);
     if (logic && logic->exists) {
         CEL_Entity(9999) {
             assert(cel_entity_id() == 9999);
@@ -483,8 +482,12 @@ static void TestDeclarativeEntityAndComponents(void)
     CelsSessionInit(&s, NULL);
     CelsSetCurrentSession(&s);
 
-    CelsSessionRememberState(&s, CEL_ID("PlayerLogicState"), sizeof(PlayerLogicState),
-        &((PlayerLogicState){ .exists = true, .hasBuff = true, .posX = 10.0f, .posY = 20.0f }));
+    cel_remember_state(PlayerLogicState, {
+        .exists = true,
+        .hasBuff = true,
+        .posX = 10.0f,
+        .posY = 20.0f
+    });
     cel_attach(&s, DeclarativeEntityComposition);
 
     /* Frame 1: Entity exists with Position AND Health */
@@ -500,7 +503,7 @@ static void TestDeclarativeEntityAndComponents(void)
 
     /* Frame 2: Steady state with position update -> both still present */
     s_capturedCount = 0;
-    cels_session_mutate(&s, CEL_ID("PlayerLogicState"), PlayerLogicState) {
+    cels_session_mutate(&s, PlayerLogicState) {
         this->posX = 15.0f;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -513,7 +516,7 @@ static void TestDeclarativeEntityAndComponents(void)
     /* Frame 3: hasBuff becomes FALSE -> cel_has(Health) is omitted!
      * CELS MUST AUTOMATICALLY STAGE CELS_OP_REMOVE FOR HEALTH! */
     s_capturedCount = 0;
-    cels_session_mutate(&s, CEL_ID("PlayerLogicState"), PlayerLogicState) {
+    cels_session_mutate(&s, PlayerLogicState) {
         this->hasBuff = false;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -527,7 +530,7 @@ static void TestDeclarativeEntityAndComponents(void)
     /* Frame 4: Entity exists becomes FALSE -> entity unmounts!
      * CELS MUST AUTOMATICALLY STAGE CELS_OP_DELETE FOR ENTITY 9999! */
     s_capturedCount = 0;
-    cels_session_mutate(&s, CEL_ID("PlayerLogicState"), PlayerLogicState) {
+    cels_session_mutate(&s, PlayerLogicState) {
         this->exists = false;
     }
     assert(CelsSessionRecompose(&s) == CELS_OK);
@@ -577,7 +580,7 @@ CEL_State(TodoListState) {
 
 CEL_Composition(TodoComposition, void *userData) {
     (void)userData;
-    const TodoListState *state = cel_watch(TodoListState, CEL_ID("TodoListState"));
+    const TodoListState *state = cel_watch_state(TodoListState);
     if (state && state->exists) {
         TodoItemCard(state->item.id, &state->item);
     }
@@ -590,7 +593,7 @@ static void TestComposableIdentityAndDirectHas(void)
     CelsSetCurrentSession(&s);
     s_capturedCount = 0;
 
-    cel_remember_state_keyed(CEL_ID("TodoListState"), TodoListState, {
+    cel_remember_state(TodoListState, {
         .item = { .id = 5555, .posX = 12.5f, .posY = 34.5f, .priority = 10 },
         .exists = true
     });
@@ -606,7 +609,7 @@ static void TestComposableIdentityAndDirectHas(void)
     assert(s_hasPriority == true);
 
     /* Frame 2: Priority = 0 -> Health is omitted */
-    cels_session_mutate(&s, CEL_ID("TodoListState"), TodoListState) {
+    cels_session_mutate(&s, TodoListState) {
         this->item.priority = 0;
         this->item.posX = 50.0f;
     }
@@ -619,7 +622,7 @@ static void TestComposableIdentityAndDirectHas(void)
     assert(s_capturedOps[1].opCode == CELS_OP_REMOVE && s_capturedOps[1].typeKey == CelsHashKey("Health"));
 
     /* Frame 3: exists = false -> unmount */
-    cels_session_mutate(&s, CEL_ID("TodoListState"), TodoListState) {
+    cels_session_mutate(&s, TodoListState) {
         this->exists = false;
     }
     s_capturedCount = 0;
@@ -663,7 +666,7 @@ CEL_State(KeyedListModel) {
 
 CEL_Composition(KeyedListComposition, void *userData) {
     (void)userData;
-    const KeyedListModel *m = cel_watch(KeyedListModel, CEL_ID("KeyedListModel"));
+    const KeyedListModel *m = cel_watch_state(KeyedListModel);
     if (m != NULL) {
         for (int i = 0; i < m->count; ++i) {
             cel_call(KeyedItemRow, m->items[i].id, &m->items[i]);
@@ -678,7 +681,7 @@ static void TestKeyedListReconciliation(void)
     CelsSetCurrentSession(&s);
     s_capturedCount = 0;
 
-    cel_remember_state_keyed(CEL_ID("KeyedListModel"), KeyedListModel, {
+    cel_remember_state(KeyedListModel, {
         .items = {
             { .id = 101, .initialVal = 1 },
             { .id = 102, .initialVal = 2 },
@@ -703,7 +706,7 @@ static void TestKeyedListReconciliation(void)
      * 103 was 13, now 13+10 = 23!
      * 101 was 11, now 11+10 = 21!
      * 102 was 12, now 12+10 = 22! */
-    cels_session_mutate(&s, CEL_ID("KeyedListModel"), KeyedListModel) {
+    cels_session_mutate(&s, KeyedListModel) {
         this->items[0] = (ListItem){ .id = 103, .initialVal = 3 };
         this->items[1] = (ListItem){ .id = 101, .initialVal = 1 };
         this->items[2] = (ListItem){ .id = 102, .initialVal = 2 };
@@ -719,7 +722,7 @@ static void TestKeyedListReconciliation(void)
 
     /* Frame 3: Remove item 101 -> items [103, 102].
      * 101 must be unmounted and deleted! */
-    cels_session_mutate(&s, CEL_ID("KeyedListModel"), KeyedListModel) {
+    cels_session_mutate(&s, KeyedListModel) {
         this->items[0] = (ListItem){ .id = 103, .initialVal = 3 };
         this->items[1] = (ListItem){ .id = 102, .initialVal = 2 };
         this->count = 2;

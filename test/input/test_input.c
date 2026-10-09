@@ -447,6 +447,45 @@ static void TestLayout2DFocusNavigation(void)
 }
 
 /* ========================================================================= */
+/* Test 8: Direct Composable Layout (Column() container block)               */
+/* ========================================================================= */
+
+CEL_Composable(DirectLayoutMenuApp) {
+    cel_set_context(CelsInputMap, &kNavMap);
+    Column() {
+        FocusItem(0);
+        FocusItem(1);
+        FocusItem(2);
+    }
+}
+
+static void TestDirectComposableLayout(void)
+{
+    s_activeFocusItem = -1;
+
+    CelsSession session;
+    CelsSessionInit(&session, NULL);
+    cel_attach(&session, DirectLayoutMenuApp);
+
+    PdcursesInputContext ctx;
+    PdcursesInputInit(&ctx);
+
+    /* Frame 0: Mount pass; item 0 gets initial focus */
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(s_activeFocusItem == 0);
+
+    /* Navigate down: send 's' */
+    PdcursesInputSetKey(&ctx, 's');
+    PdcursesInputPublishKey(&ctx, &session);
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    PdcursesInputPublishKey(&ctx, &session);
+    assert(CelsSessionRecompose(&session) == CELS_OK);
+    assert(s_activeFocusItem == 1);
+
+    CelsSessionDestroy(&session);
+}
+
+/* ========================================================================= */
 /* Test Suite Registration                                                   */
 /* ========================================================================= */
 
@@ -457,7 +496,8 @@ static const TestCase s_inputTests[] = {
     { "TestInputActionConsume", "cel_action_consume event swallowing across siblings", TestInputActionConsume },
     { "TestInputCaseInsensitivity", "Case-insensitive ASCII key mapping", TestInputCaseInsensitivity },
     { "TestLayout1DFocusNavigation", "1D vertical layout focus navigation and boundary wrapping", TestLayout1DFocusNavigation },
-    { "TestLayout2DFocusNavigation", "2D grid layout focus navigation across rows and columns", TestLayout2DFocusNavigation }
+    { "TestLayout2DFocusNavigation", "2D grid layout focus navigation across rows and columns", TestLayout2DFocusNavigation },
+    { "TestDirectComposableLayout", "cel_scope with standard CEL_Composable layout container", TestDirectComposableLayout }
 };
 
 static const TestSuite s_inputSuite = {

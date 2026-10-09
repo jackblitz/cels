@@ -6,7 +6,7 @@
  *
  * NOTE: This file is an application-level architectural pattern demonstrating how
  * developers can author custom layout engines (1D linear rows/columns, 2D grids, menus)
- * on top of core CELS framework primitives (cel_container, cel_has, cel_set_context).
+ * on top of core CELS framework primitives (CelsEnterComposable, cel_has, cel_set_context).
  * It is NOT hard-coded into the core CELS engine library—developers can adapt and extend
  * this pattern to create custom layout archetypes (e.g. FlexBox, Docking, SplitPane).
  *
@@ -24,10 +24,9 @@
  *      without manual parameter drilling.
  *
  * 3. Frame-Accurate Child Settlement:
- *    - Delegates directly to `cel_container(Name, onGroupStart, onGroupEnd, layoutData)`.
- *    - On container exit, `_CelsLayoutOnGroupEnd` receives the settled `childCount` directly from
- *      the slot table engine, enabling instant focus clamping and boundary checks on frame 0
- *      with zero latency or frame guessing.
+ *    - Managed natively by `CEL_Lifecycle(CelsLayoutLifecycle)`: `before_children` sets up direction & focus
+ *      before children run; `after_children(childCount)` receives the settled `childCount` directly from `CelsExitGroup`,
+ *      enabling instant focus clamping and boundary checks on frame 0 with zero latency or manual scope boilerplate.
  *
  * Usage Examples:
  * @code
@@ -59,6 +58,7 @@
 
 #include "cels.h"
 #include "cels_input.h"
+#include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -91,15 +91,15 @@ typedef enum CelsLayoutDir {
 #define CEL_LAYOUT_OMNI  CEL_LAYOUT_DIR_2D
 
 /**
- * @struct CelsLayoutParams
- * @brief Declarative configuration parameters for a CEL_Layout container.
+ * @struct CelsLayout
+ * @brief Declarative layout configuration component attached to container composables via cel_has().
  */
-typedef struct CelsLayoutParams {
+typedef struct CelsLayout {
     CelsLayoutDir dir;         /**< Layout navigation direction (vertical, horizontal, or 2D). */
     int           columns;     /**< Grid columns (0 or 1 for linear; >= 2 for 2D grid). */
     bool          wrapFocus;   /**< Whether focus navigation wraps around boundaries. */
     uint8_t       reserved[3]; /**< Structure alignment padding. */
-} CelsLayoutParams;
+} CelsLayout;
 
 /* ========================================================================= */
 /* Reactive Focus State                                                      */
@@ -111,7 +111,7 @@ typedef struct CelsLayoutParams {
  * @brief Reactive state tracking active keyboard/controller focus index within a layout.
  *
  * Note: FocusState ONLY tracks dynamic runtime focus indices; structural direction is
- * stored separately as a declarative Component (CelsLayoutDir).
+ * stored separately as a declarative Component (CelsLayout).
  */
 CEL_State(CelsFocusState) {
     int     activeIndex; /**< Index of currently focused child widget (0-based). */
@@ -121,57 +121,22 @@ CEL_State(CelsFocusState) {
 };
 
 /* ========================================================================= */
-/* Layout Setup & Child-Aware Focus Routing Hooks                            */
+/* Layout Setup & Child-Aware Focus Routing (CEL_Lifecycle)                  */
 /* ========================================================================= */
 
 /**
- * @brief Internal lifecycle hook executed when entering a CEL_Layout container.
- *
- * Declaratively attaches the layout direction component to the container entity,
- * publishes direction and focus state down the subtree via ambient context, and
- * allocates or resolves the reactive focus state.
- *
- * @param layoutData Pointer to caller-allocated CelsLayoutParams.
- */
-static inline void _CelsLayoutOnGroupStart(void *layoutData)
-{
-    CelsLayoutParams *params = (CelsLayoutParams*)layoutData;
-    if (params == NULL) return;
-
-    /* 1. Declaratively attach direction as a Component to the layout entity */
-    cel_has(CelsLayoutDir, { params->dir });
-
-    /* 2. Publish direction down the subtree via ambient context */
-    cel_set_context(CelsLayoutDir, &params->dir);
-
-    /* 3. Allocate/resolve reactive focus state */
-    CelsFocusState *focus = cel_remember_state(CelsFocusState, {
-        .activeIndex = 0,
-        .totalCount = 0,
-        .wrapFocus = params->wrapFocus
-    });
-    cel_watch(focus);
-
-    /* 4. Publish focus state down subtree via clean ambient context */
-    if (focus != NULL) {
-        cel_set_context(CelsFocusState, focus);
-    }
-}
-
-/**
- * @brief Internal lifecycle hook executed when exiting a CEL_Layout container.
+ * @brief Internal child-settlement focus processor executed during the end phase.
  *
  * Receives the exact settled child count from the slot table engine. Automatically
  * clamps the active focus index to valid child bounds, updates total count, and
  * processes directional input navigation actions (Up/Down/Left/Right/2D Grid).
  *
  * @param childCount Settled count of direct child composables executed within this container.
- * @param layoutData Pointer to caller-allocated CelsLayoutParams.
+ * @param layout     Pointer to layout configuration component.
  */
-static inline void _CelsLayoutOnGroupEnd(uint32_t childCount, void *layoutData)
+static inline void _CelsLayoutOnGroupEnd(uint32_t childCount, const CelsLayout *layout)
 {
-    CelsLayoutParams *params = (CelsLayoutParams*)layoutData;
-    if (params == NULL || childCount == 0) return;
+    if (layout == NULL || childCount == 0) return;
 
     const CelsFocusState *focusRO = NULL;
     if (cel_get_context(CelsFocusState, &focusRO) != CELS_OK || focusRO == NULL) {
@@ -191,9 +156,8 @@ static inline void _CelsLayoutOnGroupEnd(uint32_t childCount, void *layoutData)
     }
 
     /* Directional navigation handling: dynamically read direction */
-    const CelsLayoutDir *dirComp = cel_get(CelsLayoutDir);
-    CelsLayoutDir dir = dirComp ? *dirComp : params->dir;
-    int cols = (params->columns > 1) ? params->columns : 1;
+    CelsLayoutDir dir = layout->dir;
+    int cols = (layout->columns > 1) ? layout->columns : 1;
 
     /* Vertical navigation: W/S or Up/Down */
     if (dir & CEL_LAYOUT_DIR_VERT) {
@@ -205,7 +169,7 @@ static inline void _CelsLayoutOnGroupEnd(uint32_t childCount, void *layoutData)
                     int next = this->activeIndex + cols;
                     if (next < count) {
                         this->activeIndex = next;
-                    } else if (params->wrapFocus) {
+                    } else if (layout->wrapFocus) {
                         this->activeIndex = (this->activeIndex % cols);
                     }
                 } else {
@@ -220,7 +184,7 @@ static inline void _CelsLayoutOnGroupEnd(uint32_t childCount, void *layoutData)
                     int prev = this->activeIndex - cols;
                     if (prev >= 0) {
                         this->activeIndex = prev;
-                    } else if (params->wrapFocus) {
+                    } else if (layout->wrapFocus) {
                         int col = this->activeIndex % cols;
                         int lastRowStart = ((count - 1) / cols) * cols;
                         int target = lastRowStart + col;
@@ -242,7 +206,7 @@ static inline void _CelsLayoutOnGroupEnd(uint32_t childCount, void *layoutData)
                     /* In a 2D grid, Right moves +1 within row or wraps row */
                     if ((this->activeIndex + 1) % cols != 0 && (this->activeIndex + 1) < count) {
                         this->activeIndex++;
-                    } else if (params->wrapFocus) {
+                    } else if (layout->wrapFocus) {
                         this->activeIndex = this->activeIndex - (this->activeIndex % cols);
                     }
                 } else {
@@ -256,7 +220,7 @@ static inline void _CelsLayoutOnGroupEnd(uint32_t childCount, void *layoutData)
                     /* In a 2D grid, Left moves -1 within row or wraps row */
                     if (this->activeIndex % cols != 0) {
                         this->activeIndex--;
-                    } else if (params->wrapFocus) {
+                    } else if (layout->wrapFocus) {
                         int rowEnd = this->activeIndex + cols - 1;
                         this->activeIndex = (rowEnd < count) ? rowEnd : count - 1;
                     }
@@ -268,51 +232,188 @@ static inline void _CelsLayoutOnGroupEnd(uint32_t childCount, void *layoutData)
     }
 }
 
+/**
+ * @brief Native CEL_Lifecycle managing layout direction, ambient focus, and child-count settlement.
+ *
+ * Reads the CelsLayout component attached to the active entity via cel_get(CelsLayout).
+ * - before_children block: publishes ambient context and initializes reactive focus state.
+ * - after_children(childCount) block: receives settled childCount on group exit and routes directional focus.
+ */
+CEL_Lifecycle(CelsLayoutLifecycle) {
+    before_children {
+        const CelsLayout *layout = cel_get(CelsLayout);
+        if (layout == NULL) {
+            cel_get_context(CelsLayout, &layout);
+        }
+        if (layout == NULL) return;
+
+        /* 1. Subscribe to input events so key presses invalidate and route focus */
+        cel_watch_state(CelsInputState);
+
+        /* 2. Publish layout configuration down the subtree via ambient context */
+        cel_set_context(CelsLayout, layout);
+        cel_set_context(CelsLayoutDir, &layout->dir);
+
+        /* 3. Allocate/resolve reactive focus state */
+        CelsFocusState *focus = cel_remember_state(CelsFocusState, {
+            .activeIndex = 0,
+            .totalCount = 0,
+            .wrapFocus = layout->wrapFocus
+        });
+        cel_watch(focus);
+
+        /* 4. Publish focus state down subtree via clean ambient context */
+        if (focus != NULL) {
+            cel_set_context(CelsFocusState, focus);
+        }
+    }
+    after_children(childCount) {
+        const CelsLayout *layout = cel_get(CelsLayout);
+        if (layout == NULL) {
+            cel_get_context(CelsLayout, &layout);
+        }
+        _CelsLayoutOnGroupEnd(childCount, layout);
+    }
+}
+
+/* ========================================================================= */
+/* Layout Container Composables                                              */
+/* Standard CEL_Composable nodes usable with cel_scope(Name, ...) { ... }    */
+/* ========================================================================= */
+
+static inline void _CelsLayoutSetup(CelsLayout layout) {
+    CelsEntityRegisterComponent(CelsGetCurrentSession(), CelsHashKey("CelsLayout"), sizeof(CelsLayout), &layout);
+    cel_watch_state(CelsInputState);
+
+    const CelsLayout *l = cel_get(CelsLayout);
+    if (l == NULL) l = &layout;
+    cel_set_context(CelsLayout, l);
+    cel_set_context(CelsLayoutDir, &l->dir);
+
+    CelsFocusState *focus = cel_remember_state(CelsFocusState, {
+        .activeIndex = 0,
+        .totalCount = 0,
+        .wrapFocus = layout.wrapFocus
+    });
+    cel_watch(focus);
+    if (focus != NULL) {
+        cel_set_context(CelsFocusState, focus);
+    }
+}
+
+/**
+ * @brief 1D Linear Layout Container Composable (Vertical or Horizontal).
+ */
+CEL_Composable(CelsLayoutLinear, CelsLayoutDir, dir) {
+    CelsLayout layout = { .dir = dir, .columns = 0, .wrapFocus = true };
+    _CelsLayoutSetup(layout);
+    on_exit(childCount) {
+        const CelsLayout *l = cel_get(CelsLayout);
+        _CelsLayoutOnGroupEnd(childCount, l ? l : &layout);
+    }
+}
+
+/**
+ * @brief 2D Grid Layout Container Composable with column count and wrap behavior.
+ */
+CEL_Composable(CelsLayoutGrid, int, columns, bool, wrapFocus) {
+    CelsLayout layout = { .dir = CEL_LAYOUT_DIR_2D, .columns = columns, .wrapFocus = wrapFocus };
+    _CelsLayoutSetup(layout);
+    on_exit(childCount) {
+        const CelsLayout *l = cel_get(CelsLayout);
+        _CelsLayoutOnGroupEnd(childCount, l ? l : &layout);
+    }
+}
+
+/**
+ * @brief Keyed Layout Container Composable for explicit slot table identity.
+ */
+CEL_Composable(CelsLayoutKeyed, id, CelsLayoutDir, dir, int, columns, bool, wrapFocus) {
+    CelsLayout layout = { .dir = dir, .columns = columns, .wrapFocus = wrapFocus };
+    _CelsLayoutSetup(layout);
+    on_exit(childCount) {
+        const CelsLayout *l = cel_get(CelsLayout);
+        _CelsLayoutOnGroupEnd(childCount, l ? l : &layout);
+    }
+}
+
+/**
+ * @brief Vertical Column Container Composable (equivalent to Jetpack Compose Column).
+ */
+CEL_Composable(CelsColumn) {
+    CelsLayout layout = { .dir = CEL_LAYOUT_DIR_VERT, .columns = 0, .wrapFocus = true };
+    _CelsLayoutSetup(layout);
+    on_exit(childCount) {
+        const CelsLayout *l = cel_get(CelsLayout);
+        _CelsLayoutOnGroupEnd(childCount, l ? l : &layout);
+    }
+}
+
+/**
+ * @brief Horizontal Row Container Composable (equivalent to Jetpack Compose Row).
+ */
+CEL_Composable(CelsRow) {
+    CelsLayout layout = { .dir = CEL_LAYOUT_DIR_HORIZ, .columns = 0, .wrapFocus = true };
+    _CelsLayoutSetup(layout);
+    on_exit(childCount) {
+        const CelsLayout *l = cel_get(CelsLayout);
+        _CelsLayoutOnGroupEnd(childCount, l ? l : &layout);
+    }
+}
+
 /* ========================================================================= */
 /* Reusable CEL_Layout Macro                                                 */
-/* Clean 1-line definitions delegating directly to child-aware cel_container!*/
+/* Clean zero-plumbing alias mapping directly to cel_scope().                */
 /* ========================================================================= */
 
 #define _CEL_LAYOUT_4(Name, dirVal, colsVal, wrapVal) \
-    cel_container(Name, _CelsLayoutOnGroupStart, _CelsLayoutOnGroupEnd, \
-                  &((CelsLayoutParams){ .dir = (dirVal), .columns = (colsVal), .wrapFocus = (wrapVal) }))
+    cel_scope(CelsLayoutKeyed, CelsHashKey(#Name), (dirVal), (colsVal), (wrapVal))
 
 #define _CEL_LAYOUT_3(Name, dirVal, colsVal) \
-    _CEL_LAYOUT_4(Name, dirVal, colsVal, true)
+    cel_scope(CelsLayoutKeyed, CelsHashKey(#Name), (dirVal), (colsVal), true)
 
 #define _CEL_LAYOUT_2(Name, dirVal) \
-    _CEL_LAYOUT_4(Name, dirVal, 0, true)
+    cel_scope(CelsLayoutKeyed, CelsHashKey(#Name), (dirVal), 0, true)
 
 #define _CEL_LAYOUT_1(dirVal) \
-    _CEL_LAYOUT_4(CelsLayout, dirVal, 0, true)
+    cel_scope(CelsLayoutLinear, (dirVal))
 
 /**
  * @def CEL_Layout
  * @brief Child-aware layout container with directional focus routing and ambient context.
  *
- * What it does:
- * Creates an inline container group delegating directly to cel_container. Attaches
- * the layout direction as an ECS component (cel_has(CelsLayoutDir)), manages reactive
- * focus state (CelsFocusState), publishes both down the subtree via ambient context,
- * and automatically routes directional input navigation across settled child composables.
+ * Built directly on top of cel_scope() and standard CEL_Composable nodes.
  *
  * Signatures:
- * - CEL_Layout(dir): Anonymous linear layout (vertical, horizontal, or 2D grid).
+ * - CEL_Layout(dir): Linear layout (vertical, horizontal, or 2D grid).
  * - CEL_Layout(Name, dir): Named 1D layout container in slot table.
  * - CEL_Layout(Name, dir, cols): Named 2D grid container with specified column count.
  * - CEL_Layout(Name, dir, cols, wrapFocus): Full configuration with wrap behavior.
  *
- * Example:
- * @code
- *     CEL_Layout(CEL_LAYOUT_DIR_VERT) {
- *         VolumeSlider(settings);
- *         MuteToggle(settings);
- *         GraphicsSelector(settings);
- *     }
- * @endcode
+ * Alternatively, use cel_scope directly:
+ * - cel_scope(CelsLayoutLinear, CEL_LAYOUT_DIR_VERT) { ... }
+ * - cel_scope(CelsLayoutGrid, 4, true) { ... }
+ * - cel_scope(CelsColumn) { ... }
+ * - cel_scope(CelsRow) { ... }
  */
 #define CEL_Layout(...) \
     _CEL_GET_MACRO_4(__VA_ARGS__, _CEL_LAYOUT_4, _CEL_LAYOUT_3, _CEL_LAYOUT_2, _CEL_LAYOUT_1)(__VA_ARGS__)
+
+#ifndef Column
+/**
+ * @def Column
+ * @brief Vertical linear layout container block (equivalent to Jetpack Compose Column).
+ */
+#define Column(...) cel_scope(CelsColumn, ##__VA_ARGS__)
+#endif
+
+#ifndef Row
+/**
+ * @def Row
+ * @brief Horizontal linear layout container block (equivalent to Jetpack Compose Row).
+ */
+#define Row(...) cel_scope(CelsRow, ##__VA_ARGS__)
+#endif
 
 /* ========================================================================= */
 /* Child Composable Focus Query Helpers                                      */

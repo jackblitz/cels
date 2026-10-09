@@ -142,6 +142,10 @@ const void *CelsStateWatch(CelsSession *session, CEL_Id id, size_t size)
         return NULL;
     }
 
+    if (session->currentPhase != CEL_LIFECYCLE_PHASE_ENTER) {
+        return CelsStateGet(session, id, size);
+    }
+
     CelsStateCell *cell = CelsStateRegistryFindCell(&session->stateRegistry, id);
     if (cell == NULL && size > 0) {
         cell = CelsStateGetOrCreateCell(session, id, size, NULL);

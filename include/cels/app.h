@@ -59,6 +59,7 @@ extern "C" {
 #endif
 
 #define CELS_APP_ENTRY_SYMBOL "CelsGetAppManifest"
+/** @deprecated Legacy entry point symbol preserved for backwards compatibility with pre-v0.5 binaries. */
 #define CELS_APP_LEGACY_ENTRY_SYMBOL "CelsGetAppDef"
 
 /* ========================================================================= */
@@ -74,14 +75,15 @@ struct CelsAppManifest {
     const char  *title;                  /**< Human-readable window title / display name */
     const char  *appVersion;             /**< Semantic version string (e.g. "0.5.0") */
     void       (*setSession)(CelsSession *s); /**< Internal session synchronization across DLL boundary */
-    void       (*onStart)(CelsEngine *engine);  /**< Setup: creates sessions & attaches compositions */
-    void       (*onReload)(CelsEngine *engine); /**< Hot-reload refresh (defaults to onStart if NULL) */
-    void       (*onEnd)(CelsEngine *engine);    /**< Teardown callback on shutdown / unload */
+    void       (*onStart)(CelsSession *session);  /**< Setup: attaches root compositions */
+    void       (*onReload)(CelsSession *session); /**< Hot-reload refresh (defaults to onStart if NULL) */
+    void       (*onEnd)(CelsSession *session);    /**< Teardown callback on shutdown / unload */
 };
 
 #ifndef CELS_APP_MANIFEST_TYPEDEF_DEFINED
 #define CELS_APP_MANIFEST_TYPEDEF_DEFINED
 typedef struct CelsAppManifest CelsAppManifest;
+/** @deprecated Deprecated legacy alias for CelsAppManifest. */
 typedef struct CelsAppManifest CelsAppDef;
 #endif
 typedef const CelsAppManifest *(*CelsAppEntryFn)(void);
@@ -93,6 +95,10 @@ typedef const CelsAppManifest *(*CelsAppEntryFn)(void);
  * @return Pointer to application manifest structure. Never NULL.
  */
 CELS_APP_EXPORT const CelsAppManifest *CelsGetAppManifest(void);
+
+/**
+ * @deprecated Legacy manifest entry point synonym. Use CelsGetAppManifest().
+ */
 CELS_APP_EXPORT const CelsAppManifest *CelsGetAppDef(void);
 
 /* ========================================================================= */
@@ -104,8 +110,7 @@ CELS_APP_EXPORT const CelsAppManifest *CelsGetAppDef(void);
  *
  * Example:
  * @code
- *     static void WindowApp_OnStart(CelsEngine *engine) {
- *         CelsSession *session = cel_engine_create_session(engine, "main", CELS_PROFILE_1K);
+ *     static void WindowApp_OnStart(CelsSession *session) {
  *         cel_attach(session, WindowComposition, WindowEval);
  *     }
  *

@@ -122,14 +122,14 @@ set_target_properties(cels_hot_reload_notifier PROPERTIES
 if(CELS_BUILD_EXAMPLES)
     # PDCurses static library for terminal TUI
     file(GLOB PDCURSES_SRCS
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdcurses/pdcurses/*.c
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdcurses/wincon/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/examples/third_party/pdcurses/pdcurses/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/examples/third_party/pdcurses/wincon/*.c
     )
     add_library(pdcurses STATIC ${PDCURSES_SRCS})
     target_compile_options(pdcurses PRIVATE -w)
     target_include_directories(pdcurses PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdcurses
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pdcurses/wincon
+        ${CMAKE_CURRENT_SOURCE_DIR}/examples/third_party/pdcurses
+        ${CMAKE_CURRENT_SOURCE_DIR}/examples/third_party/pdcurses/wincon
     )
     target_compile_definitions(pdcurses PUBLIC PDC_WIDE)
     set_target_properties(pdcurses PROPERTIES

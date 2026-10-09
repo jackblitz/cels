@@ -146,7 +146,7 @@ CEL_Composable(Sidebar) {
     SidebarResource *res = cel_remember(SidebarResource, 0);
     cel_lifecycle(SidebarLifecycle, res);
     ProfileWidget();
-    const AppState *state = cel_watch(AppState, CEL_ID("AppState"));
+    const AppState *state = cel_watch_state(AppState);
     if (state && state->showSubMenu) {
         SubMenu();
     }
@@ -156,7 +156,7 @@ CEL_Composable(ContentArea) {}
 
 CEL_Composable(MainBody) {
     ContentArea();
-    const AppState *state = cel_watch(AppState, CEL_ID("AppState"));
+    const AppState *state = cel_watch_state(AppState);
     if (state && state->showOptionalSidebar) {
         Sidebar();
     }
@@ -195,12 +195,13 @@ static void InitKeyRegistry(void) {
 }
 
 static void ResetTreeState(CelsSession *session) {
+    CelsSetCurrentSession(session);
     InitKeyRegistry();
-    CelsSessionRememberState(session, CEL_ID("AppState"), sizeof(AppState), &((AppState){
+    cel_remember_state(AppState, {
         .showOptionalSidebar = true,
         .showSubMenu = true
-    }));
-    cels_session_mutate(session, CEL_ID("AppState"), AppState) {
+    });
+    cels_session_mutate(session, AppState) {
         this->showOptionalSidebar = true;
         this->showSubMenu = true;
     }
@@ -232,7 +233,7 @@ static void TestTreeToggleSubMenu(void) {
     assert(CelsSessionRecompose(&session) == CELS_OK);
     assert(GetActiveCount(&session) == 10);
 
-    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, AppState) {
         this->showSubMenu = false;
     }
 
@@ -250,7 +251,7 @@ static void TestTreeToggleOptionalSidebar(void) {
     assert(CelsSessionRecompose(&session) == CELS_OK);
     assert(GetActiveCount(&session) == 10);
 
-    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, AppState) {
         this->showOptionalSidebar = false;
     }
 
@@ -267,13 +268,13 @@ static void TestTreeReenableOptionalSidebar(void) {
 
     assert(CelsSessionRecompose(&session) == CELS_OK);
 
-    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, AppState) {
         this->showOptionalSidebar = false;
     }
     assert(CelsSessionRecompose(&session) == CELS_OK);
     assert(GetActiveCount(&session) == 6);
 
-    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, AppState) {
         this->showOptionalSidebar = true;
         this->showSubMenu = false;
     }
@@ -294,7 +295,7 @@ static void TestTreeFullPassSequence(void) {
     CelsDumpTree(&session);
 
     /* PASS 2: Toggling showSubMenu = false */
-    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, AppState) {
         this->showSubMenu = false;
     }
     assert(CelsSessionRecompose(&session) == CELS_OK);
@@ -302,7 +303,7 @@ static void TestTreeFullPassSequence(void) {
     CelsDumpTree(&session);
 
     /* PASS 3: Toggling showOptionalSidebar = false */
-    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, AppState) {
         this->showOptionalSidebar = false;
     }
     assert(CelsSessionRecompose(&session) == CELS_OK);
@@ -310,7 +311,7 @@ static void TestTreeFullPassSequence(void) {
     CelsDumpTree(&session);
 
     /* PASS 4: Re-enabling showOptionalSidebar = true */
-    cels_session_mutate(&session, CEL_ID("AppState"), AppState) {
+    cels_session_mutate(&session, AppState) {
         this->showOptionalSidebar = true;
         this->showSubMenu = false;
     }
@@ -338,7 +339,7 @@ static bool s_rootChecked = false;
 
 CEL_Composable(TestLeafItem, int, val) {
     (void)val;
-    const CounterState *cnt = cel_watch(CounterState, CEL_ID("CounterState"));
+    const CounterState *cnt = cel_watch_state(CounterState);
     (void)cnt;
 
     CelsChildInfo info;
@@ -366,16 +367,18 @@ CEL_Composable(TestLeafItem, int, val) {
     }
 }
 
-CEL_Composable(TestContainerGroup) {
-    cel_container(TestContainerBlock) {
-        TestLeafItem(10);
-        TestLeafItem(20);
-        TestLeafItem(30);
+CEL_Composable(TestContainerBlock) {
+    TestLeafItem(10);
+    TestLeafItem(20);
+    TestLeafItem(30);
 
-        uint32_t containerChildCount = 0;
-        assert(cel_child_count(&containerChildCount) == CELS_OK);
-        assert(containerChildCount == 3);
-    }
+    uint32_t containerChildCount = 0;
+    assert(cel_child_count(&containerChildCount) == CELS_OK);
+    assert(containerChildCount == 3);
+}
+
+CEL_Composable(TestContainerGroup) {
+    TestContainerBlock();
 }
 
 CEL_Composition(TestContainerComposition) {
@@ -407,7 +410,8 @@ static void TestTreeChildIntrospection(void) {
     /* 3. Run session with container and children */
     CelsSession session;
     CelsSessionInit(&session, NULL);
-    CelsSessionRememberState(&session, CEL_ID("CounterState"), sizeof(CounterState), &((CounterState){ .tick = 0 }));
+    CelsSetCurrentSession(&session);
+    cel_remember_state(CounterState, { .tick = 0 });
     cel_attach(&session, TestContainerComposition);
 
     s_childInvokedCount = 0;
@@ -425,7 +429,7 @@ static void TestTreeChildIntrospection(void) {
     assert(s_childIsFirst[2] == false);
 
     /* PASS 2: Mutate state to trigger recomposition of watchers */
-    cels_session_mutate(&session, CEL_ID("CounterState"), CounterState) {
+    cels_session_mutate(&session, CounterState) {
         this->tick++;
     }
     s_childInvokedCount = 0;
