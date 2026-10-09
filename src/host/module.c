@@ -859,6 +859,21 @@ bool CelsResolveModulePath(const char *appName, char *outPath, size_t maxLen)
         snprintf(outPath, maxLen, "%s", candidate);
         return true;
     }
+    snprintf(candidate, sizeof(candidate), "%stest_scene/%s.dll", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%s../%s.dll", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%s../test_scene/%s.dll", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
     snprintf(candidate, sizeof(candidate), "%s%s_app.dll", exeDir, name);
     if (IsPathReadable(candidate)) {
         snprintf(outPath, maxLen, "%s", candidate);
@@ -883,6 +898,21 @@ bool CelsResolveModulePath(const char *appName, char *outPath, size_t maxLen)
         snprintf(outPath, maxLen, "%s", candidate);
         return true;
     }
+    snprintf(candidate, sizeof(candidate), "%stest_scene/%s.dylib", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%s../%s.dylib", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%s../test_scene/%s.dylib", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
     snprintf(candidate, sizeof(candidate), "%s%s_app.dylib", exeDir, name);
     if (IsPathReadable(candidate)) {
         snprintf(outPath, maxLen, "%s", candidate);
@@ -902,6 +932,21 @@ bool CelsResolveModulePath(const char *appName, char *outPath, size_t maxLen)
     return false;
 #else
     snprintf(candidate, sizeof(candidate), "%s%s.so", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%stest_scene/%s.so", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%s../%s.so", exeDir, name);
+    if (IsPathReadable(candidate)) {
+        snprintf(outPath, maxLen, "%s", candidate);
+        return true;
+    }
+    snprintf(candidate, sizeof(candidate), "%s../test_scene/%s.so", exeDir, name);
     if (IsPathReadable(candidate)) {
         snprintf(outPath, maxLen, "%s", candidate);
         return true;
