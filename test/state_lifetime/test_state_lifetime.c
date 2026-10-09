@@ -8,9 +8,9 @@
 #include <stdio.h>
 #include <string.h>
 
-CEL_State(ChildState) {
+typedef struct ChildState {
     int value;
-};
+} ChildState;
 
 static int childRuns;
 static int siblingRuns;
@@ -62,10 +62,10 @@ typedef struct Resource {
     unsigned magic;
 } Resource;
 
-CEL_State(LayoutState) {
+typedef struct LayoutState {
     int mode;
     int childVal;
-};
+} LayoutState;
 
 static int creates;
 static int destroys;
@@ -171,9 +171,9 @@ static void TestEditsPreserveResources(void) {
     assert(destroys == creates);
 }
 
-CEL_State(ShowParent) {
+typedef struct ShowParent {
     bool show;
-};
+} ShowParent;
 
 CEL_Lifecycle(ParentLifecycle, Resource *parent) {
     mount {
@@ -242,9 +242,9 @@ static void TestChildBeforeParent(void) {
     assert(CelsGetCurrentSession() == NULL);
 }
 
-CEL_State(NestedLayout) {
+typedef struct NestedLayout {
     int mode;
-};
+} NestedLayout;
 
 static int parentRuns[3];
 static Resource *parentResources[3];
@@ -322,11 +322,11 @@ static void TestNestedEditsKeepSubscriptions(void) {
 /* State Hoisting Tests (Pointer Instance Identity)                          */
 /* ========================================================================= */
 
-CEL_State(HoistedWindowState) {
+typedef struct HoistedWindowState {
     int width;
     int height;
     bool isOpen;
-};
+} HoistedWindowState;
 
 static int s_hoistedChildRuns = 0;
 static int s_hoistedChildLastWidth = 0;
@@ -442,9 +442,9 @@ static void TestStateHoistingMultipleInstances(void) {
     CelsSessionDestroy(&s);
 }
 
-CEL_State(TeardownToggleState) {
+typedef struct TeardownToggleState {
     bool enable;
-};
+} TeardownToggleState;
 
 static TeardownToggleState *s_capturedToggle = NULL;
 static int s_teardownChildRuns = 0;

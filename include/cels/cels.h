@@ -18,8 +18,8 @@
  *      Deterministic, topological mount and unmount tracking (`CEL_Lifecycle`, `cel_lifecycle`).
  *      Tears down native resources in strictly reverse (LIFO) order of registration.
  * - S: State
- *      Double-buffered, cache-aligned reactive state (`CEL_State`, `cel_remember`,
- *      `cel_state`, `cel_remember_state`, `cel_watch`, `cel_get_state`, `cel_mutate`).
+ *      Double-buffered, cache-aligned reactive state (`cel_state`, `cel_remember`,
+ *      `cel_remember_state`, `cel_watch`, `cel_get_state`, `cel_mutate`).
  * - Context & Ambient Cascading:
  *      Pass environment variables, theme tokens, and input maps down the composable tree
  *      without parameter drilling (`cel_set_context`, `cel_get_context`, `cel_context`).
@@ -32,10 +32,10 @@
  *
  * Typical Usage Guide:
  * @code
- *     // 1. Declare double-buffered reactive state
- *     CEL_State(CounterState) {
+ *     // 1. Declare state with a standard C99 struct
+ *     typedef struct CounterState {
  *         int count;
- *     };
+ *     } CounterState;
  *
  *     // 2. Declare a child composable widget
  *     CEL_Composable(CounterWidget) {
@@ -118,33 +118,28 @@ extern "C" {
 #endif
 
 /* ========================================================================= */
-/* Reactive State Declaration (CEL_State)                                    */
+/* Reactive State Declaration (Plain C struct / Optional CEL_State shorthand)*/
 /* ========================================================================= */
 
 /**
- * @def CEL_State
- * @brief Declares a double-buffered reactive state structure type.
- *
- * What it does:
- * Generates both a typedef and struct declaration for a named reactive state model.
- * The declared type is used with cel_watch(), cel_get_state(), and cel_mutate().
- *
- * Expected outcome:
- * Defines a clean, cache-aligned C99 struct type recognized by the CELS state registry.
- *
- * Where to use:
- * Declare in shared header files at file scope. Do NOT declare inside functions.
- *
- * Example:
- * @code
- *     CEL_State(PlayerState) {
- *         float posX;
- *         float posY;
- *         int health;
- *         bool isAlive;
- *     };
- * @endcode
- */
+  * NOTE: In CELS, reactive state models are declared as standard, plain C99 structs:
+  *
+  * @code
+  *     typedef struct PlayerState {
+  *         float posX;
+  *         float posY;
+  *         int   health;
+  *         bool  isAlive;
+  *     } PlayerState;
+  * @endcode
+  *
+  * No special macros, reflection, or code generation are required to define state.
+  * All runtime mechanisms (cel_state, cel_remember_state, cel_watch, cel_mutate)
+  * operate directly on standard C structs via compile-time sizeof() and type hashing.
+  *
+  * The CEL_State macro below is provided solely as an optional convenience shorthand
+  * that expands to `typedef struct TypeName TypeName; struct TypeName`.
+  */
 #ifndef CEL_State
 #define CEL_State(TypeName) \
     typedef struct TypeName TypeName; \

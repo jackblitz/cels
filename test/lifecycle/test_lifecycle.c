@@ -11,15 +11,15 @@
 /* Reactive Entity State & Observer Resources                                */
 /* ========================================================================= */
 
-CEL_State(Enemy) {
+typedef struct Enemy {
     int  hp;
     bool isAlive;
-};
+} Enemy;
 
-CEL_State(EnemyTexture) {
+typedef struct EnemyTexture {
     int  gpuHandle;
     bool isLoaded;
-};
+} EnemyTexture;
 
 static int g_texturesRemembered = 0;
 static int g_texturesForgotten = 0;
@@ -222,10 +222,10 @@ static void TestEngineEvaluationTeardownTriggerQuit(void) {
     CelsEngineDestroy(&engine);
 }
 
-CEL_State(AppWindowTestState) {
+typedef struct AppWindowTestState {
     bool isOpen;
     bool showBadge;
-};
+} AppWindowTestState;
 
 static int s_badgeMountCount = 0;
 static int s_badgeUnmountCount = 0;
@@ -347,10 +347,10 @@ CEL_Composable(LeafChild, int, id) {
     (void)id;
 }
 
-CEL_State(MetricsRootState) {
+typedef struct MetricsRootState {
     int childCount;
     bool isVisible;
-};
+} MetricsRootState;
 
 CEL_Composable(MetricsParentComposable, FrameMetrics*, m) {
     cel_lifecycle(MetricsLifecycle, m);
@@ -447,10 +447,10 @@ CEL_Composable(TestInlineContainer, int, multiplier) {
     }
 }
 
-CEL_State(InlineRootState) {
+typedef struct InlineRootState {
     int count;
     bool visible;
-};
+} InlineRootState;
 
 CEL_Composition(InlineTestApp, void *userData) {
     (void)userData;

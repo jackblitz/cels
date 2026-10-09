@@ -113,12 +113,12 @@ typedef struct CelsLayout {
  * Note: FocusState ONLY tracks dynamic runtime focus indices; structural direction is
  * stored separately as a declarative Component (CelsLayout).
  */
-CEL_State(CelsFocusState) {
+typedef struct CelsFocusState {
     int     activeIndex; /**< Index of currently focused child widget (0-based). */
     int     totalCount;  /**< Total focusable widgets registered in this layout. */
     bool    wrapFocus;   /**< Whether focus navigation wraps around edges. */
     uint8_t reserved[3]; /**< Structure alignment padding. */
-};
+} CelsFocusState;
 
 /* ========================================================================= */
 /* Layout Setup & Child-Aware Focus Routing (CEL_Lifecycle)                  */

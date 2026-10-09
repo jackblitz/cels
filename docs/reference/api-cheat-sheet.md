@@ -28,7 +28,7 @@ Macros used to declare types, structural composition nodes, tasks, lifecycles, a
 
 | Macro / Symbol | Exact Signature / Arity | Allowed Scope | Return / Expansion | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| [`CEL_State`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L108) | `CEL_State(TypeName)` | `FILE` | `typedef struct TypeName ...; struct TypeName` | Declares a double-buffered reactive state structure type. |
+| [`CEL_State`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L125) | `CEL_State(TypeName)` | `FILE` | `typedef struct TypeName ...; struct TypeName` | (Optional shorthand) Declares a reactive state struct. Standard C `typedef struct` is idiomatic. |
 | [`CEL_Module`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L136) | `CEL_Module(TypeName)` | `FILE` | `typedef struct TypeName ...; struct TypeName` | Declares an engine subsystem module struct surviving code reload. |
 | [`CEL_Composition`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L179) | `CEL_Composition(Name)`<br>`CEL_Composition(Name, ArgDecl)`<br>`CEL_Composition(Name, Type, Param)` | `FILE` | `void Name(void *cels_userData)`<br>`void Name(ArgDecl)`<br>`void Name(Type Param)` | Declares a root composition entry point attached to a session. 1-arg form eliminates unused parameter warnings. |
 | [`CEL_Composable`](file:///D:/cels-workspace/library/cels/include/cels/cels.h#L370) | `CEL_Composable(Name, ...)`<br>*(Unkeyed: 0 to 4 param pairs; Keyed: `id` + 0 to 4 param pairs)* | `FILE` | `static inline void Name(...)` + internal body | Declares a single-file or header-only child composable with automatic slot caching. Supports both unkeyed and keyed (explicit `uint64_t id`) signatures. |

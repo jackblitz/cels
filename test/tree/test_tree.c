@@ -112,14 +112,14 @@ static void CelsDumpTree(const CelsSession *s) {
 /* Reactive State & Observers                                                */
 /* ========================================================================= */
 
-CEL_State(AppState) {
+typedef struct AppState {
     bool showOptionalSidebar;
     bool showSubMenu;
-};
+} AppState;
 
-CEL_State(SidebarResource) {
+typedef struct SidebarResource {
     int resourceHandle;
-};
+} SidebarResource;
 
 CEL_Lifecycle(SidebarLifecycle, SidebarResource *self) {
     mount {
@@ -326,9 +326,9 @@ static void TestTreeFullPassSequence(void) {
 /* Child Introspection & Container Tracking Tests                            */
 /* ========================================================================= */
 
-CEL_State(CounterState) {
+typedef struct CounterState {
     int tick;
-};
+} CounterState;
 
 static uint32_t s_childIndices[4];
 static bool s_childIsFirst[4];

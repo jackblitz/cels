@@ -107,15 +107,15 @@ static void PrintCompositionTree(const CelsSession *s, const char *title) {
 /* Reactive State & Lifecycle Models for Workloads                           */
 /* ========================================================================= */
 
-CEL_State(EnemyState) {
+typedef struct EnemyState {
     int  hp;
     bool isAlive;
-};
+} EnemyState;
 
-CEL_State(EnemyTexture) {
+typedef struct EnemyTexture {
     int  gpuHandle;
     bool isLoaded;
-};
+} EnemyTexture;
 
 CEL_Lifecycle(TextureLifecycle, EnemyTexture *self) {
     mount {
@@ -157,11 +157,11 @@ CEL_Composition(GoblinComposable, void *userData) {
 }
 
 /* Wide & Deep Large Composable Tree */
-CEL_State(DashboardState) {
+typedef struct DashboardState {
     int activeTab;
     bool showSidePanel;
     int itemCount;
-};
+} DashboardState;
 
 CEL_Composable(Logo) {}
 CEL_Composable(SearchField) {

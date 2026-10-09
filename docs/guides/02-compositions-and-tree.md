@@ -652,12 +652,12 @@ Containers (e.g. [`CEL_Layout`](file:///D:/cels-workspace/library/cels/examples/
 #### Example: Authoring a `LazyColumn` Container
 
 ```c
-/* 1. Define reactive container state */
-CEL_State(LazyListState) {
+/* 1. Define reactive container state with a standard C struct */
+typedef struct LazyListState {
     int firstVisibleIndex;
     int visibleItemCount;
     int totalItems;
-};
+} LazyListState;
 
 /* 2. Container Composable: handles input and publishes context */
 CEL_Composable(LazyColumn, LazyListState*, state, int, totalCount) {

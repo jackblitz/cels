@@ -20,7 +20,7 @@
  *      without passing input state or action maps down through function parameters.
  *
  * 3. Reactive Event Wakeup:
- *    - CelsInputState is a double-buffered CEL_State. When the host mutates it on key press,
+ *    - CelsInputState is a double-buffered reactive state struct. When the host mutates it on key press,
  *      only composables observing input are recomposed.
  *
  * Usage Example:
@@ -71,12 +71,12 @@ extern "C" {
 /**
  * @brief Reactive state tracking current keyboard/controller raw input for a session.
  */
-CEL_State(CelsInputState) {
+typedef struct CelsInputState {
     uint32_t frameId;      /**< Monotonically increasing tick ID (4 bytes). */
     int      rawKey;       /**< ASCII or key code, 0 = no key (4 bytes). */
     bool     handled;      /**< True if an active composable consumed this key (1 byte). */
     uint8_t  reserved[3];  /**< Alignment padding (3 bytes). */
-};
+} CelsInputState;
 
 /* ========================================================================= */
 /* Declarative Action Mapping (Unity-style Input Manager)                    */

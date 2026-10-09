@@ -21,7 +21,7 @@ CELS reads like a DSL, compiles as pure C99, and runs anywhere. Define reactive 
 - **S** tate — manage reactive data in cache-aligned memory slabs with snapshot diffing and persistent local memory (`cel_remember`)
 
 ```text
- State (CEL_State)               defines DATA
+ State (Plain C struct)        defines DATA
  Compositions (CEL_Composition)  defines STRUCTURE    (what exists)
  Reactivity (cel_watch/mutate)   detects CHANGE       (when things happen)
  Lifecycles (CEL_Lifecycle)      controls LIFETIME    (when things live and die)
@@ -35,7 +35,7 @@ cel_mutate updates ──> cel_watch detects ──> Recomposition reacts (O(1) 
 ```
 
 ```c
-CEL_State(PlayerState) { float health; bool hasShield; };
+typedef struct PlayerState { float health; bool hasShield; } PlayerState;
 
 CEL_Composable(HealthHUD, const PlayerState*, player) {
     cel_watch(player); // Automatically subscribes to changes

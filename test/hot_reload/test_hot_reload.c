@@ -15,10 +15,10 @@
 static int s_renders = 0;
 static int s_rememberedCurrent = 0;
 
-CEL_State(HotState) {
+typedef struct HotState {
     int value;
     int revision;
-};
+} HotState;
 
 CEL_Composable(HotWidget, HotState*, state) {
     s_renders++;

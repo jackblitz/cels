@@ -136,18 +136,23 @@ CEL_Composable(WindowToolbar, WindowState*, win) {
 
 CELS provides **double-buffered reactive state**. The front buffer holds the committed read values for the current frame, while mutations are staged into the back buffer and committed atomically at frame boundaries.
 
-### Defining State Structs
-Define state types using `CEL_State` in a shared header:
+### Defining State Structs (Plain C `struct`)
+In CELS, reactive state models are declared as standard, plain C99 structs in a shared header:
 
 ```c
 #pragma once
-#include "cels.h"
+#include <stdbool.h>
 
-CEL_State(CounterState) {
-    int count;
+typedef struct CounterState {
+    int  count;
     bool isEven;
-};
+} CounterState;
 ```
+
+> [!NOTE]
+> No special macros, reflection, or code generation are required to declare reactive models. All runtime mechanisms (`cel_state`, `cel_watch`, `cel_mutate`, `cel_remember_state`) operate directly on standard C structs via compile-time `sizeof(Type)` and type hashing.
+>
+> *(Note: The legacy macro `CEL_State(TypeName) { ... };` is retained in `cels.h` as an optional shorthand for `typedef struct`, but plain C structs are the recommended idiom.)*
 
 ### Primary Pattern: State Hoisting (Zero String IDs)
 
@@ -514,7 +519,8 @@ CEL_Composable(TextureViewer) {
 | `CEL_Evaluation(Name)` | Evaluates whether a composition stays alive | Header or source file |
 | `cel_attach(session, Comp, [Eval])` | Attaches root composition to a session | Application `onStart` |
 | `CEL_Composable(Name, ...)` | Declares a reusable composable component | Header or source file |
-| `CEL_State(Name) { ... }` | Declares a reactive state struct | Shared header file |
+| `typedef struct Name { ... } Name;` | Declares a reactive state struct (plain C99 struct) | Shared header file |
+| `CEL_State(Name) { ... }` | (Optional shorthand) Declares a reactive state struct | Shared header file |
 | `cel_state(Type, [init])` | Allocates hoisted reactive state instance | Parent composable / composition |
 | `cel_watch(ptr)` | Subscribes current composable to state instance | Child composable body |
 | `cel_mutate(ptr) { this->... }` | Stages atomic mutation to state | Event callback, host tick, task |

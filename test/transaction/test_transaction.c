@@ -162,9 +162,9 @@ static void DummyPostRecomposeHook(CelsSession *session, void *userData)
     s_receivedUserData = userData;
 }
 
-CEL_State(DummyState) {
+typedef struct DummyState {
     int counter;
-};
+} DummyState;
 
 CEL_Composition(UserDataTestComp, void *userData) {
     (void)userData;
@@ -215,9 +215,9 @@ static void OnCleanupCallback(void *ptr, CelsSession *session)
     s_lastUnmountedVal = *val;
 }
 
-CEL_State(GateState) {
+typedef struct GateState {
     bool open;
-};
+} GateState;
 
 CEL_Composable(ChildWithCleanup, uint64_t, entityId) {
     /* Using cel_remember with unmount callback */
@@ -455,12 +455,12 @@ static void TestAmbientContextScope(void)
 /* Test 7: Declarative Entity & Components (CEL_Entity & cel_has)            */
 /* ========================================================================= */
 
-CEL_State(PlayerLogicState) {
+typedef struct PlayerLogicState {
     bool exists;
     bool hasBuff;
     float posX;
     float posY;
-};
+} PlayerLogicState;
 
 CEL_Composition(DeclarativeEntityComposition) {
     const PlayerLogicState *logic = cel_watch_state(PlayerLogicState);
@@ -573,10 +573,10 @@ CEL_Composable(TodoItemCard, id, const TodoItem*, item) {
     s_hasPriority = cel_is(Health);
 }
 
-CEL_State(TodoListState) {
+typedef struct TodoListState {
     TodoItem item;
     bool exists;
-};
+} TodoListState;
 
 CEL_Composition(TodoComposition, void *userData) {
     (void)userData;
@@ -659,10 +659,10 @@ CEL_Composable(KeyedItemRow, const ListItem*, item) {
     cel_has(Position, { .x = (float)*persistentCount, .y = 0, .z = 0 });
 }
 
-CEL_State(KeyedListModel) {
+typedef struct KeyedListModel {
     ListItem items[4];
     int count;
-};
+} KeyedListModel;
 
 CEL_Composition(KeyedListComposition, void *userData) {
     (void)userData;

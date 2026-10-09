@@ -37,23 +37,26 @@ Every reactive state cell in CELS maintains two memory buffers:
 
 ---
 
-## 2. Declaring State Structs (`CEL_State`)
+## 2. Declaring State Structs (Plain C `struct`)
 
-Declare your state models at file or header scope using `CEL_State`:
+In CELS, reactive state models are declared using standard, plain C99 structs at file or header scope:
 
 ```c
 #pragma once
-#include "cels.h"
+#include <stdbool.h>
 
-CEL_State(PlayerState) {
+typedef struct PlayerState {
     float posX;
     float posY;
     int   health;
     bool  isShieldActive;
-};
+} PlayerState;
 ```
 
-`CEL_State(TypeName)` automatically creates a typedef and struct definition formatted for cache-alignment in CELS.
+> [!NOTE]
+> No special macros, reflection, or code generation are required to declare reactive models. All runtime mechanisms (`cel_state`, `cel_watch`, `cel_mutate`, `cel_remember_state`) operate directly on standard C structs via compile-time `sizeof(Type)` and type hashing.
+>
+> *(Note: The macro `CEL_State(TypeName) { ... };` is retained in `cels.h` as an optional 1-line shorthand for `typedef struct`, but standard C structs are the idiomatic, recommended way to write CELS applications.)*
 
 ---
 

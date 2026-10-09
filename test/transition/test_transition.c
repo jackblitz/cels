@@ -7,9 +7,9 @@
 /* Test State & Composable                                                   */
 /* ========================================================================= */
 
-CEL_State(TargetState) {
+typedef struct TargetState {
     float target;
-};
+} TargetState;
 
 static float s_lastTransitionVal = 0.0f;
 

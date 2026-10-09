@@ -29,7 +29,7 @@ CELS employs a tiered prefix convention to clarify calling scope, API visibility
 
 | Tier / Category | Prefix Convention | Example Symbols | Calling Context & Purpose |
 | :--- | :--- | :--- | :--- |
-| **Declarative DSL Macros** | `CEL_` (`SCREAMING_SNAKE` or `PascalCase`) | `CEL_State`, `CEL_Composable`, `CEL_Task`, `CEL_Lifecycle`, `CEL_ID` | Top-level structural declarations at file/global scope. |
+| **Declarative DSL Macros** | `CEL_` (`SCREAMING_SNAKE` or `PascalCase`) | `CEL_Composable`, `CEL_Task`, `CEL_Lifecycle`, `CEL_ID` | Top-level structural declarations at file/global scope. |
 | **Runtime Composable DSL** | `cel_` (`snake_case`) | `cel_remember`, `cel_watch`, `cel_mutate`, `cel_transition`, `cel_stage_set` | Invoked inside composables, tasks, or event callbacks during recomposition. |
 | **Public C API Functions** | `Cels` (`PascalCase`, noun-first) | `CelsEngineInit`, `CelsSessionRecompose`, `CelsSlotTableInit`, `CelsStateWatch` | Host-level functions, session operations, and slot table plumbing. |
 | **Internal Helpers & Body** | `_cels_` or `cels_` (`snake_case`) | `_cels_body_*`, `_cels_lifecycle_*`, `cels_app_runtime_check` | Private implementation functions, static trampolines, and helper macros. |

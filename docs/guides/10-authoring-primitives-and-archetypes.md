@@ -250,10 +250,10 @@ typedef struct CelsFlex {
     float         gap;
 } CelsFlex;
 
-CEL_State(CelsFlexFocusState) {
+typedef struct CelsFlexFocusState {
     int activeIndex;
     int totalItems;
-};
+} CelsFlexFocusState;
 
 /* Container Composable: Standard CEL_Composable with inline on_exit(childCount) */
 CEL_Composable(CelsFlexBox, CelsLayoutDir, dir, CelsFlexAlign, align) {

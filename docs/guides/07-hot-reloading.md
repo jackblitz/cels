@@ -232,7 +232,7 @@ The host instantly reloads the code.
 
 ### Do This
 - **Keep Subsystem Singletons in the Host**: Store heavy host resources (like `SDL_Window`, `GLFWwindow`, Vulkan devices, or audio device contexts) in the host or register them via `CEL_Module`.
-- **Use Fixed Struct Layouts for State**: Keep state structs in shared headers (`.h`). If you add or remove fields from a `CEL_State` struct while the app is running, restart the host to ensure memory alignment matches.
+- **Use Fixed Struct Layouts for State**: Keep state structs in shared headers (`.h`). If you add or remove fields from a state struct while the app is running, restart the host to ensure memory alignment matches.
 - **Keep Application Code in `APP_SOURCES`**: Place all UI, tasks, transitions, and compositions in `APP_SOURCES` so they live in the reloadable module.
 
 ### Don't Do That
