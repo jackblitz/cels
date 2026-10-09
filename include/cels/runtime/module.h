@@ -95,6 +95,7 @@ typedef struct CelsAppModule {
     const struct CelsAppManifest *manifest;
     uint64_t attachedKey;
     bool isLoaded;
+    double lastReloadDurationMs;
 } CelsAppModule;
 
 struct CelsEngine;

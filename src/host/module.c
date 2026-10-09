@@ -20,6 +20,7 @@
     #include <dlfcn.h>
     #include <unistd.h>
     #include <dirent.h>
+    #include <time.h>
 #endif
 
 /* ========================================================================= */
@@ -240,12 +241,11 @@ static void PlatformDeleteFile(const char *path)
         return;
     }
 #if defined(_WIN32)
-    for (int retry = 0; retry < 15; ++retry) {
-        if (DeleteFileA(path) != 0) {
-            return;
-        }
-        Sleep(20);
+    if (DeleteFileA(path) != 0) {
+        return;
     }
+    Sleep(1);
+    DeleteFileA(path);
 #else
     unlink(path);
 #endif
@@ -664,6 +664,15 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
     }
 
     /* New library is verified and ready. Swap cleanly. */
+#if defined(_WIN32)
+    LARGE_INTEGER swapFreq, swapStart, swapEnd;
+    QueryPerformanceFrequency(&swapFreq);
+    QueryPerformanceCounter(&swapStart);
+#else
+    struct timespec swapStart, swapEnd;
+    clock_gettime(CLOCK_MONOTONIC, &swapStart);
+#endif
+
     void *oldHandle = app->handle;
     app->handle = newHandle;
     snprintf(app->loadedPath, sizeof(app->loadedPath), "%s", candidatePath);
@@ -693,6 +702,15 @@ bool CelsAppModuleCheckAndReload(CelsAppModule *app, CelsSession *session)
     /* Force recomposition re-evaluation of newly loaded code while preserving slots */
     CelsSessionHotReload(session);
     CelsSessionRecompose(session);
+
+#if defined(_WIN32)
+    QueryPerformanceCounter(&swapEnd);
+    app->lastReloadDurationMs = (double)(swapEnd.QuadPart - swapStart.QuadPart) * 1000.0 / (double)swapFreq.QuadPart;
+#else
+    clock_gettime(CLOCK_MONOTONIC, &swapEnd);
+    app->lastReloadDurationMs = (double)(swapEnd.tv_sec - swapStart.tv_sec) * 1000.0 +
+                                (double)(swapEnd.tv_nsec - swapStart.tv_nsec) / 1000000.0;
+#endif
 
     /* Safely release old library and cleanup shadow file AFTER recomposition has completed */
     if (oldHandle != NULL) {
