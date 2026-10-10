@@ -335,6 +335,10 @@ extern "C" {
     #endif
 #endif
 
+#ifndef CELS_COMPOSABLE_STORAGE
+    #define CELS_COMPOSABLE_STORAGE
+#endif
+
 #define _CEL_COMPOSABLE_VOID(FnName, ...) \
     static void _cels_body_##FnName(CelsSession *sess, int _cels_lifecycle_phase, uint32_t _cels_child_count); \
     static void _cels_exit_trampoline_##FnName(uint32_t childCount, void *instance CELS_UNUSED, CelsSession *sess) { \
@@ -364,7 +368,7 @@ extern "C" {
         } \
         return true; \
     } \
-    static inline void FnName(void) { \
+    CELS_COMPOSABLE_STORAGE void FnName(void) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
         if (_cels_enter_##FnName(sess)) { \
@@ -407,7 +411,7 @@ extern "C" {
         } \
         return true; \
     } \
-    static inline void FnName(Type1 Arg1) { \
+    CELS_COMPOSABLE_STORAGE void FnName(Type1 Arg1) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
         if (_cels_enter_##FnName(sess, Arg1)) { \
@@ -450,7 +454,7 @@ extern "C" {
         } \
         return true; \
     } \
-    static inline void FnName(Type1 Arg1, Type2 Arg2) { \
+    CELS_COMPOSABLE_STORAGE void FnName(Type1 Arg1, Type2 Arg2) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
         if (_cels_enter_##FnName(sess, Arg1, Arg2)) { \
@@ -493,7 +497,7 @@ extern "C" {
         } \
         return true; \
     } \
-    static inline void FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
+    CELS_COMPOSABLE_STORAGE void FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
         if (_cels_enter_##FnName(sess, Arg1, Arg2, Arg3)) { \
@@ -536,7 +540,7 @@ extern "C" {
         } \
         return true; \
     } \
-    static inline void FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
+    CELS_COMPOSABLE_STORAGE void FnName(Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
         if (_cels_enter_##FnName(sess, Arg1, Arg2, Arg3, Arg4)) { \
@@ -581,7 +585,7 @@ extern "C" {
         } \
         return true; \
     } \
-    static inline void FnName(uint64_t IdName) { \
+    CELS_COMPOSABLE_STORAGE void FnName(uint64_t IdName) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
         if (_cels_enter_##FnName(sess, IdName)) { \
@@ -626,7 +630,7 @@ extern "C" {
         } \
         return true; \
     } \
-    static inline void FnName(uint64_t IdName, Type1 Arg1) { \
+    CELS_COMPOSABLE_STORAGE void FnName(uint64_t IdName, Type1 Arg1) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
         if (_cels_enter_##FnName(sess, IdName, Arg1)) { \
@@ -671,7 +675,7 @@ extern "C" {
         } \
         return true; \
     } \
-    static inline void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2) { \
+    CELS_COMPOSABLE_STORAGE void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
         if (_cels_enter_##FnName(sess, IdName, Arg1, Arg2)) { \
@@ -716,7 +720,7 @@ extern "C" {
         } \
         return true; \
     } \
-    static inline void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
+    CELS_COMPOSABLE_STORAGE void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
         if (_cels_enter_##FnName(sess, IdName, Arg1, Arg2, Arg3)) { \
@@ -761,7 +765,7 @@ extern "C" {
         } \
         return true; \
     } \
-    static inline void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
+    CELS_COMPOSABLE_STORAGE void FnName(uint64_t IdName, Type1 Arg1, Type2 Arg2, Type3 Arg3, Type4 Arg4) { \
         CelsSession *sess = CelsGetCurrentSession(); \
         assert(sess != NULL && #FnName " called outside of an active CelsSession"); \
         if (_cels_enter_##FnName(sess, IdName, Arg1, Arg2, Arg3, Arg4)) { \
@@ -1040,19 +1044,7 @@ extern "C" {
  * wraps the body with CelsEnterComposable() and CelsExitGroup(). Supports both unkeyed
  * and keyed signatures matching CEL_Composable.
  */
-#define CEL_ComposableDef(...) \
-    _CEL_GET_COMPOSABLE_MACRO(__VA_ARGS__, \
-        _CEL_COMPOSABLE_DEF_KEYED_4_ARGS, \
-        _CEL_COMPOSABLE_DEF_4_ARGS, \
-        _CEL_COMPOSABLE_DEF_KEYED_3_ARGS, \
-        _CEL_COMPOSABLE_DEF_3_ARGS, \
-        _CEL_COMPOSABLE_DEF_KEYED_2_ARGS, \
-        _CEL_COMPOSABLE_DEF_2_ARGS, \
-        _CEL_COMPOSABLE_DEF_KEYED_1_ARG, \
-        _CEL_COMPOSABLE_DEF_1_ARG, \
-        _CEL_COMPOSABLE_DEF_KEYED_0_ARG, \
-        _CEL_COMPOSABLE_DEF_VOID, \
-        _UNUSED)(__VA_ARGS__)
+#define CEL_ComposableDef CEL_Composable
 
 /* ========================================================================= */
 /* Pure Lifecycles (CEL_Lifecycle & cel_lifecycle)                           */
