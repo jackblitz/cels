@@ -775,6 +775,11 @@ void CelsSessionUpdateLifecycleExt(CelsSession *s,
                 match = true;
             } else if (onEnd != NULL && s->cleanups[i].onEnd == onEnd) {
                 match = true;
+            } else if (s->cleanups[i].groupKey == key) {
+                /* Across dynamic module hot-reloads, DLL base addresses change, shifting
+                 * code and static instance pointers. Matching on groupKey under the same
+                 * groupId updates the hook in-place, preventing dangling callbacks. */
+                match = true;
             }
             if (match) {
                 s->cleanups[i].groupId = gid;
