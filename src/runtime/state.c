@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "cels/runtime/session.h"
+#include "cels/engine.h"
 #include "cels/runtime/log.h"
 
 #define CELS_ASSERT(cond) assert(cond)
@@ -226,9 +227,12 @@ void *CelsStateMutate(CelsSession *session, CEL_Id id, size_t size)
         return NULL;
     }
 
-    // Enforce DSL rule: cel_mutate cannot be called during composable/composition evaluation,
-    // but IS permitted within CEL_Task coroutines, lifecycle hooks, event handlers, and simulation loops.
-    assert((!session->isRecomposing || session->isExecutingTask || session->isHandlingEvent) &&
+    CelsSession *activeSession = CelsGetCurrentSession();
+    bool allowed = (!session->isRecomposing || session->isExecutingTask || session->isHandlingEvent);
+    if (!allowed && activeSession != NULL && activeSession != session) {
+        allowed = (!activeSession->isRecomposing || activeSession->isExecutingTask || activeSession->isHandlingEvent);
+    }
+    assert(allowed &&
            "cel_mutate cannot be called inside a Composable or Composition body. Perform mutations in event callbacks, input handlers, simulation loops, or CEL_Task coroutines.");
 
     CelsStateCell *cell = CelsStateRegistryFindCell(&session->stateRegistry, id);
@@ -236,10 +240,13 @@ void *CelsStateMutate(CelsSession *session, CEL_Id id, size_t size)
         return NULL;
     }
 
-    /* Flag state dirty for next publish pass */
-    cell->isDirty = true;
+    /* Copy latest frontBuffer snapshot on first mutation of frame, then flag dirty */
+    if (!cell->isDirty) {
+        memcpy(cell->backBuffer, cell->frontBuffer, cell->size);
+        cell->isDirty = true;
+    }
 
-    /* Enqueue all watchers for recomposition */
+    /* Enqueue all watchers for recomposition in owning session and attached engine sessions */
     for (uint16_t i = 0; i < cell->watcherCount; ++i) {
         const uint64_t targetKey = cell->watcherKeys[i];
         bool alreadyQueued = false;
@@ -251,6 +258,28 @@ void *CelsStateMutate(CelsSession *session, CEL_Id id, size_t size)
         }
         if (!alreadyQueued && session->queueCount < CELS_MAX_QUEUE) {
             session->invalidationQueue[session->queueCount++] = targetKey;
+        }
+
+        if (session->engine != NULL) {
+            for (uint32_t sIdx = 0; sIdx < CELS_MAX_SECONDARY_SESSIONS; ++sIdx) {
+                if (!session->engine->secondarySessions[sIdx].isUsed) {
+                    continue;
+                }
+                CelsSession *other = session->engine->secondarySessions[sIdx].session;
+                if (other == NULL || other == session) {
+                    continue;
+                }
+                bool otherQueued = false;
+                for (uint32_t q = 0; q < other->queueCount; ++q) {
+                    if (other->invalidationQueue[q] == targetKey) {
+                        otherQueued = true;
+                        break;
+                    }
+                }
+                if (!otherQueued && other->queueCount < CELS_MAX_QUEUE) {
+                    other->invalidationQueue[other->queueCount++] = targetKey;
+                }
+            }
         }
     }
 
@@ -331,19 +360,41 @@ const void *CelsWatchStateInstance(CelsSession *session, const void *ptr)
     if (ptr == NULL) {
         return NULL;
     }
-    if (session == NULL) {
-        session = CelsGetCurrentSession();
-    }
+    CelsSession *activeSession = session ? session : CelsGetCurrentSession();
     CelsStateHeader *hdr = CelsGetStateHeader(ptr);
     if (hdr == NULL) {
         return ptr;
     }
-    if (session == NULL) {
-        session = hdr->session;
+    CelsSession *ownerSession = hdr->session ? hdr->session : activeSession;
+    if (ownerSession == NULL) {
+        return ptr;
     }
-    if (session != NULL) {
-        CelsStateWatch(session, hdr->id, hdr->size);
+    if (activeSession != NULL && activeSession != ownerSession) {
+        CelsStateCell *cell = CelsStateRegistryFindCell(&ownerSession->stateRegistry, hdr->id);
+        if (cell != NULL && activeSession->currentPhase == CEL_LIFECYCLE_PHASE_ENTER) {
+            uint64_t currentKey = 0;
+            if (activeSession->currentDepth > 0 && activeSession->activeStack[activeSession->currentDepth - 1]) {
+                const uint32_t activeGroupIdx = activeSession->groupIndexStack[activeSession->currentDepth - 1];
+                currentKey = CelsGetGroup(activeSession, activeGroupIdx)->key;
+            } else if (activeSession->currentDepth == 0 && CelsGetLogicalGroupCount(activeSession) > 0) {
+                currentKey = CelsGetGroup(activeSession, 0)->key;
+            }
+            if (currentKey != 0) {
+                bool alreadyWatching = false;
+                for (uint16_t i = 0; i < cell->watcherCount; ++i) {
+                    if (cell->watcherKeys[i] == currentKey) {
+                        alreadyWatching = true;
+                        break;
+                    }
+                }
+                if (!alreadyWatching && cell->watcherCount < CELS_MAX_WATCHERS) {
+                    cell->watcherKeys[cell->watcherCount++] = currentKey;
+                }
+            }
+        }
+        return cell ? cell->frontBuffer : ptr;
     }
+    CelsStateWatch(ownerSession, hdr->id, hdr->size);
     return ptr;
 }
 

@@ -653,6 +653,17 @@ void CelsSessionDestroy(CelsSession *s)
             }
         }
         s->fallbackModuleCount = 0;
+    } else if (s != &s->engine->session) {
+        for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
+            if (s->engine->secondarySessions[i].isUsed && s->engine->secondarySessions[i].session == s) {
+                s->engine->secondarySessions[i].session = NULL;
+                s->engine->secondarySessions[i].isUsed = false;
+                if (s->engine->secondarySessionCount > 0) {
+                    s->engine->secondarySessionCount--;
+                }
+                break;
+            }
+        }
     }
 
     s_currentSession = (prev == s) ? NULL : prev;
@@ -695,6 +706,9 @@ void CelsSessionAttachComposition(CEL_Session *s,
             s->attachedCompositions[i].lifecycleEval = eval;
             s->attachedCompositions[i].evalCtx = evalCtx;
             s->attachedCompositions[i].isAttached = true;
+            if (s->hasComposedOnce) {
+                CelsSessionHotReload(s);
+            }
             return;
         }
     }
@@ -711,6 +725,9 @@ void CelsSessionAttachComposition(CEL_Session *s,
         .evalCtx = evalCtx,
         .isAttached = true
     };
+    if (s->hasComposedOnce) {
+        CelsSessionHotReload(s);
+    }
 }
 
 /**
@@ -880,6 +897,10 @@ CelsResult CelsSessionRecompose(CelsSession *s)
         s->invalidationQueue[s->queueCount++] = s->nextFrameQueue[--s->nextFrameQueueCount];
     }
 
+    if (s->engine != NULL && s != &s->engine->session) {
+        CelsStatePublishDirty(&s->engine->session);
+    }
+
     bool hasDirtyState = false;
     for (uint32_t i = 0; i < s->stateRegistry.cellCount; ++i) {
         if (s->stateRegistry.cells[i].inUse && s->stateRegistry.cells[i].isDirty) {
@@ -919,6 +940,7 @@ CelsResult CelsSessionRecompose(CelsSession *s)
         s->logicalCursor = 0;
         s->ambientScope = (s->rootContextCount > 0) ? &s->rootContextNodes[s->rootContextCount - 1] : NULL;
 
+        bool rootEntered = false;
         for (uint32_t i = 0; i < s->attachedCount; ++i) {
             CelsAttachedComposition *const comp = &s->attachedCompositions[i];
             if (!comp->isAttached) {
@@ -931,10 +953,17 @@ CelsResult CelsSessionRecompose(CelsSession *s)
             }
 
             if (alive) {
-                if (CelsEnterComposition(s, comp->key)) {
-                    comp->body(comp->userData);
+                if (!rootEntered) {
+                    if (CelsEnterComposition(s, comp->key)) {
+                        rootEntered = true;
+                        comp->body(comp->userData);
+                    }
+                } else {
+                    if (CelsEnterComposable(s, comp->key)) {
+                        comp->body(comp->userData);
+                    }
+                    CelsExitGroup(s);
                 }
-                CelsExitGroup(s);
             } else {
                 CelsPruneSubtreeByKey(s, comp->key);
                 if (s->engine != NULL && s == &s->engine->session) {
@@ -946,6 +975,9 @@ CelsResult CelsSessionRecompose(CelsSession *s)
                     }
                 }
             }
+        }
+        if (rootEntered) {
+            CelsExitGroup(s);
         }
 
         if (s->currentDepth != 0) {
@@ -2285,6 +2317,15 @@ CelsScopeNode *CelsContextPush(CelsSession *session, uint64_t typeId, const void
 
     /* 1. At session root (outside composable body, e.g. host configuration) */
     if (session->currentDepth == 0) {
+        if (session->engine != NULL && session == &session->engine->session) {
+            CelsEnginePushContext(session->engine, typeId, data);
+            for (uint32_t i = 0; i < session->rootContextCount; ++i) {
+                if (session->rootContextNodes[i].typeId == typeId) {
+                    return &session->rootContextNodes[i];
+                }
+            }
+            return NULL;
+        }
         for (uint32_t i = 0; i < session->rootContextCount; ++i) {
             if (session->rootContextNodes[i].typeId == typeId) {
                 session->rootContextNodes[i].data = data;

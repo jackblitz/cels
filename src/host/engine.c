@@ -123,8 +123,12 @@ void CelsEngineDestroy(CelsEngine *engine)
 
     for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
         if (engine->secondarySessions[i].isUsed && engine->secondarySessions[i].session != NULL) {
-            CelsSessionDestroy(engine->secondarySessions[i].session);
-            free(engine->secondarySessions[i].session);
+            CelsSession *s = engine->secondarySessions[i].session;
+            bool isHeap = s->isHeapAllocated;
+            CelsSessionDestroy(s);
+            if (isHeap) {
+                free(s);
+            }
             engine->secondarySessions[i].session = NULL;
             engine->secondarySessions[i].isUsed = false;
         }
@@ -429,6 +433,7 @@ CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsS
                 CelsSessionDestroy(&engine->session);
                 CelsSessionInit(&engine->session, &cfg);
                 engine->session.engine = engine;
+                CelsEngineApplyContext(engine, &engine->session);
             }
         }
         engine->session.engine = engine;
@@ -455,9 +460,10 @@ CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsS
             if (entry->session == NULL) {
                 return NULL;
             }
-            entry->session->isHeapAllocated = true;
             CelsSessionInitWithProfile(entry->session, profile);
+            entry->session->isHeapAllocated = true;
             entry->session->engine = engine;
+            CelsEngineApplyContext(engine, entry->session);
             strncpy(entry->name, name, sizeof(entry->name) - 1);
             entry->nameHash = hash;
             entry->isUsed = true;
@@ -470,6 +476,170 @@ CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsS
     fprintf(stderr, "[CELS ERROR] Engine secondary session capacity full (%u / %u). Cannot create session '%s'.\n",
             engine->secondarySessionCount, CELS_MAX_SECONDARY_SESSIONS, name);
     return NULL;
+}
+
+static CelsScopeNode *cels_session_set_root_context(CelsSession *s, uint64_t typeId, const void *data)
+{
+    if (s == NULL) {
+        return NULL;
+    }
+    for (uint32_t i = 0; i < s->rootContextCount; ++i) {
+        if (s->rootContextNodes[i].typeId == typeId) {
+            s->rootContextNodes[i].data = data;
+            return &s->rootContextNodes[i];
+        }
+    }
+    if (s->rootContextCount < CELS_MAX_ROOT_CONTEXTS) {
+        const uint32_t idx = s->rootContextCount++;
+        CelsScopeNode *prevRoot = (idx > 0) ? &s->rootContextNodes[idx - 1] : NULL;
+        CelsScopeNode *node = &s->rootContextNodes[idx];
+        node->typeId = typeId;
+        node->data = data;
+        node->parent = prevRoot;
+        if (s->ambientScope == prevRoot) {
+            s->ambientScope = node;
+        }
+        for (uint32_t d = 0; d <= s->currentDepth && d < CELS_MAX_DEPTH; ++d) {
+            if (s->ambientScopeStack[d] == prevRoot) {
+                s->ambientScopeStack[d] = node;
+            }
+        }
+        return node;
+    }
+    return NULL;
+}
+
+CelsScopeNode *CelsEnginePushContext(CelsEngine *engine, uint64_t typeId, const void *data)
+{
+    if (engine == NULL) {
+        engine = CelsGetCurrentEngine();
+    }
+    if (engine == NULL) {
+        return NULL;
+    }
+
+    CelsScopeNode *engineNode = NULL;
+    for (uint32_t i = 0; i < engine->rootContextCount; ++i) {
+        if (engine->rootContextNodes[i].typeId == typeId) {
+            engine->rootContextNodes[i].data = data;
+            engineNode = &engine->rootContextNodes[i];
+            break;
+        }
+    }
+    if (engineNode == NULL && engine->rootContextCount < CELS_MAX_ROOT_CONTEXTS) {
+        const uint32_t idx = engine->rootContextCount++;
+        engineNode = &engine->rootContextNodes[idx];
+        engineNode->typeId = typeId;
+        engineNode->data = data;
+        engineNode->parent = (idx > 0) ? &engine->rootContextNodes[idx - 1] : NULL;
+    }
+
+    cels_session_set_root_context(&engine->session, typeId, data);
+    for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
+        if (engine->secondarySessions[i].isUsed && engine->secondarySessions[i].session != NULL) {
+            cels_session_set_root_context(engine->secondarySessions[i].session, typeId, data);
+        }
+    }
+    return engineNode;
+}
+
+void CelsEngineApplyContext(CelsEngine *engine, CelsSession *session)
+{
+    if (session == NULL) {
+        return;
+    }
+    if (engine == NULL) {
+        engine = session->engine ? session->engine : CelsGetCurrentEngine();
+    }
+    if (engine == NULL) {
+        return;
+    }
+
+    session->engine = engine;
+    for (uint32_t i = 0; i < engine->rootContextCount; ++i) {
+        cels_session_set_root_context(session,
+                                      engine->rootContextNodes[i].typeId,
+                                      engine->rootContextNodes[i].data);
+    }
+    if (session != &engine->session) {
+        for (uint32_t i = 0; i < engine->session.rootContextCount; ++i) {
+            cels_session_set_root_context(session,
+                                          engine->session.rootContextNodes[i].typeId,
+                                          engine->session.rootContextNodes[i].data);
+        }
+        if (session->ecsLookupHook == NULL && engine->session.ecsLookupHook != NULL) {
+            session->ecsLookupHook = engine->session.ecsLookupHook;
+            session->ecsLookupUserData = engine->session.ecsLookupUserData;
+        }
+        if (session->postRecomposeHook == NULL && engine->session.postRecomposeHook != NULL) {
+            session->postRecomposeHook = engine->session.postRecomposeHook;
+            session->postRecomposeUserData = engine->session.postRecomposeUserData;
+        }
+    }
+}
+
+CelsResult CelsEngineAttachSession(CelsEngine *engine, CelsSession *session)
+{
+    if (session == NULL) {
+        return CELS_ERROR_INVALID_ARGUMENT;
+    }
+    if (engine == NULL) {
+        engine = session->engine ? session->engine : CelsGetCurrentEngine();
+    }
+    if (engine == NULL) {
+        return CELS_ERROR_INVALID_STATE;
+    }
+
+    CelsEngineApplyContext(engine, session);
+    if (session == &engine->session) {
+        return CELS_OK;
+    }
+
+    for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
+        if (engine->secondarySessions[i].isUsed && engine->secondarySessions[i].session == session) {
+            return CELS_OK;
+        }
+    }
+
+    for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
+        if (!engine->secondarySessions[i].isUsed) {
+            CelsEngineSessionEntry *entry = &engine->secondarySessions[i];
+            memset(entry, 0, sizeof(*entry));
+            snprintf(entry->name, sizeof(entry->name), "attached_%u", i);
+            entry->nameHash = CelsHashKey(entry->name);
+            entry->session = session;
+            entry->isUsed = true;
+            engine->secondarySessionCount++;
+            return CELS_OK;
+        }
+    }
+    return CELS_ERROR_OUT_OF_MEMORY;
+}
+
+void CelsEngineAttachComposition(CelsSession *session,
+                                 uint64_t key,
+                                 void (*body)(void *userData),
+                                 void *userData,
+                                 bool (*eval)(void *evalCtx),
+                                 void *evalCtx)
+{
+    CelsEngine *engine = CelsGetCurrentEngine();
+    if (session == NULL) {
+        session = CelsGetCurrentSession();
+        if (session == NULL && engine != NULL) {
+            session = &engine->session;
+        }
+    }
+    if (session == NULL) {
+        return;
+    }
+    if (engine == NULL) {
+        engine = session->engine;
+    }
+    if (engine != NULL) {
+        CelsEngineAttachSession(engine, session);
+    }
+    CelsSessionAttachComposition(session, key, body, userData, eval, evalCtx);
 }
 
 void CelsEngineSetContext(CelsEngine *engine,

@@ -323,6 +323,47 @@ extern "C" {
 #define cel_attach_keyed(s, id, comp, ...) \
     CelsSessionAttachComposition((s), (id), (void(*)(void*))(comp), NULL, NULL, NULL)
 
+#define _CEL_ENGINE_ATTACH_1(comp) \
+    CelsEngineAttachComposition(NULL, CelsHashKey(#comp), (void(*)(void*))(comp), NULL, NULL, NULL)
+
+#define _CEL_ENGINE_ATTACH_2(s, comp) \
+    CelsEngineAttachComposition((s), CelsHashKey(#comp), (void(*)(void*))(comp), NULL, NULL, NULL)
+
+#define _CEL_ENGINE_ATTACH_3(s, comp, eval) \
+    CelsEngineAttachComposition((s), CelsHashKey(#comp), (void(*)(void*))(comp), NULL, (bool(*)(void*))(eval), NULL)
+
+#define _CEL_ENGINE_ATTACH_4(s, comp, eval, userData) \
+    CelsEngineAttachComposition((s), CelsHashKey(#comp), (void(*)(void*))(comp), (void*)(userData), (bool(*)(void*))(eval), NULL)
+
+#define _CEL_ENGINE_ATTACH_5(s, comp, eval, userData, evalCtx) \
+    CelsEngineAttachComposition((s), CelsHashKey(#comp), (void(*)(void*))(comp), (void*)(userData), (bool(*)(void*))(eval), (void*)(evalCtx))
+
+/**
+ * @def cel_engine_attach
+ * @brief Attaches a root composition to a session and ensures all engine ambient contexts are assigned.
+ *
+ * What it does:
+ * Binds the target session (or the ambient/primary engine session when omitted) to the active
+ * CelsEngine, populates all engine-wide ambient contexts (e.g. CelWorld, CelHostState,
+ * CelWindowState, CelInputHub) and ECS hooks on that session, and attaches the root composition.
+ *
+ * Overloads:
+ * - cel_engine_attach(comp)
+ * - cel_engine_attach(session, comp)
+ * - cel_engine_attach(session, comp, evalPredicate)
+ * - cel_engine_attach(session, comp, evalPredicate, userData)
+ * - cel_engine_attach(session, comp, evalPredicate, userData, evalCtx)
+ */
+#define cel_engine_attach(...) \
+    _CEL_GET_MACRO_5(__VA_ARGS__, _CEL_ENGINE_ATTACH_5, _CEL_ENGINE_ATTACH_4, _CEL_ENGINE_ATTACH_3, _CEL_ENGINE_ATTACH_2, _CEL_ENGINE_ATTACH_1)(__VA_ARGS__)
+
+/**
+ * @def cel_engine_attach_session
+ * @brief Attaches an existing CelsSession to the engine and assigns all engine ambient contexts.
+ */
+#define cel_engine_attach_session(s) \
+    CelsEngineAttachSession(NULL, (s))
+
 /* ========================================================================= */
 /* Child Composables (CEL_Composable)                                        */
 /* ========================================================================= */
@@ -2371,6 +2412,19 @@ static inline CelsResult cel_is_last_child(bool *outIsLast)
  */
 #define cel_context(...) \
     _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_SET_CONTEXT_3, _CEL_SET_CONTEXT_2, _CEL_GET_CONTEXT_1)(__VA_ARGS__)
+
+#define _CEL_ENGINE_SET_CONTEXT_2(Type, ptr) \
+    CelsEnginePushContext(NULL, CelsHashKey(#Type), (const void *)(ptr))
+
+#define _CEL_ENGINE_SET_CONTEXT_3(engine, Type, ptr) \
+    CelsEnginePushContext((engine), CelsHashKey(#Type), (const void *)(ptr))
+
+/**
+ * @def cel_engine_set_context
+ * @brief Registers an ambient context entry at the engine level, propagating it to all engine sessions.
+ */
+#define cel_engine_set_context(...) \
+    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_ENGINE_SET_CONTEXT_3, _CEL_ENGINE_SET_CONTEXT_2, _UNUSED)(__VA_ARGS__)
 
 
 /* ========================================================================= */

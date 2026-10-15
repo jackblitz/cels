@@ -133,6 +133,9 @@ struct CelsEngine {
     CelsSession                   session;      /**< Primary ("main") reactive session */
     CelsEngineSessionEntry        secondarySessions[CELS_MAX_SECONDARY_SESSIONS]; /**< Supervised secondary sessions */
     uint32_t                      secondarySessionCount; /**< Active secondary session count */
+    /* Engine-wide root ambient context table */
+    CelsScopeNode                 rootContextNodes[CELS_MAX_ROOT_CONTEXTS]; /**< Ambient context inherited by all engine sessions */
+    uint32_t                      rootContextCount; /**< Number of active engine ambient context nodes */
     /* Global broadcast ring buffer */
     CelsEventRecord               broadcastQueue[CELS_EVENT_QUEUE_CAPACITY];
     uint32_t                      broadcastCount;
@@ -246,6 +249,51 @@ CelsSession *CelsEngineCreateSession(CelsEngine *engine, const char *name, CelsS
  * @return Pointer to CelsSession, or NULL if not found.
  */
 CelsSession *CelsEngineGetSession(CelsEngine *engine, const char *name);
+
+/**
+ * Registers an ambient context entry at the engine level and propagates it to all engine sessions.
+ *
+ * @param engine Target host engine (if NULL, resolves CelsGetCurrentEngine()).
+ * @param typeId Unique 64-bit context type hash.
+ * @param data   Context payload pointer.
+ * @return Pointer to the engine root scope node, or NULL on error.
+ */
+CelsScopeNode *CelsEnginePushContext(CelsEngine *engine, uint64_t typeId, const void *data);
+
+/**
+ * Applies all engine-level ambient contexts and ECS hooks to a target session.
+ *
+ * @param engine  Source host engine (if NULL, resolves CelsGetCurrentEngine()).
+ * @param session Target CelsSession to receive engine ambient contexts. Non-NULL.
+ */
+void CelsEngineApplyContext(CelsEngine *engine, CelsSession *session);
+
+/**
+ * Attaches an existing CelsSession to the engine, assigning all engine ambient contexts
+ * and registering the session for engine supervision.
+ *
+ * @param engine  Target host engine (if NULL, resolves CelsGetCurrentEngine()).
+ * @param session Target session to attach. Non-NULL.
+ * @return CELS_OK on success, or CelsResult error code.
+ */
+CelsResult CelsEngineAttachSession(CelsEngine *engine, CelsSession *session);
+
+/**
+ * Attaches a root composition to a session and ensures all engine ambient contexts are assigned.
+ *
+ * @param session  Target session (if NULL, resolves current session or primary engine session).
+ * @param key      Unique 64-bit composition identifier.
+ * @param body     Root composition function pointer. Non-NULL.
+ * @param userData Optional context pointer passed to body.
+ * @param eval     Optional lifecycle evaluation predicate.
+ * @param evalCtx  Optional context pointer passed to eval predicate.
+ */
+void CelsEngineAttachComposition(CelsSession *session,
+                                 uint64_t key,
+                                 void (*body)(void *userData),
+                                 void *userData,
+                                 bool (*eval)(void *evalCtx),
+                                 void *evalCtx);
 
 /**
  * Returns the application manifest bound to the engine.
