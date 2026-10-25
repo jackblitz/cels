@@ -167,12 +167,13 @@ const void *CelsStateWatch(CelsSession *session, CEL_Id id, size_t size)
     if (currentKey != 0) {
         bool alreadyWatching = false;
         for (uint16_t i = 0; i < cell->watcherCount; ++i) {
-            if (cell->watcherKeys[i] == currentKey) {
+            if (cell->watcherKeys[i] == currentKey && cell->watcherSessions[i] == session) {
                 alreadyWatching = true;
                 break;
             }
         }
         if (!alreadyWatching && cell->watcherCount < CELS_MAX_WATCHERS) {
+            cell->watcherSessions[cell->watcherCount] = session;
             cell->watcherKeys[cell->watcherCount++] = currentKey;
         }
     }
@@ -338,6 +339,9 @@ void CelsStateRegistryUnsubscribeKey(CelsStateRegistry *registry, uint64_t group
                 memmove(&cell->watcherKeys[j],
                         &cell->watcherKeys[j + 1],
                         (cell->watcherCount - j) * sizeof(cell->watcherKeys[0]));
+                memmove(&cell->watcherSessions[j],
+                        &cell->watcherSessions[j + 1],
+                        (cell->watcherCount - j) * sizeof(cell->watcherSessions[0]));
             } else {
                 ++j;
             }
@@ -382,13 +386,14 @@ const void *CelsWatchStateInstance(CelsSession *session, const void *ptr)
             if (currentKey != 0) {
                 bool alreadyWatching = false;
                 for (uint16_t i = 0; i < cell->watcherCount; ++i) {
-                    if (cell->watcherKeys[i] == currentKey) {
+                    if (cell->watcherKeys[i] == currentKey && cell->watcherSessions[i] == activeSession) {
                         alreadyWatching = true;
                         break;
                     }
                 }
                 if (!alreadyWatching && cell->watcherCount < CELS_MAX_WATCHERS) {
-                    cell->watcherKeys[cell->watcherCount++] = currentKey;
+                    cell->watcherSessions[cell->watcherCount] = activeSession;
+            cell->watcherKeys[cell->watcherCount++] = currentKey;
                 }
             }
         }
@@ -425,6 +430,100 @@ void *CelsMutateStateInstance(void *ptr)
         return NULL;
     }
     return CelsStateMutate(session, hdr->id, hdr->size);
+}
+
+/**
+ * Begins a scoped, value-diffing mutation on a reactive state instance pointer.
+ *
+ * Resolves the preceding CelsStateHeader in O(1) to identify the state cell and owning
+ * session, synchronizes backBuffer from frontBuffer if not already dirty, and returns
+ * a mutable pointer to backBuffer (`this`). Must NOT be called during active composable evaluation.
+ *
+ * @param ptr Pointer to reactive state struct payload. Safe if NULL.
+ * @return Mutable pointer to staging back buffer, or NULL if header/session is invalid.
+ */
+void *CelsMutateStateInstanceBegin(void *ptr)
+{
+    if (ptr == NULL) {
+        return NULL;
+    }
+    CelsStateHeader *hdr = CelsGetStateHeader(ptr);
+    if (hdr == NULL) {
+        return NULL;
+    }
+    CelsSession *session = hdr->session ? hdr->session : CelsGetCurrentSession();
+    if (session == NULL) {
+        return NULL;
+    }
+
+    CelsSession *activeSession = CelsGetCurrentSession();
+    bool allowed = (!session->isRecomposing || session->isExecutingTask || session->isHandlingEvent);
+    if (!allowed && activeSession != NULL && activeSession != session) {
+        allowed = (!activeSession->isRecomposing || activeSession->isExecutingTask || activeSession->isHandlingEvent);
+    }
+    assert(allowed &&
+           "cel_mutate cannot be called inside a Composable or Composition body. Perform mutations in event callbacks, input handlers, simulation loops, or CEL_Task coroutines.");
+
+    CelsStateCell *cell = CelsStateRegistryFindCell(&session->stateRegistry, hdr->id);
+    if (cell == NULL) {
+        return NULL;
+    }
+
+    if (!cell->isDirty) {
+        memcpy(cell->backBuffer, cell->frontBuffer, cell->size);
+    }
+    return cell->backBuffer;
+}
+
+/**
+ * Finalizes a scoped mutation on a reactive state instance pointer with automatic byte-diffing.
+ *
+ * Compares backBuffer against frontBuffer via memcmp. If the bytes are identical, exits as a
+ * zero-cost no-op without marking the cell dirty or invalidating watchers. If the bytes changed,
+ * marks the cell dirty and enqueues each watcher's group key into its subscribed session's
+ * invalidationQueue.
+ *
+ * @param ptr Pointer to reactive state struct payload. Safe if NULL.
+ */
+void CelsMutateStateInstanceEnd(const void *ptr)
+{
+    if (ptr == NULL) {
+        return;
+    }
+    CelsStateHeader *hdr = CelsGetStateHeader(ptr);
+    if (hdr == NULL) {
+        return;
+    }
+    CelsSession *session = hdr->session ? hdr->session : CelsGetCurrentSession();
+    if (session == NULL) {
+        return;
+    }
+
+    CelsStateCell *cell = CelsStateRegistryFindCell(&session->stateRegistry, hdr->id);
+    if (cell == NULL) {
+        return;
+    }
+
+    if (memcmp(cell->frontBuffer, cell->backBuffer, cell->size) == 0) {
+        return;
+    }
+
+    cell->isDirty = true;
+
+    for (uint16_t i = 0; i < cell->watcherCount; ++i) {
+        CelsSession *targetSession = cell->watcherSessions[i] ? cell->watcherSessions[i] : session;
+        const uint64_t targetKey = cell->watcherKeys[i];
+        bool alreadyQueued = false;
+        for (uint32_t q = 0; q < targetSession->queueCount; ++q) {
+            if (targetSession->invalidationQueue[q] == targetKey) {
+                alreadyQueued = true;
+                break;
+            }
+        }
+        if (!alreadyQueued && targetSession->queueCount < CELS_MAX_QUEUE) {
+            targetSession->invalidationQueue[targetSession->queueCount++] = targetKey;
+        }
+    }
 }
 
 /**

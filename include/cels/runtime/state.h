@@ -98,6 +98,7 @@ typedef struct CelsStateCell {
     bool     isDirty;       /**< True if backBuffer has pending mutations to publish */
     bool     inUse;         /**< True if cell slot is occupied */
     uint64_t watcherKeys[CELS_MAX_WATCHERS]; /**< Subscribed composable/composition group keys */
+    struct CelsSession *watcherSessions[CELS_MAX_WATCHERS]; /**< Subscribed watcher session pointers */
     uint16_t watcherCount;
 } CelsStateCell;
 
@@ -210,6 +211,30 @@ const void *CelsWatchStateInstance(CelsSession *session, const void *ptr);
  * @return Mutable back-buffer pointer, or NULL on error.
  */
 void *CelsMutateStateInstance(void *ptr);
+
+/**
+ * Begins a scoped, value-diffing mutation on a reactive state instance pointer.
+ *
+ * Resolves the preceding CelsStateHeader in O(1) to locate the owning session and cell ID,
+ * synchronizes backBuffer from frontBuffer if not already dirty, and returns a mutable
+ * back-buffer pointer (`this`). Must NOT be called inside an active composable body.
+ *
+ * @param ptr Pointer to user state struct. Safe if NULL.
+ * @return Mutable back-buffer pointer, or NULL on error.
+ */
+void *CelsMutateStateInstanceBegin(void *ptr);
+
+/**
+ * Finalizes a scoped mutation on a reactive state instance pointer with automatic byte-diffing.
+ *
+ * Compares backBuffer against frontBuffer via memcmp. If the bytes are identical, exits as a
+ * zero-cost no-op without marking the cell dirty or invalidating watchers. If the bytes changed,
+ * marks the cell dirty and enqueues each watcher's group key into its subscribed session's
+ * invalidationQueue.
+ *
+ * @param ptr Pointer to user state struct. Safe if NULL.
+ */
+void CelsMutateStateInstanceEnd(const void *ptr);
 
 /**
  * Allocates or resolves a state instance pinned to the calling composable's slot.

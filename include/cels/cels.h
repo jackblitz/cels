@@ -1542,6 +1542,11 @@ extern "C" {
  * @endcode
  */
 #define cel_mutate(ptr) \
+    for (_CEL_MUTATE_TYPE(ptr) *this = (_CEL_MUTATE_TYPE(ptr)*)CelsMutateStateInstanceBegin((void*)(ptr)); \
+         this != NULL; \
+         CelsMutateStateInstanceEnd((const void*)(ptr)), this = NULL)
+
+#define _CEL_MUTATE_LEGACY_UNUSED(ptr) \
     for (_CEL_MUTATE_TYPE(ptr) *this = (_CEL_MUTATE_TYPE(ptr)*)CelsMutateStateInstance((void*)(ptr)); \
          this != NULL; \
          this = NULL)

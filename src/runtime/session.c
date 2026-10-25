@@ -899,6 +899,13 @@ CelsResult CelsSessionRecompose(CelsSession *s)
 
     if (s->engine != NULL && s != &s->engine->session) {
         CelsStatePublishDirty(&s->engine->session);
+        for (uint32_t i = 0; i < CELS_MAX_SECONDARY_SESSIONS; ++i) {
+            if (s->engine->secondarySessions[i].isUsed &&
+                s->engine->secondarySessions[i].session != NULL &&
+                s->engine->secondarySessions[i].session != s) {
+                CelsStatePublishDirty(s->engine->secondarySessions[i].session);
+            }
+        }
     }
 
     bool hasDirtyState = false;
