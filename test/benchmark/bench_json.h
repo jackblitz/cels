@@ -18,6 +18,7 @@
 #include <windows.h>
 #define MKDIR(path) _mkdir(path)
 #else
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #define MKDIR(path) mkdir(path, 0755)

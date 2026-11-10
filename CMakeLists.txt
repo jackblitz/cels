@@ -61,6 +61,8 @@ set(CELS_CORE_SOURCES
 
 # Core CELS library (C99 modular implementation)
 add_library(cels_core STATIC ${CELS_CORE_SOURCES})
+# Static core objects are also linked into shared application modules.
+set_target_properties(cels_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(cels_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -271,6 +273,12 @@ if(CELS_BUILD_TESTS)
         ${TEST_COMMON_DIR}/benchmark
     )
     target_link_libraries(test_cli PRIVATE ${CELS_CORE_LINK})
+    # Assertions in the test bodies must execute in optimized configurations too.
+    if(MSVC)
+        target_compile_options(test_cli PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(test_cli PRIVATE -UNDEBUG)
+    endif()
     set_target_properties(test_cli PROPERTIES OUTPUT_NAME test_cli)
     add_dependencies(test_cli test_fixture_app)
     add_test(NAME test_cli COMMAND test_cli)
