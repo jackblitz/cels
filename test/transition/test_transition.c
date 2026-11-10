@@ -14,7 +14,8 @@ CEL_State(TargetState) {
 static float s_lastTransitionVal = 0.0f;
 
 CEL_Composable(TransitionWidget) {
-    const TargetState *ts = cel_watch_state(TargetState);
+    const TargetState *ts = CelsStateWatch(
+        CelsGetCurrentSession(), CelsHashKey("TargetState"), sizeof(TargetState));
     const float target = ts ? ts->target : 0.0f;
     s_lastTransitionVal = cel_transition(target, 50, CEL_EASE_LINEAR);
 }

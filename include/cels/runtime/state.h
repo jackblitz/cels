@@ -6,7 +6,7 @@
  *
  * CELS state is owned, allocated, and tracked by the CEL_Session in cache-aligned slabs.
  * State is double-buffered:
- * - Reads (cel_watch, cel_get_state) read from the published front buffer (lock-free, zero torn reads).
+ * - Reads (cel_watch_state, cel_get_state) read from the published front buffer (lock-free, zero torn reads).
  * - Mutations (cel_mutate) write to the staging back buffer and flag the state dirty.
  * - Dirty states are published atomically at frame boundaries in CelsSessionRecompose.
  *
@@ -14,7 +14,7 @@
  * @code
  *     // In a composable: read and subscribe to state changes
  *     CEL_Composable(ScoreDisplay) {
- *         const GameScore *score = cel_watch(GameScore, SCORE_ID);
+ *         const GameScore *score = ((const GameScore *)CelsStateWatch(CelsGetCurrentSession(), SCORE_ID, sizeof(GameScore)));
  *         printf("Current Score: %d\n", score->points);
  *     }
  *
@@ -92,7 +92,7 @@ static inline CelsStateHeader *CelsGetStateHeader(const void *ptr)
  */
 typedef struct CelsStateCell {
     CEL_Id   id;
-    void    *frontBuffer;   /**< Published snapshot read by cel_watch / cel_get_state */
+    void    *frontBuffer;   /**< Published snapshot read by cel_watch_state / cel_get_state */
     void    *backBuffer;    /**< Staging buffer written by cel_mutate */
     size_t   size;          /**< Size in bytes of the state struct */
     bool     isDirty;       /**< True if backBuffer has pending mutations to publish */
@@ -189,14 +189,15 @@ void CelsStatePublishDirty(CelsSession *session);
 void CelsStateRegistryUnsubscribeKey(CelsStateRegistry *registry, uint64_t groupKey);
 
 /**
- * Subscribes the active composable group to a reactive state instance pointer.
+ * @brief Subscribes the active composition to a live state pointer in its session.
  *
- * Resolves the preceding CelsStateHeader in O(1) and registers the calling group
- * as a watcher on the state cell.
- *
- * @param session Owning or active session. Safe if NULL (resolves active session).
- * @param ptr     Pointer to reactive state struct. Safe if NULL.
- * @return The same ptr for assignment / pass-through, or NULL if invalid.
+ * @param[in] session Current owning session, or NULL to use the current session.
+ * @param[in] ptr Borrowed published state pointer; NULL returns NULL without subscribing.
+ * @return The same borrowed const pointer after subscription, or NULL with a diagnostic
+ *         for invalid context, unregistered/foreign pointers or exhausted watcher capacity.
+ * @note Validates against the bounded registry without dereferencing ptr or a preceding
+ *       header. Call only on the owning composition thread. No allocation occurs.
+ *       Pointers expire when their state owner unmounts or its session is destroyed.
  */
 const void *CelsWatchStateInstance(CelsSession *session, const void *ptr);
 

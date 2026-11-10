@@ -10,7 +10,7 @@
  * Uses persistent slot memory (cel_remember) to track progress across frames.
  */
 CEL_Composable(NetworkHUD, NetworkState*, net) {
-    cel_watch(net);
+    cel_watch_state(net);
     if (net == NULL) return;
 
     float progress = 0.0f;

@@ -146,7 +146,8 @@ CEL_Composable(Sidebar) {
     SidebarResource *res = cel_remember(SidebarResource, 0);
     cel_lifecycle(SidebarLifecycle, res);
     ProfileWidget();
-    const AppState *state = cel_watch(AppState, CEL_ID("AppState"));
+    const AppState *state = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("AppState"), sizeof(AppState));
     if (state && state->showSubMenu) {
         SubMenu();
     }
@@ -156,7 +157,8 @@ CEL_Composable(ContentArea) {}
 
 CEL_Composable(MainBody) {
     ContentArea();
-    const AppState *state = cel_watch(AppState, CEL_ID("AppState"));
+    const AppState *state = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("AppState"), sizeof(AppState));
     if (state && state->showOptionalSidebar) {
         Sidebar();
     }

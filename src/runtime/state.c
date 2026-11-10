@@ -310,14 +310,11 @@ void CelsStateRegistryUnsubscribeKey(CelsStateRegistry *registry, uint64_t group
 }
 
 /**
- * Subscribes the active composable group to a hoisted reactive state instance pointer.
+ * @brief Validates a live state pointer and subscribes the current composition.
  *
- * Resolves the preceding CelsStateHeader in O(1) to locate the cell ID, owning session,
- * and struct size, registers the calling composable group as a watcher, and returns ptr.
- *
- * @param session Owning or active session. Safe if NULL (resolves active or header session).
- * @param ptr     Pointer to reactive state struct payload. Safe if NULL.
- * @return The same state pointer for chained expressions or pass-through.
+ * Scans the bounded session registry instead of probing memory before a caller's
+ * pointer. This also supports keyed state storage without a separate DSL overload.
+ * No allocation occurs. Invalid pointers never acquire watchers.
  */
 const void *CelsWatchStateInstance(CelsSession *session, const void *ptr)
 {
@@ -327,17 +324,41 @@ const void *CelsWatchStateInstance(CelsSession *session, const void *ptr)
     if (session == NULL) {
         session = CelsGetCurrentSession();
     }
-    CelsStateHeader *hdr = CelsGetStateHeader(ptr);
-    if (hdr == NULL) {
-        return ptr;
+    if (session == NULL || session != CelsGetCurrentSession() || !session->isRecomposing ||
+        session->currentDepth == 0 || !session->activeStack[session->currentDepth - 1]) {
+        cel_print_log(ERROR, "cel_watch_state requires an active composition in the current session");
+        return NULL;
     }
-    if (session == NULL) {
-        session = hdr->session;
+
+    CelsStateCell *cell = NULL;
+    for (uint32_t i = 0; i < session->stateRegistry.cellCount; ++i) {
+        CelsStateCell *candidate = &session->stateRegistry.cells[i];
+        if (candidate->inUse && candidate->frontBuffer == ptr) {
+            cell = candidate;
+            break;
+        }
     }
-    if (session != NULL) {
-        CelsStateWatch(session, hdr->id, hdr->size);
+    if (cell == NULL) {
+        cel_print_log(ERROR, "cel_watch_state requires a live state pointer owned by the current session");
+        return NULL;
     }
-    return ptr;
+
+    const uint32_t groupIndex = session->groupIndexStack[session->currentDepth - 1];
+    const CelsSlotGroup *group = CelsGetGroup(session, groupIndex);
+    if (group == NULL || group->key == 0) {
+        cel_print_log(ERROR, "cel_watch_state requires a mounted composition group");
+        return NULL;
+    }
+    for (uint16_t i = 0; i < cell->watcherCount; ++i) {
+        if (cell->watcherKeys[i] == group->key) {
+            return ptr;
+        }
+    }
+    if (cell->watcherCount >= CELS_MAX_WATCHERS) {
+        cel_print_log(ERROR, "cel_watch_state subscription capacity exhausted; increase CELS_MAX_WATCHERS");
+        return NULL;
+    }
+    return CelsStateWatch(session, cell->id, cell->size);
 }
 
 /**

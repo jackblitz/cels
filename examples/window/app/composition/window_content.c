@@ -24,7 +24,7 @@ CEL_ComposableDef(WindowContent, WindowState*, win) {
     LastEventMsg *lastEvent = cel_remember(LastEventMsg, { .text = "No events received yet" });
 
     /* Reactively observe the hoisted window state instance */
-    cel_watch(win);
+    cel_watch_state(win);
 
     /* Listen for discrete events bubbling up from child components */
     cel_listen(BadgeNotificationEvent, ev) {

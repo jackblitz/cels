@@ -221,6 +221,27 @@ if(CELS_BUILD_TESTS)
 
     set(TEST_COMMON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/test)
 
+    # Focused DSL tests do not depend on platform-specific example/benchmark code.
+    add_executable(test_state_watch
+        test/state_watch/test_state_watch.c
+        test/state_lifetime/test_state_lifetime.c
+    )
+    target_include_directories(test_state_watch PRIVATE "${TEST_COMMON_DIR}")
+    target_link_libraries(test_state_watch PRIVATE cels_core)
+    add_test(NAME state_watch COMMAND test_state_watch)
+
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(CELS_WATCH_COMPILER_OPTIONS)
+    if(MSVC)
+        list(APPEND CELS_WATCH_COMPILER_OPTIONS --msvc)
+    endif()
+    add_test(NAME state_watch_compile
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/state_watch/check_compile.py"
+            --compiler "${CMAKE_C_COMPILER}"
+            --include "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            ${CELS_WATCH_COMPILER_OPTIONS}
+    )
+
     # Test fixture dynamic library for hot-reload tests
     add_library(test_fixture_app SHARED
         test/hot_reload/fixture_app.c
