@@ -6,7 +6,7 @@
  *
  * CELS state is owned, allocated, and tracked by the CEL_Session in cache-aligned slabs.
  * State is double-buffered:
- * - Reads (cel_watch_state, cel_get_state) read from the published front buffer (lock-free, zero torn reads).
+ * - Reads (Cel.State.Watch, cel_get_state) read from the published front buffer (lock-free, zero torn reads).
  * - Mutations (cel_mutate) write to the staging back buffer and flag the state dirty.
  * - Dirty states are published atomically at frame boundaries in CelsSessionRecompose.
  *
@@ -92,7 +92,7 @@ static inline CelsStateHeader *CelsGetStateHeader(const void *ptr)
  */
 typedef struct CelsStateCell {
     CEL_Id   id;
-    void    *frontBuffer;   /**< Published snapshot read by cel_watch_state / cel_get_state */
+    void    *frontBuffer;   /**< Published snapshot read by Cel.State.Watch / cel_get_state */
     void    *backBuffer;    /**< Staging buffer written by cel_mutate */
     size_t   size;          /**< Size in bytes of the state struct */
     bool     isDirty;       /**< True if backBuffer has pending mutations to publish */

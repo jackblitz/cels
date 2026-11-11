@@ -8,7 +8,7 @@ In real-time multi-threaded simulation and game engines, shared mutable state is
 3. **Non-Deterministic Recomposition**: In-frame mutations cause different branches of the same tree walk to observe conflicting versions of the same state variable.
 
 CELS enforces a **strict double-buffering and staged transaction architecture**:
-- **Front Buffer (Published Snapshot)**: Immutable during frame evaluation. Read locklessly by composables, UI renderers, and background reader threads (`cel_watch_state`, `cel_get_state`).
+- **Front Buffer (Published Snapshot)**: Immutable during frame evaluation. Read locklessly by composables, UI renderers, and background reader threads (`Cel.State.Watch`, `cel_get_state`).
 - **Back Buffer (Staging Workspace)**: Written exclusively by mutation handlers (`cel_mutate`, tasks, event callbacks).
 - **Atomic Frame Boundary Publish**: Back-buffer mutations are synchronized to front buffers at deterministic frame boundaries via `CelsStatePublishDirty`.
 - **Zero-Allocation Hoisted Headers**: Every reactive state cell is preceded by an aligned 32-byte `CelsStateHeader`, providing $\mathcal{O}(1)$ reflection, identity, and session resolution from a raw user pointer.
@@ -25,7 +25,7 @@ CELS enforces a **strict double-buffering and staged transaction architecture**:
 |                                       ||                                                          |
 |                                    memcpy (Atomic sync)                                           |
 |                                       \/                                                          |
-|                                [ Front Buffer ] ========> [ Read-Only cel_watch_state / Render ]        |
+|                                [ Front Buffer ] ========> [ Read-Only Cel.State.Watch / Render ]        |
 |                                                           (Lock-free, zero torn reads)            |
 +---------------------------------------------------------------------------------------------------+
 ```
@@ -129,7 +129,7 @@ The published front buffer is strictly read-only during frame evaluation.
 
 ### 4.1 Dependency Registration (`CelsStateWatch`)
 
-When a composable calls `cel_watch_state(instancePtr)`, Cels validates the pointer
+When a composable calls `Cel.State.Watch(instancePtr)`, Cels validates the pointer
 against the current session registry, then registers the dependency through
 `CelsStateWatch`. Explicit keyed access belongs to that host function:
 

@@ -36,7 +36,7 @@ Include `cels.h` and call `cel_transition` inside any active composable:
 #include <stdio.h>
 
 CEL_Composable(HealthBar, const PlayerState*, player) {
-    cel_watch_state(player);
+    Cel.State.Watch(player);
     if (!player) return;
 
     /* Smoothly eases toward player->health over 400ms using Quad Out easing */
@@ -115,7 +115,7 @@ In [`examples/transition/app/app.c`](file:///D:/cels-workspace/library/cels/exam
 
 ```c
 CEL_Composable(HealthBarHUD, const PlayerGaugeState*, gauge) {
-    cel_watch_state(gauge);
+    Cel.State.Watch(gauge);
     if (gauge == NULL) return;
 
     /* Smoothly interpolate visual gauge toward authoritative health */

@@ -14,7 +14,7 @@ metadata:
     - state-hoisting
     - slot-table
     - cel_state
-    - cel_watch_state
+    - Cel.State.Watch
     - cel_mutate
     - cel_remember
     - cel_lifecycle
@@ -75,8 +75,8 @@ CEL_Composition(MainWindow) {
 }
 ```
 
-#### Observing Hoisted State: `cel_watch_state(ptr)`
-In child composables, pass a live pointer to `cel_watch_state(ptr)`. CELS validates it
+#### Observing Hoisted State: `Cel.State.Watch(ptr)`
+In child composables, pass a live pointer to `Cel.State.Watch(ptr)`. CELS validates it
 against the bounded current-session registry before subscribing the group. It does
 not inspect a preceding header; invalid context, foreign/unknown pointers and
 exhausted capacity return NULL with a diagnostic. NULL input is a no-op:
@@ -84,7 +84,7 @@ exhausted capacity return NULL with a diagnostic. NULL input is a no-op:
 ```c
 CEL_Composable(WindowContent, WindowState*, win) {
     // Subscribes this composable group to 'win'
-    cel_watch_state(win);
+    Cel.State.Watch(win);
 
     printf("Window dimensions: %d x %d\n", win->width, win->height);
 
@@ -154,7 +154,7 @@ cels_session_mutate(&session, CEL_ID("FixtureState"), FixtureState) {
 ```
 
 > [!IMPORTANT]
-> Never cast away `const` on pointers returned by `cel_watch_state` or `cel_get_state` to write directly. Always use `cel_mutate`. Direct writes bypass double-buffering, cause race conditions, and fail to notify subscribers.
+> Never cast away `const` on pointers returned by `Cel.State.Watch` or `cel_get_state` to write directly. Always use `cel_mutate`. Direct writes bypass double-buffering, cause race conditions, and fail to notify subscribers.
 
 ---
 
@@ -258,15 +258,15 @@ void OnButtonClicked(WindowState *win) {
 ### Pattern 2: Subscribing to State
 
 ```c
-// WRONG: Reading state in composables without cel_watch_state
+// WRONG: Reading state in composables without Cel.State.Watch
 CEL_Composable(MyLabel, const WindowState*, win) {
-    // Missing cel_watch_state! UI will never re-render when win->width changes
+    // Missing Cel.State.Watch! UI will never re-render when win->width changes
     printf("Width: %d\n", win->width);
 }
 
-// CORRECT: Always declare cel_watch_state at the start of the composable
+// CORRECT: Always declare Cel.State.Watch at the start of the composable
 CEL_Composable(MyLabel, const WindowState*, win) {
-    cel_watch_state(win); // Registers current slot group as dependent
+    Cel.State.Watch(win); // Registers current slot group as dependent
     printf("Width: %d\n", win->width);
 }
 ```
@@ -300,7 +300,7 @@ CEL_Composable(TextureViewer) {
 | :--- | :--- | :--- |
 | `CEL_State(Name) { ... }` | Declares a reactive state struct | Header file (`.h`) |
 | `cel_state(Type, [init])` | Allocates hoisted reactive state instance (Zero string IDs) | Parent composable / composition |
-| `cel_watch_state(instancePtr)` | Subscribes to hoisted state instance | Child composable |
+| `Cel.State.Watch(instancePtr)` | Subscribes to hoisted state instance | Child composable |
 | `cel_mutate(instancePtr) { this->... }` | Mutates hoisted state instance directly (Sessions only mutate own state) | Host tick, input callback, task |
 | `cel_remember_state(Type, init)` | Registers/retrieves double-buffered state by Type | Inside `CEL_Composition` or root composable |
 | `cel_remember_state_keyed(id, Type, init)` | Registers/retrieves double-buffered state by ID | Inside `CEL_Composition` or root composable |

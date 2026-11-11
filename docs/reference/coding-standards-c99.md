@@ -30,7 +30,8 @@ CELS employs a tiered prefix convention to clarify calling scope, API visibility
 | Tier / Category | Prefix Convention | Example Symbols | Calling Context & Purpose |
 | :--- | :--- | :--- | :--- |
 | **Declarative DSL Macros** | `CEL_` (`SCREAMING_SNAKE` or `PascalCase`) | `CEL_State`, `CEL_Composable`, `CEL_Task`, `CEL_Lifecycle`, `CEL_ID` | Top-level structural declarations at file/global scope. |
-| **Runtime Composable DSL** | `cel_` (`snake_case`) | `cel_remember`, `cel_watch_state`, `cel_mutate`, `cel_transition`, `cel_stage_set` | Invoked inside composables, tasks, or event callbacks during recomposition. |
+| **Runtime Composable DSL** | `cel_` (`snake_case`) | `cel_remember`, `Cel.State.Watch`, `cel_mutate`, `cel_transition`, `cel_stage_set` | Invoked inside composables, tasks, or event callbacks during recomposition. |
+| **Authoring services** | `Cel.Domain.Operation` | `Cel.State.Watch(settings)` | Immutable runtime service table; no implicit receiver. |
 | **Public C API Functions** | `Cels` (`PascalCase`, noun-first) | `CelsEngineInit`, `CelsSessionRecompose`, `CelsSlotTableInit`, `CelsStateWatch` | Host-level functions, session operations, and slot table plumbing. |
 | **Internal Helpers & Body** | `_cels_` or `cels_` (`snake_case`) | `_cels_body_*`, `_cels_lifecycle_*`, `cels_app_runtime_check` | Private implementation functions, static trampolines, and helper macros. |
 | **Constants & Enums** | `CELS_` (`SCREAMING_SNAKE`) | `CELS_OK`, `CELS_MAX_GROUPS`, `CELS_ENGINE_MAGIC`, `CELS_OP_SET` | Preprocessor limits, magic numbers, and enumeration constants. |
@@ -173,14 +174,16 @@ This guarantees that:
 
 ### 4.3 One State Subscription Spelling
 
-Use `cel_watch_state(statePointer)` inside composition. The pointer expression is
+Use `Cel.State.Watch(statePointer)` inside composition. The pointer expression is
 passed exactly once to the checked subscription operation. Do not reintroduce
 `cel_watch`, type-only lookup, keyed overloads or session overloads under the DSL.
+Do not retain `cel_watch_state` as an alias. Embedding frameworks can define
+`CELS_NO_SERVICE_DSL` and expose their own table while calling `CelsApiV1()`.
 Host code can explicitly use `CelsStateWatch(session, key, sizeof(Type))`.
 
 ```c
 const PlayerState *player = cel_state(PlayerState, { .health = 100 });
-cel_watch_state(player);
+Cel.State.Watch(player);
 ```
 
 Subscription is an operation on the owning composition thread, not a thread-safe
@@ -320,7 +323,7 @@ Rules:
   const uint64_t key = CelsHashKey("StatusBar");
   const CelsSlotGroup *group = CelsGetGroup(session, logicalIdx);
   ```
-- **Read-Only Front Buffer Snapshots**: `cel_watch_state()` returns `const void*`, assignable to a borrowed `const Type*`; `cel_get_state()` returns a typed const pointer. Modifying published front-buffer state directly is undefined behavior.
+- **Read-Only Front Buffer Snapshots**: `Cel.State.Watch()` returns `const void*`, assignable to a borrowed `const Type*`; `cel_get_state()` returns a typed const pointer. Modifying published front-buffer state directly is undefined behavior.
 - **Mutable Back Buffers**: Modifications must occur via `cel_mutate()`, which exposes a mutable pointer to the staging back-buffer and automatically enqueues observers for recomposition.
 
 ---

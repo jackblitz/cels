@@ -2,7 +2,7 @@
 
 State management in CELS is designed to be **cache-friendly, lock-free, and type-safe in pure C99**.
 
-CELS uses a **double-buffered reactive model**: reads are lock-free and hit the front buffer, while writes stage into the back buffer. Modern CELS emphasizes **State Hoisting** (`cel_state`, `cel_watch_state(ptr)`, `cel_mutate(ptr)`), eliminating string lookups, hash collisions, and manual key management.
+CELS uses a **double-buffered reactive model**: reads are lock-free and hit the front buffer, while writes stage into the back buffer. Modern CELS emphasizes **State Hoisting** (`cel_state`, `Cel.State.Watch(ptr)`, `cel_mutate(ptr)`), eliminating string lookups, hash collisions, and manual key management.
 
 ---
 
@@ -18,7 +18,7 @@ Every reactive state cell in CELS maintains two memory buffers:
 │  [ x: 10, y: 20, isAlive: true ]                       │
 │    ▲                                                   │
 │    │ Lock-free reads during recomposition              │
-│    │ `cel_watch_state(player)` or `cel_get_state(id, Type)`  │
+│    │ `Cel.State.Watch(player)` or `cel_get_state(id, Type)`  │
 │                                                        │
 │  BACK BUFFER (Staged Modifications)                    │
 │  [ x: 15, y: 20, isAlive: true ]                       │
@@ -31,7 +31,7 @@ Every reactive state cell in CELS maintains two memory buffers:
      ▼
 ```
 
-1. **Recomposition Phase (Reads)**: Composables call `cel_watch_state(ptr)` to read the stable front buffer. CELS records the calling composable group as a subscriber.
+1. **Recomposition Phase (Reads)**: Composables call `Cel.State.Watch(ptr)` to read the stable front buffer. CELS records the calling composable group as a subscriber.
 2. **Mutation Phase (Writes)**: User input, host tick, or tasks invoke `cel_mutate(ptr)`. The mutation applies to the back buffer, and all registered observers are flagged dirty.
 3. **Commit Phase (Swap)**: At the frame boundary, buffers swap. Only the dirty composables recompose on the next tick.
 
@@ -62,7 +62,7 @@ CEL_State(PlayerState) {
 The primary and most idiomatic pattern in CELS is **State Hoisting**:
 1. Allocate state at the nearest common ancestor with `cel_state`.
 2. Pass the typed pointer down to child composables via normal arguments.
-3. Children subscribe by calling `cel_watch_state(ptr)`.
+3. Children subscribe by calling `Cel.State.Watch(ptr)`.
 4. Anyone mutates the state directly with `cel_mutate(ptr)`.
 
 ### Step 1: Hoisting State with `cel_state`
@@ -85,9 +85,9 @@ CEL_Composition(GameView) {
 }
 ```
 
-### Step 2: Subscribing with `cel_watch_state(ptr)`
+### Step 2: Subscribing with `Cel.State.Watch(ptr)`
 
-In child composables, call `cel_watch_state(ptr)`. CELS checks the bounded session
+In child composables, call `Cel.State.Watch(ptr)`. CELS checks the bounded session
 registry for the live pointer, then subscribes this composable to changes. It does
 not allocate or inspect memory before the supplied pointer. Invalid context, foreign
 storage and exhausted subscriptions return NULL with a diagnostic:
@@ -95,7 +95,7 @@ storage and exhausted subscriptions return NULL with a diagnostic:
 ```c
 CEL_Composable(PlayerHUD, const PlayerState*, player) {
     /* Registers reactive subscription */
-    cel_watch_state(player);
+    Cel.State.Watch(player);
     if (!player) return;
 
     printf("  [HUD] Health: %d | Shield: %s\n",
@@ -226,13 +226,13 @@ In standard application code, always use hoisted `cel_mutate(ptr)` and signals.
 ### Do This
 - **Prefer State Hoisting**: Use `cel_state` and pass pointers down. It is faster, type-safe, eliminates string typos, and scopes state lifetime to the declaring composable.
 - **Mutate in Event Callbacks**: Mutate state in response to inputs, task yields, or external callbacks. Avoid mutating state directly in the render/composition body to prevent infinite recomposition loops.
-- **Read Constantly, Mutate Once**: Read data freely with `cel_watch_state`. Multiple reads in the same frame are lock-free and hit the front buffer.
+- **Read Constantly, Mutate Once**: Read data freely with `Cel.State.Watch`. Multiple reads in the same frame are lock-free and hit the front buffer.
 
 ### Don't Do That
 - ❌ **Never Cast Away `const` to Write Directly**:
   ```c
   /* DANGEROUS: Bypasses double-buffering, causes tearing, drops reactivity! */
-  PlayerState *p = (PlayerState*)cel_watch_state(player);
+  PlayerState *p = (PlayerState*)Cel.State.Watch(player);
   p->health = 50; 
   ```
   *Always use `cel_mutate(player) { this->health = 50; }`.*

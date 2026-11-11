@@ -142,7 +142,7 @@ CEL_Composition(EventAppComposition) {
         .taskWorkflowCompleted = false
     });
 
-    cel_watch_state(state);
+    Cel.State.Watch(state);
 
     EventTextSlot *lastEvent = cel_remember(EventTextSlot, { .text = "None yet (Press [E])" });
     EventTextSlot *lastSignal = cel_remember(EventTextSlot, { .text = "None yet (Press [S])" });

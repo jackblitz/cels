@@ -47,6 +47,7 @@ endif()
 
 # Core CELS library sources
 set(CELS_CORE_SOURCES
+    src/runtime/api.c
     src/runtime/slot_table.c
     src/runtime/session.c
     src/runtime/state.c

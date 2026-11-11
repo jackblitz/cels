@@ -26,7 +26,7 @@ CEL_Composable(HotWidget, HotState*, state) {
     (*localCounter)++;
     s_rememberedCurrent = *localCounter;
 
-    cel_watch_state(state);
+    Cel.State.Watch(state);
     const HotState *val = state;
     (void)val;
 }

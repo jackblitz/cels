@@ -39,7 +39,7 @@ CELS provides a unified temporal architecture designed for real-time application
 │                   (e.g., PlayerState, NetworkState)                    │
 └───────────────────▲────────────────────────────────┬───────────────────┘
                     │ Mutates discrete steps         │ Read target value
-                    │ (cel_mutate)                   │ (cel_watch_state)
+                    │ (cel_mutate)                   │ (Cel.State.Watch)
 ┌───────────────────┴────────────────┐   ┌───────────▼───────────────────┐
 │     PROCEDURAL TASKS (CEL_Task)    │   │  TRANSITIONS (cel_transition) │
 │ - Asynchronous coroutines          │   │ - Continuous visual smoothing │
@@ -74,7 +74,7 @@ In CELS, game state remains **authoritative and instantaneous**. You do not anim
 
 ```c
 CEL_Composable(HealthBarHUD, const PlayerState*, player) {
-    cel_watch_state(player);
+    Cel.State.Watch(player);
     if (!player) return;
 
     /* Smoothly eases visual display toward authoritative player->health over 400ms */
@@ -179,7 +179,7 @@ Invoke the task inside any `CEL_Composition` or `CEL_Composable` using `cel_task
 
 ```c
 CEL_Composable(NetworkHUD, NetworkState*, net) {
-    cel_watch_state(net);
+    Cel.State.Watch(net);
 
     /* Conditionally mount task. While isConnecting is true, the task executes.
      * The moment isConnecting becomes false, the task is unmounted and its
@@ -245,7 +245,7 @@ CEL_Task(BossIntroSequence, BossState*, boss) {
 
 /* 2. Visual Projection: Smoothly animates toward the state driven by the task */
 CEL_Composable(BossCameraHUD, const BossState*, boss) {
-    cel_watch_state(boss);
+    Cel.State.Watch(boss);
 
     /* Smoothly eases camera zoom over 500ms using Quad Out */
     float smoothZoom = cel_transition(boss->cameraZoom, 500, CEL_EASE_OUT_QUAD);
@@ -281,7 +281,7 @@ run {
 cel_mutate(ui) { this->targetX = 100.0f; }
 
 CEL_Composable(MyWidget, const UIState*, ui) {
-    cel_watch_state(ui);
+    Cel.State.Watch(ui);
     float x = cel_transition(ui->targetX, 300, CEL_EASE_OUT_QUAD);
     RenderBox(x);
 }

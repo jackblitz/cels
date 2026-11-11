@@ -33,16 +33,16 @@ CEL_Composition(WatchRoot, void *userData) {
     ++s_compositions;
     s_state = cel_state(WatchSettings, ((WatchSettings){ .value = 7 }));
     CHECK(s_state != NULL);
-    CHECK(cel_watch_state(StateArgument()) == s_state);
-    CHECK(cel_watch_state(s_state) == s_state);
+    CHECK(Cel.State.Watch(StateArgument()) == s_state);
+    CHECK(Cel.State.Watch(s_state) == s_state);
 
     /* Rejected pointers must not be dereferenced or gain subscriptions. */
     const WatchSettings local = { .value = 7 };
-    CHECK(cel_watch_state(&local) == NULL);
-    CHECK(cel_watch_state(NULL) == NULL);
-    CHECK(cel_watch_state(s_foreignState) == NULL);
+    CHECK(Cel.State.Watch(&local) == NULL);
+    CHECK(Cel.State.Watch(NULL) == NULL);
+    CHECK(Cel.State.Watch(s_foreignState) == NULL);
     CHECK(CelsWatchStateInstance(s_foreignSession, s_foreignState) == NULL);
-    CHECK(cel_watch_state((const unsigned char *)s_state + 1) == NULL);
+    CHECK(Cel.State.Watch((const unsigned char *)s_state + 1) == NULL);
 
     CelsSession *session = CelsGetCurrentSession();
     CelsStateCell *cell = NULL;
@@ -53,7 +53,7 @@ CEL_Composition(WatchRoot, void *userData) {
         }
     }
     CHECK(cell != NULL && cell->watcherCount == 1);
-    CHECK(cel_watch_state(cell->backBuffer) == NULL);
+    CHECK(Cel.State.Watch(cell->backBuffer) == NULL);
 
     /* Explicitly inject exhausted capacity, then verify no fabricated success. */
     uint64_t savedKeys[CELS_MAX_WATCHERS];
@@ -61,15 +61,15 @@ CEL_Composition(WatchRoot, void *userData) {
     const uint16_t savedCount = cell->watcherCount;
     memset(cell->watcherKeys, 0, sizeof(cell->watcherKeys));
     cell->watcherCount = CELS_MAX_WATCHERS;
-    CHECK(cel_watch_state(s_state) == NULL);
+    CHECK(Cel.State.Watch(s_state) == NULL);
     CHECK(cell->watcherCount == CELS_MAX_WATCHERS);
     memcpy(cell->watcherKeys, savedKeys, sizeof(savedKeys));
     cell->watcherCount = savedCount;
-    CHECK(cel_watch_state(s_state) == s_state);
+    CHECK(Cel.State.Watch(s_state) == s_state);
 
     /* Retired storage is rejected by registry membership, not header probing. */
     cell->inUse = false;
-    CHECK(cel_watch_state(s_state) == NULL);
+    CHECK(Cel.State.Watch(s_state) == NULL);
     cell->inUse = true;
 }
 
@@ -113,7 +113,7 @@ static const WatchSettings *s_retiredState;
 
 CEL_Composable(RetiringChild) {
     s_retiredState = cel_state(WatchSettings, ((WatchSettings){ .value = 1 }));
-    CHECK(cel_watch_state(s_retiredState) == s_retiredState);
+    CHECK(Cel.State.Watch(s_retiredState) == s_retiredState);
 }
 
 CEL_Composition(RetiringRoot, void *userData) {
@@ -121,7 +121,7 @@ CEL_Composition(RetiringRoot, void *userData) {
     if (s_childMounted) {
         RetiringChild();
     } else if (s_checkRetired) {
-        CHECK(s_retiredState != NULL && cel_watch_state(s_retiredState) == NULL);
+        CHECK(s_retiredState != NULL && Cel.State.Watch(s_retiredState) == NULL);
     }
 }
 
@@ -155,6 +155,9 @@ static void TestWatchAfterUnmount(void) {
 }
 
 int main(void) {
+    CHECK(Cel.abiVersion == 1u && Cel.structSize == sizeof(CelsApi));
+    CHECK(CelsApiV1() == CelsApiV1());
+    CHECK(strcmp(CelsGetVersionString(), "0.5.0") == 0);
     TestCheckedStateWatch();
     TestWatchAfterUnmount();
     puts("Checked pointer state watching passed.");

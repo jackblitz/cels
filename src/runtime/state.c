@@ -326,7 +326,7 @@ const void *CelsWatchStateInstance(CelsSession *session, const void *ptr)
     }
     if (session == NULL || session != CelsGetCurrentSession() || !session->isRecomposing ||
         session->currentDepth == 0 || !session->activeStack[session->currentDepth - 1]) {
-        cel_print_log(ERROR, "cel_watch_state requires an active composition in the current session");
+        cel_print_log(ERROR, "Cel.State.Watch requires an active composition in the current session");
         return NULL;
     }
 
@@ -339,14 +339,14 @@ const void *CelsWatchStateInstance(CelsSession *session, const void *ptr)
         }
     }
     if (cell == NULL) {
-        cel_print_log(ERROR, "cel_watch_state requires a live state pointer owned by the current session");
+        cel_print_log(ERROR, "Cel.State.Watch requires a live state pointer owned by the current session");
         return NULL;
     }
 
     const uint32_t groupIndex = session->groupIndexStack[session->currentDepth - 1];
     const CelsSlotGroup *group = CelsGetGroup(session, groupIndex);
     if (group == NULL || group->key == 0) {
-        cel_print_log(ERROR, "cel_watch_state requires a mounted composition group");
+        cel_print_log(ERROR, "Cel.State.Watch requires a mounted composition group");
         return NULL;
     }
     for (uint16_t i = 0; i < cell->watcherCount; ++i) {
@@ -355,7 +355,7 @@ const void *CelsWatchStateInstance(CelsSession *session, const void *ptr)
         }
     }
     if (cell->watcherCount >= CELS_MAX_WATCHERS) {
-        cel_print_log(ERROR, "cel_watch_state subscription capacity exhausted; increase CELS_MAX_WATCHERS");
+        cel_print_log(ERROR, "Cel.State.Watch subscription capacity exhausted; increase CELS_MAX_WATCHERS");
         return NULL;
     }
     return CelsStateWatch(session, cell->id, cell->size);

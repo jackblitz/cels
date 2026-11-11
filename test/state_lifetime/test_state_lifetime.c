@@ -337,7 +337,7 @@ static int s_hoistedChildRuns = 0;
 static int s_hoistedChildLastWidth = 0;
 
 CEL_Composable(HoistedWindowChild, HoistedWindowState*, win) {
-    cel_watch_state(win);
+    Cel.State.Watch(win);
     s_hoistedChildRuns++;
     s_hoistedChildLastWidth = win->width;
 }
@@ -391,12 +391,12 @@ static HoistedWindowState *s_capturedWin1 = NULL;
 static HoistedWindowState *s_capturedWin2 = NULL;
 
 CEL_Composable(HoistedConsumer1, HoistedWindowState*, win) {
-    cel_watch_state(win);
+    Cel.State.Watch(win);
     s_instRuns1++;
 }
 
 CEL_Composable(HoistedConsumer2, HoistedWindowState*, win) {
-    cel_watch_state(win);
+    Cel.State.Watch(win);
     s_instRuns2++;
 }
 
@@ -464,7 +464,7 @@ CEL_Composable(HoistedTeardownChild) {
 CEL_Composition(HoistedTeardownRoot, void *userData) {
     (void)userData;
     TeardownToggleState *toggle = cel_state(TeardownToggleState, ((TeardownToggleState){ .enable = true }));
-    cel_watch_state(toggle);
+    Cel.State.Watch(toggle);
     s_capturedToggle = toggle;
 
     if (toggle->enable) {
@@ -510,7 +510,7 @@ static const TestCase s_stateLifetimeTests[] = {
     { "TestEditsPreserveResources", "Tree edits and reordering preserve resource identity", TestEditsPreserveResources },
     { "TestChildBeforeParent", "Teardown order: child resources destroyed before parent", TestChildBeforeParent },
     { "TestNestedEditsKeepSubscriptions", "Nested tree edits maintain reactive subscriptions", TestNestedEditsKeepSubscriptions },
-    { "TestStateHoistingBasic", "State hoisting instance allocation, cel_watch_state(ptr), and cel_mutate(ptr)", TestStateHoistingBasic },
+    { "TestStateHoistingBasic", "State hoisting instance allocation, Cel.State.Watch(ptr), and cel_mutate(ptr)", TestStateHoistingBasic },
     { "TestStateHoistingMultipleInstances", "Multiple distinct instances of the same struct without string keys", TestStateHoistingMultipleInstances },
     { "TestStateHoistingAutomaticTeardown", "Automatic state cell deactivation when composable unmounts", TestStateHoistingAutomaticTeardown }
 };

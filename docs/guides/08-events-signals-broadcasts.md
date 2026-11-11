@@ -1,6 +1,6 @@
 # Events, Signals & Engine Broadcasts
 
-In declarative architectures, reactive state (`cel_watch_state`, `cel_mutate`, `cel_state`) models **continuous state of the world** (e.g., window size, player position, health).
+In declarative architectures, reactive state (`Cel.State.Watch`, `cel_mutate`, `cel_state`) models **continuous state of the world** (e.g., window size, player position, health).
 
 However, real-world interactive systems also require **discrete, instantaneous messages**:
 - A button child firing a click notification up the composable tree to an ancestor.
@@ -282,5 +282,5 @@ CEL_Task(WorkflowCoordinatorTask, EventDemoState*, state) {
 
 ### Don't Do That
 - **Don't directly mutate another session's state**: Calling multi-session mutate from the host or across threads is removed. Always dispatch a discrete signal via `cel_signal` to preserve concurrency safety and encapsulation.
-- **Don't use events for continuous scalar state**: Never emit mouse positions on every frame via `cel_event`. Use double-buffered reactive state (`cel_state`, `cel_watch_state`, `cel_mutate`) or smooth transitions (`cel_transition`).
+- **Don't use events for continuous scalar state**: Never emit mouse positions on every frame via `cel_event`. Use double-buffered reactive state (`cel_state`, `Cel.State.Watch`, `cel_mutate`) or smooth transitions (`cel_transition`).
 - **Don't unconditionally emit `cel_event` in a composable body**: If a composable emits an event on every render unconditionally without an input trigger, it will trigger infinite recomposition passes until `maxDrainIterations` is hit. Always guard emissions with interaction flags or user inputs.

@@ -248,7 +248,7 @@ if (app->module.def->setSession != NULL) {
 }
 ```
 
-This guarantees that macro calls like `cel_remember`, `cel_watch_state`, and `cel_mutate` inside the DLL resolve to the host's existing `CelsSession` slab with zero configuration.
+This guarantees that macro calls like `cel_remember`, `Cel.State.Watch`, and `cel_mutate` inside the DLL resolve to the host's existing `CelsSession` slab with zero configuration.
 
 ---
 
