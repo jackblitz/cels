@@ -30,7 +30,8 @@ CELS employs a tiered prefix convention to clarify calling scope, API visibility
 | Tier / Category | Prefix Convention | Example Symbols | Calling Context & Purpose |
 | :--- | :--- | :--- | :--- |
 | **Declarative DSL Macros** | `CEL_` (`SCREAMING_SNAKE` or `PascalCase`) | `CEL_State`, `CEL_Composable`, `CEL_Task`, `CEL_Lifecycle`, `CEL_ID` | Top-level structural declarations at file/global scope. |
-| **Runtime Composable DSL** | `cel_` (`snake_case`) | `cel_remember`, `cel_watch`, `cel_mutate`, `cel_transition`, `cel_stage_set` | Invoked inside composables, tasks, or event callbacks during recomposition. |
+| **Runtime Composable DSL** | `cel_` (`snake_case`) | `cel_remember`, `Cel.State.Watch`, `cel_mutate`, `cel_transition`, `cel_stage_set` | Invoked inside composables, tasks, or event callbacks during recomposition. |
+| **Authoring services** | `Cel.Domain.Operation` | `Cel.State.Watch(settings)` | Immutable runtime service table; no implicit receiver. |
 | **Public C API Functions** | `Cels` (`PascalCase`, noun-first) | `CelsEngineInit`, `CelsSessionRecompose`, `CelsSlotTableInit`, `CelsStateWatch` | Host-level functions, session operations, and slot table plumbing. |
 | **Internal Helpers & Body** | `_cels_` or `cels_` (`snake_case`) | `_cels_body_*`, `_cels_lifecycle_*`, `cels_app_runtime_check` | Private implementation functions, static trampolines, and helper macros. |
 | **Constants & Enums** | `CELS_` (`SCREAMING_SNAKE`) | `CELS_OK`, `CELS_MAX_GROUPS`, `CELS_ENGINE_MAGIC`, `CELS_OP_SET` | Preprocessor limits, magic numbers, and enumeration constants. |
@@ -171,20 +172,25 @@ This guarantees that:
 2. The compiler stores the default values in temporary storage.
 3. Its address `(const Type[])` is safely passed to the slot initialization function.
 
-### 4.3 Macro Arity Dispatch Idiom
+### 4.3 One State Subscription Spelling
 
-CELS uses position-based dispatcher macros to support overloaded macro signatures in pure C99:
+Use `Cel.State.Watch(statePointer)` inside composition. The pointer expression is
+passed exactly once to the checked subscription operation. Do not reintroduce
+`cel_watch`, type-only lookup, keyed overloads or session overloads under the DSL.
+Do not retain `cel_watch_state` as an alias. Embedding frameworks can define
+`CELS_NO_SERVICE_DSL` and expose their own table while calling `CelsApiV1()`.
+Host code can explicitly use `CelsStateWatch(session, key, sizeof(Type))`.
 
 ```c
-#define _CEL_GET_MACRO_3(_1, _2, _3, NAME, ...) NAME
-
-#define cel_watch(...) \
-    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_WATCH_3, _CEL_WATCH_2, _CEL_WATCH_1)(__VA_ARGS__)
+const PlayerState *player = cel_state(PlayerState, { .health = 100 });
+Cel.State.Watch(player);
 ```
 
-- When 1 argument is supplied: `_CEL_WATCH_1` is chosen (hoisted instance pointer subscription).
-- When 2 arguments are supplied: `_CEL_WATCH_2` is chosen (`cel_watch(Type, id)`).
-- When 3 arguments are supplied: `_CEL_WATCH_3` is chosen (`cel_watch(session, Type, id)`).
+Subscription is an operation on the owning composition thread, not a thread-safe
+read. The runtime validates the pointer against its bounded state registry before
+subscribing; it never inspects a header before arbitrary caller-provided memory.
+Return NULL with an actionable diagnostic for invalid contexts, foreign/unknown
+pointers and exhausted watcher capacity. NULL input remains a no-op.
 
 ### 4.4 Statement Macro Hygiene
 
@@ -317,7 +323,7 @@ Rules:
   const uint64_t key = CelsHashKey("StatusBar");
   const CelsSlotGroup *group = CelsGetGroup(session, logicalIdx);
   ```
-- **Read-Only Front Buffer Snapshots**: `cel_watch()` and `cel_get_state()` always return `const Type*`. Modifying published front-buffer state directly is undefined behavior.
+- **Read-Only Front Buffer Snapshots**: `Cel.State.Watch()` returns `const void*`, assignable to a borrowed `const Type*`; `cel_get_state()` returns a typed const pointer. Modifying published front-buffer state directly is undefined behavior.
 - **Mutable Back Buffers**: Modifications must occur via `cel_mutate()`, which exposes a mutable pointer to the staging back-buffer and automatically enqueues observers for recomposition.
 
 ---
@@ -373,7 +379,7 @@ In `cel_mutate(ptr)`, resolving the target type from the pointer is supported ac
 1. **Session Single-Thread Invariant**:
    A `CelsSession` recomposition walk (`CelsSessionRecompose`, execution of composables, slot table writes) runs **single-threaded** on its designated host thread. No locks are acquired during recomposition.
 2. **Lock-Free Front-Buffer Reads**:
-   Front-buffer state (`cel_watch`, `cel_get_state`, `CelsStateGet`) represents an immutable published snapshot. It is completely lock-free and safe to read across threads.
+   Front-buffer reads (`cel_get_state`, `CelsStateGet`) represents an immutable published snapshot. It is completely lock-free and safe to read across threads.
 3. **Transaction Staging Buffer**:
    Cross-thread mutations (e.g. background worker threads emitting physics or network updates) do not write to the active session slab directly. They stage operations via double-buffered transaction batches (`CelsSessionSwapTransactionBatches`), which are processed locklessly at the frame boundary.
 4. **Subsystem Modules**:

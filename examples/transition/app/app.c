@@ -9,7 +9,7 @@
  * Demonstrates declarative temporal interpolation using cel_transition rendered in a TUI window.
  */
 CEL_Composable(HealthBarHUD, const PlayerGaugeState*, gauge) {
-    cel_watch(gauge);
+    Cel.State.Watch(gauge);
     if (gauge == NULL) return;
 
     /* cel_transition smoothly interpolates display value toward authoritative target */

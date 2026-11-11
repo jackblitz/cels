@@ -14,7 +14,7 @@
  * Typical usage:
  * @code
  *     CEL_Composable(HealthBar, void *ctx) {
- *         const PlayerState *p = cel_watch(PlayerState, CEL_Player);
+ *         const PlayerState *p = ((const PlayerState *)CelsStateWatch(CelsGetCurrentSession(), CEL_Player, sizeof(PlayerState)));
  *         if (!p) return;
  *
  *         // Smoothly transition display health to target over 300ms
@@ -166,7 +166,7 @@ float CelsTransitionStep(
  * 4. Usage example:
  * @code
  *     CEL_Composable(PlayerHealthHUD) {
- *         const PlayerState *p = cel_watch(PlayerState, CEL_Player);
+ *         const PlayerState *p = ((const PlayerState *)CelsStateWatch(CelsGetCurrentSession(), CEL_Player, sizeof(PlayerState)));
  *         if (!p) return;
  *
  *         // Smoothly ease visual bar toward authoritative health over 400ms

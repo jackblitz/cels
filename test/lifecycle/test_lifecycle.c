@@ -50,7 +50,8 @@ CEL_EvaluateFn(EnemyEval, void*, ctx) {
 CEL_Composition(GoblinApp, void *userData) {
     (void)userData;
     g_renderCount++;
-    const Enemy *state = cel_watch(Enemy, CEL_ID("Goblin"));
+    const Enemy *state = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("Goblin"), sizeof(Enemy));
     (void)state;
     EnemyTexture *tex = cel_remember(EnemyTexture, 0);
     cel_lifecycle(TextureLifecycle, tex);
@@ -251,7 +252,8 @@ CEL_Composable(TestBadgeComposable) {
 }
 
 CEL_Composable(TestWindowBody) {
-    const AppWindowTestState *st = cel_watch_state(AppWindowTestState);
+    const AppWindowTestState *st = CelsStateWatch(
+        CelsGetCurrentSession(), CelsHashKey("AppWindowTestState"), sizeof(AppWindowTestState));
     if (st && st->showBadge) {
         TestBadgeComposable();
     }

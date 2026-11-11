@@ -47,6 +47,7 @@ endif()
 
 # Core CELS library sources
 set(CELS_CORE_SOURCES
+    src/runtime/api.c
     src/runtime/slot_table.c
     src/runtime/session.c
     src/runtime/state.c
@@ -61,6 +62,8 @@ set(CELS_CORE_SOURCES
 
 # Core CELS library (C99 modular implementation)
 add_library(cels_core STATIC ${CELS_CORE_SOURCES})
+# Static core objects are also linked into shared application modules.
+set_target_properties(cels_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(cels_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -221,6 +224,27 @@ if(CELS_BUILD_TESTS)
 
     set(TEST_COMMON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/test)
 
+    # Focused DSL tests do not depend on platform-specific example/benchmark code.
+    add_executable(test_state_watch
+        test/state_watch/test_state_watch.c
+        test/state_lifetime/test_state_lifetime.c
+    )
+    target_include_directories(test_state_watch PRIVATE "${TEST_COMMON_DIR}")
+    target_link_libraries(test_state_watch PRIVATE cels_core)
+    add_test(NAME state_watch COMMAND test_state_watch)
+
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(CELS_WATCH_COMPILER_OPTIONS)
+    if(MSVC)
+        list(APPEND CELS_WATCH_COMPILER_OPTIONS --msvc)
+    endif()
+    add_test(NAME state_watch_compile
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/state_watch/check_compile.py"
+            --compiler "${CMAKE_C_COMPILER}"
+            --include "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            ${CELS_WATCH_COMPILER_OPTIONS}
+    )
+
     # Test fixture dynamic library for hot-reload tests
     add_library(test_fixture_app SHARED
         test/hot_reload/fixture_app.c
@@ -250,6 +274,12 @@ if(CELS_BUILD_TESTS)
         ${TEST_COMMON_DIR}/benchmark
     )
     target_link_libraries(test_cli PRIVATE ${CELS_CORE_LINK})
+    # Assertions in the test bodies must execute in optimized configurations too.
+    if(MSVC)
+        target_compile_options(test_cli PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(test_cli PRIVATE -UNDEBUG)
+    endif()
     set_target_properties(test_cli PROPERTIES OUTPUT_NAME test_cli)
     add_dependencies(test_cli test_fixture_app)
     add_test(NAME test_cli COMMAND test_cli)

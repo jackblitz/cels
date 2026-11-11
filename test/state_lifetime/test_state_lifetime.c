@@ -16,7 +16,8 @@ static int childRuns;
 static int siblingRuns;
 
 CEL_Composable(ChildNode) {
-    const ChildState *st = cel_watch(ChildState, CEL_ID("ChildState"));
+    const ChildState *st = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("ChildState"), sizeof(ChildState));
     (void)st;
     ++childRuns;
 }
@@ -100,7 +101,8 @@ static void Node(int id) {
         resources[id] = resource;
         values[id] = value;
         uint64_t valKey = CelsKeyIndex(CEL_ID("node-val"), (uint64_t)id);
-        const int *st = cel_watch(int, valKey);
+        const int *st = CelsStateWatch(
+        CelsGetCurrentSession(), valKey, sizeof(int));
         (void)st;
     }
     CelsExitGroup(sess);
@@ -108,7 +110,8 @@ static void Node(int id) {
 
 CEL_Composition(EditRoot, void *userData) {
     (void)userData;
-    const LayoutState *st = cel_watch(LayoutState, CEL_ID("LayoutState"));
+    const LayoutState *st = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("LayoutState"), sizeof(LayoutState));
     int mode = st ? st->mode : 0;
     beforeChildren = cel_remember(int, 123);
     if (mode == 0) { Node(0); Node(1); Node(2); }
@@ -189,7 +192,8 @@ CEL_Lifecycle(ParentLifecycle, Resource *parent) {
 
 CEL_Composition(TeardownRoot, void *userData) {
     (void)userData;
-    const ShowParent *sp = cel_watch(ShowParent, CEL_ID("ShowParent"));
+    const ShowParent *sp = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("ShowParent"), sizeof(ShowParent));
     if (!sp || sp->show) {
         CelsSession *sess = CelsGetCurrentSession();
         if (CelsEnterComposable(sess, CEL_ID("parent"))) {
@@ -265,7 +269,8 @@ static void Parent(int id) {
 
 CEL_Composition(NestedRoot, void *userData) {
     (void)userData;
-    const NestedLayout *nl = cel_watch(NestedLayout, CEL_ID("NestedLayout"));
+    const NestedLayout *nl = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("NestedLayout"), sizeof(NestedLayout));
     int mode = nl ? nl->mode : 0;
     if (mode == 0) { Parent(0); Parent(1); }
     if (mode == 1) { Parent(2); Parent(0); Parent(1); }
@@ -332,7 +337,7 @@ static int s_hoistedChildRuns = 0;
 static int s_hoistedChildLastWidth = 0;
 
 CEL_Composable(HoistedWindowChild, HoistedWindowState*, win) {
-    cel_watch(win);
+    Cel.State.Watch(win);
     s_hoistedChildRuns++;
     s_hoistedChildLastWidth = win->width;
 }
@@ -386,12 +391,12 @@ static HoistedWindowState *s_capturedWin1 = NULL;
 static HoistedWindowState *s_capturedWin2 = NULL;
 
 CEL_Composable(HoistedConsumer1, HoistedWindowState*, win) {
-    cel_watch(win);
+    Cel.State.Watch(win);
     s_instRuns1++;
 }
 
 CEL_Composable(HoistedConsumer2, HoistedWindowState*, win) {
-    cel_watch(win);
+    Cel.State.Watch(win);
     s_instRuns2++;
 }
 
@@ -459,7 +464,7 @@ CEL_Composable(HoistedTeardownChild) {
 CEL_Composition(HoistedTeardownRoot, void *userData) {
     (void)userData;
     TeardownToggleState *toggle = cel_state(TeardownToggleState, ((TeardownToggleState){ .enable = true }));
-    cel_watch(toggle);
+    Cel.State.Watch(toggle);
     s_capturedToggle = toggle;
 
     if (toggle->enable) {
@@ -505,7 +510,7 @@ static const TestCase s_stateLifetimeTests[] = {
     { "TestEditsPreserveResources", "Tree edits and reordering preserve resource identity", TestEditsPreserveResources },
     { "TestChildBeforeParent", "Teardown order: child resources destroyed before parent", TestChildBeforeParent },
     { "TestNestedEditsKeepSubscriptions", "Nested tree edits maintain reactive subscriptions", TestNestedEditsKeepSubscriptions },
-    { "TestStateHoistingBasic", "State hoisting instance allocation, cel_watch(ptr), and cel_mutate(ptr)", TestStateHoistingBasic },
+    { "TestStateHoistingBasic", "State hoisting instance allocation, Cel.State.Watch(ptr), and cel_mutate(ptr)", TestStateHoistingBasic },
     { "TestStateHoistingMultipleInstances", "Multiple distinct instances of the same struct without string keys", TestStateHoistingMultipleInstances },
     { "TestStateHoistingAutomaticTeardown", "Automatic state cell deactivation when composable unmounts", TestStateHoistingAutomaticTeardown }
 };

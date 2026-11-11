@@ -3,7 +3,7 @@
   <p align="center"><strong>Declarative, Reactive Composition for Pure ANSI C99.</strong></p>
   <p align="center">Describe <strong>what</strong> should exist. CELS handles creation, destruction, state changes, and reconciliation automatically.</p>
   <p align="center">
-    <img src="https://img.shields.io/badge/version-v0.4.0-blue" alt="version">
+    <img src="https://img.shields.io/badge/version-v0.5.0-blue" alt="version">
     <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="license">
     <img src="https://img.shields.io/badge/standard-C99-orange?logo=c" alt="C99">
     <img src="https://img.shields.io/badge/tests-73%20passing-brightgreen" alt="tests">
@@ -13,7 +13,7 @@
 
 ---
 
-CELS reads like a DSL, compiles as pure C99, and runs anywhere. Define reactive states, compose hierarchical component trees, declare when nodes despawn with `CEL_Lifecycle`, and let fine-grained recomposition process your updates. No classes, no vtables, no runtime heap allocations. Just four concepts and a single `#include <cels/cels.h>`.
+CELS reads like a DSL, compiles as pure C99, and runs anywhere. Define reactive states, compose hierarchical component trees, declare when nodes despawn with `CEL_Lifecycle`, and let fine-grained recomposition process your updates. An immutable service table exposes operations without object instances. Just four concepts and a single `#include <cels/cels.h>`.
 
 - **C** omposition — declare what components exist and how they're hierarchically structured
 - **E** valuation — react to state changes with fine-grained recomposition and $\mathcal{O}(1)$ subtree skipping
@@ -23,7 +23,7 @@ CELS reads like a DSL, compiles as pure C99, and runs anywhere. Define reactive 
 ```text
  State (CEL_State)               defines DATA
  Compositions (CEL_Composition)  defines STRUCTURE    (what exists)
- Reactivity (cel_watch/mutate)   detects CHANGE       (when things happen)
+ Reactivity (Cel.State.Watch/mutate)   detects CHANGE       (when things happen)
  Lifecycles (CEL_Lifecycle)      controls LIFETIME    (when things live and die)
  Composables (CEL_Composable)    evaluates RENDERING  (how nodes update)
 ```
@@ -31,14 +31,14 @@ CELS reads like a DSL, compiles as pure C99, and runs anywhere. Define reactive 
 Data flows in one direction:
 
 ```text
-cel_mutate updates ──> cel_watch detects ──> Recomposition reacts (O(1) skip for unchanged)
+cel_mutate updates ──> Cel.State.Watch detects ──> Recomposition reacts (O(1) skip for unchanged)
 ```
 
 ```c
 CEL_State(PlayerState) { float health; bool hasShield; };
 
 CEL_Composable(HealthHUD, const PlayerState*, player) {
-    cel_watch(player); // Automatically subscribes to changes
+    Cel.State.Watch(player); // Automatically subscribes to changes
 
     // Smoothly converges visual display toward player->health over 300ms
     float visualHp = cel_transition(player->health, 300, CEL_EASE_OUT_QUAD);
@@ -53,6 +53,40 @@ CEL_Composable(HealthHUD, const PlayerState*, player) {
 ```
 
 ---
+
+## State subscription migration (0.5.0)
+
+The state-watching DSL now has one spelling: `Cel.State.Watch(statePointer)`.
+`cel_watch(...)` and `cel_watch_state(...)` lookup and pointer forms are removed without
+compatibility aliases. Resolve or hoist the state instance first; explicit host code
+needing a key/session can call `CelsStateWatch(session, key, sizeof(Type))`.
+This is a source-breaking change after v0.4.0; rebuild clients against this revision.
+The runtime function signatures and state layouts are unchanged. The new immutable
+`CelsApiV1()` table has service ABI 1, independent of the release version. Embedding
+frameworks can define `CELS_NO_SERVICE_DSL` before including Cels headers to supply
+their own `Cel` table and call `CelsApiV1()->State.Watch(state)` explicitly.
+
+Watching validates a live pointer in the current composition's session and returns
+NULL with a diagnostic on invalid context, unknown/foreign storage or exhausted
+watcher capacity. A NULL pointer is a no-op. Registry and watcher scans are bounded;
+no allocations occur. Do not use state pointers after their owner unmounts or the
+session ends, including when a later allocation could reuse their address.
+
+ECS observable declarations such as `Projection.watch(...)` belong to the consuming
+Cel engine framework. Cels itself does not implement ECS projections or import
+Flecs/Godot as part of this migration.
+
+Focused state-watching validation (repeat with `Release` in a separate build directory):
+
+```sh
+cmake -S . -B build/watch-debug -DCMAKE_BUILD_TYPE=Debug -DCELS_BUILD_EXAMPLES=OFF -DCELS_BUILD_BENCHMARKS=OFF
+cmake --build build/watch-debug --target test_state_watch
+ctest --test-dir build/watch-debug -R '^state_watch' --output-on-failure
+```
+
+These checks cover valid/retired DSL spellings, pointer validation, single evaluation,
+capacity failure/recovery, plus existing state lifetime and subtree teardown tests.
+Tests require Python 3 for the compiler probes; consumers of `cels_core` do not.
 
 ## What Makes CELS Different
 

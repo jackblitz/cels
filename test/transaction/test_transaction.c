@@ -172,7 +172,8 @@ CEL_Composition(UserDataTestComp, void *userData) {
     assert(testContext != NULL);
     assert(*testContext == 777);
 
-    const DummyState *st = cel_watch(DummyState, CEL_ID("DummyState"));
+    const DummyState *st = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("DummyState"), sizeof(DummyState));
     (void)st;
 }
 
@@ -230,7 +231,8 @@ CEL_Composable(ChildWithCleanup, uint64_t, entityId) {
 
 CEL_Composition(GateComposition, void *userData) {
     (void)userData;
-    const GateState *gate = cel_watch(GateState, CEL_ID("GateState"));
+    const GateState *gate = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("GateState"), sizeof(GateState));
     if (gate && gate->open) {
         ChildWithCleanup(9999);
     }
@@ -285,7 +287,8 @@ CEL_Composable(LivingEntityNode, uint64_t, entityId) {
 
 CEL_Composition(LifecycleEntityComposition, void *userData) {
     (void)userData;
-    const GateState *gate = cel_watch(GateState, CEL_ID("GateState"));
+    const GateState *gate = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("GateState"), sizeof(GateState));
     if (gate && gate->open) {
         LivingEntityNode(4242);
     }

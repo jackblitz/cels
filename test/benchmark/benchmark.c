@@ -149,7 +149,8 @@ CEL_Composable(ArmorBadge) {
 
 CEL_Composition(GoblinComposable, void *userData) {
     (void)userData;
-    const EnemyState *st = cel_watch(EnemyState, CEL_ID("EnemyState"));
+    const EnemyState *st = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("EnemyState"), sizeof(EnemyState));
     EnemyTexture *tex = cel_remember(EnemyTexture, 0);
     cel_lifecycle(TextureLifecycle, tex);
     HealthBar(st ? st->hp : 100);
@@ -223,7 +224,8 @@ CEL_Composable(StatusBar, int, count) {
 
 CEL_Composition(LargeDashboardTree, void *userData) {
     (void)userData;
-    const DashboardState *st = cel_watch(DashboardState, CEL_ID("DashboardState"));
+    const DashboardState *st = CelsStateWatch(
+        CelsGetCurrentSession(), CEL_ID("DashboardState"), sizeof(DashboardState));
     int activeTab = st ? st->activeTab : 1;
     bool showSidePanel = st ? st->showSidePanel : true;
     int itemCount = st ? st->itemCount : 8;

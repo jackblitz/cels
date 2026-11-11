@@ -12,7 +12,7 @@
  * - E: Evaluation  (Fine-grained recomposition, CEL_Evaluate)
  * - L: Lifecycle   (Pure mount & unmount topology tracking: CEL_Lifecycle, cel_lifecycle)
  * - S: State       (Double-buffered cache-aligned state: cel_remember, cel_remember_state,
- *                   cel_watch, cel_get_state, cel_mutate)
+ *                   Cel.State.Watch, cel_get_state, cel_mutate)
  *
  * Typical usage:
  * @code
@@ -23,7 +23,8 @@
  *
  *     // Declare composable widget
  *     CEL_Composable(CounterWidget) {
- *         const CounterState *state = cel_watch(CounterState, 1);
+ *         const CounterState *state = cel_state(CounterState, {0});
+ *         Cel.State.Watch(state);
  *         int *localClicks = cel_remember(int, 0);
  *         printf("Count: %d, Clicks: %d\n", state ? state->count : 0, *localClicks);
  *     }
@@ -64,6 +65,7 @@
 #include "cels/runtime/transition.h"
 #include "cels/runtime/event.h"
 #include "cels/runtime/version.h"
+#include "cels/api.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -97,7 +99,7 @@ extern "C" {
  *
  * What it does:
  * Generates both a typedef and struct declaration for a named reactive state model.
- * The declared type is used with cel_watch(), cel_get_state(), and cel_mutate().
+ * The declared type is used with Cel.State.Watch(), cel_get_state(), and cel_mutate().
  *
  * Expected outcome:
  * Defines a clean, cache-aligned C99 struct type recognized by the CELS state registry.
@@ -386,7 +388,7 @@ extern "C" {
  * Expected outcome:
  * - Pushes a new structural group node under the current parent in the active CelsSession.
  * - Any local state allocated with cel_remember() inside this composable is pinned across frames.
- * - Reactive subscriptions made with cel_watch() bind to this composable's key; mutations
+ * - Reactive subscriptions made with Cel.State.Watch() bind to this composable's key; mutations
  *   will automatically invalidate this group and trigger recomposition on the next pass.
  * - If omitted or conditionally excluded during a subsequent frame, the composable and all
  *   its descendants are cleanly unmounted, invoking registered destructors in reverse order.
@@ -407,7 +409,8 @@ extern "C" {
  *
  *     // Parameterized with typed arguments:
  *     CEL_Composable(UserBadge, const char*, username, int, level) {
- *         const UserTheme *theme = cel_watch(UserTheme);
+ *         const UserTheme *theme = cel_state(UserTheme, {0});
+ *         Cel.State.Watch(theme);
  *         int *hoverCount = cel_remember(int, 0);
  *         // render or compose UI
  *     }
@@ -510,7 +513,7 @@ extern "C" {
  *       void UserCard(const char *name, int karma);
  * - In source (.c): Implement with CEL_ComposableDef:
  *       CEL_ComposableDef(UserCard, const char*, name, int, karma) {
- *           // UI logic, cel_watch, cel_remember
+ *           // UI logic, Cel.State.Watch, cel_remember
  *       }
  *
  * For single-file or header-only components, use CEL_Composable(...) instead.
@@ -738,7 +741,7 @@ extern "C" {
  * Allocates a persistent double-buffered reactive state instance whose identity is derived
  * automatically from its slot table position (no string keys or manual IDs required).
  * Preceded by a CelsStateHeader, the returned pointer can be passed down to child composables,
- * subscribed to with cel_watch(ptr), and mutated anywhere with cel_mutate(ptr).
+ * subscribed to with Cel.State.Watch(ptr), and mutated anywhere with cel_mutate(ptr).
  * When the enclosing composable leaves the active hierarchy, the state cell is automatically
  * cleaned up and deactivated.
  *
@@ -811,46 +814,12 @@ extern "C" {
     _CEL_GET_REMEMBER_MACRO(__VA_ARGS__, _CEL_REMEMBER_3, _CEL_REMEMBER_2)(__VA_ARGS__)
 
 /* ========================================================================= */
-/* Reactive Observation & State Reading (cel_watch & cel_get_state)          */
+/* Reactive Observation & State Reading (Cel.State.Watch & cel_get_state)          */
 /* ========================================================================= */
 
-#define _CEL_WATCH_1(ptr) \
-    CelsWatchStateInstance(CelsGetCurrentSession(), (ptr))
-
-#define _CEL_WATCH_2(Type, id) \
-    ((const Type*)CelsStateWatch(CelsGetCurrentSession(), (id), sizeof(Type)))
-
-#define _CEL_WATCH_3(session, Type, id) \
-    ((const Type*)CelsStateWatch((session), (id), sizeof(Type)))
-
-/**
- * @def cel_watch
- * @brief Reads reactive state and registers an automatic recomposition dependency.
- *
- * What it does:
- * Looks up the front-buffer snapshot of a reactive state cell and registers the calling
- * composable's group key as an observer of that cell in the session dependency graph.
- * Supports hoisted state instance pointers (zero string keys) and legacy keyed lookups.
- *
- * Overloads:
- * - cel_watch(instancePtr): Subscribes to a hoisted state instance pointer.
- * - cel_watch(Type, id): Looks up by explicit 64-bit key.
- * - cel_watch(session, Type, id): Operates on an explicit session pointer.
- *
- * Examples:
- * @code
- *     // Hoisted state instance:
- *     cel_watch(win);
- *
- *     // Keyed entity state watch:
- *     const PlayerState *player = cel_watch(PlayerState, playerId);
- * @endcode
+/* Composition subscriptions use Cel.State.Watch(pointer), declared in cels/api.h.
+ * Explicit keyed host access remains CelsStateWatch(session, key, size).
  */
-#define cel_watch(...) \
-    _CEL_GET_MACRO_3(__VA_ARGS__, _CEL_WATCH_3, _CEL_WATCH_2, _CEL_WATCH_1)(__VA_ARGS__)
-
-#define cel_watch_state(Type) \
-    ((const Type*)CelsStateWatch(CelsGetCurrentSession(), CelsHashKey(#Type), sizeof(Type)))
 
 #define _CEL_GET_STATE_1(Type) \
     ((const Type*)CelsStateGet(CelsGetCurrentSession(), CelsHashKey(#Type), sizeof(Type)))
@@ -903,7 +872,7 @@ extern "C" {
  * What it does:
  * Accesses the double-buffered back-buffer of the specified state instance pointer
  * (allocated via cel_state or cel_remember_state) and marks all composable groups
- * that observed this cell via cel_watch() as dirty in the owning session's invalidation queue.
+ * that observed this cell via Cel.State.Watch() as dirty in the owning session's invalidation queue.
  *
  * Architectural Rule (Actor Model):
  * Sessions only mutate their own state via cel_mutate(ptr).
@@ -1639,7 +1608,7 @@ extern "C" {
  * 4. Usage example:
  * @code
  *     CEL_Composable(PlayerHealthHUD) {
- *         const PlayerState *p = cel_watch(PlayerState, CEL_Player);
+ *         const PlayerState *p = ((const PlayerState *)CelsStateWatch(CelsGetCurrentSession(), CEL_Player, sizeof(PlayerState)));
  *         if (!p) return;
  *
  *         // Smoothly ease visual bar toward authoritative health over 400ms

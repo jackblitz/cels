@@ -242,7 +242,7 @@ One of CELS's greatest strengths is **native C conditional logic**. You don't ne
 
 ```c
 CEL_Composable(WindowContent, WindowState*, win) {
-    cel_watch(win);
+    Cel.State.Watch(win);
 
     printf("Window: %dx%d\n", win->width, win->height);
 

@@ -42,7 +42,7 @@ When designing or reading any CELS application, code is organized into a strict 
 |   |   +-------------------------------------------------------+ | |
 |   |   |  Composable (CEL_Composable / CEL_ComposableDef)       | | |
 |   |   |  - Reusable visual / logical component node           | | |
-|   |   |  - Uses cel_remember (slots), cel_watch (reactivity)   | | |
+|   |   |  - Uses cel_remember (slots), Cel.State.Watch (reactivity)   | | |
 |   |   |  - Declares child composables & cel_lifecycle hooks   | | |
 |   |   +-------------------------------------------------------+ | |
 |   +-------------------------------------------------------------+ |
@@ -158,7 +158,8 @@ CELS provides two distinct mechanisms for accessing external data:
   - A slot group in the session's slot table (automatically keyed by callsite source location and index).
   - Local persistent slot state via `cel_remember(Type, initialValue)`.
   - Hoisted reactive state instances via `cel_state(Type, initialValue)`.
-  - Reactive subscriptions via `cel_watch(instancePtr)` (or `cel_watch(Type, stateId)`).
+  - Reactive subscriptions via `Cel.State.Watch(instancePtr)`. Keyed/session operations
+    belong to the explicit host function `CelsStateWatch`; no DSL overloads remain.
   - Resource acquisition and release hooks via `cel_lifecycle(LifecycleName, resourceData)`.
 - **Key Characteristics**:
   - Idempotent and declarative: during recomposition, composables execute sequentially, matching previous slots or inserting/deleting slots via the internal gap buffer.
@@ -202,7 +203,7 @@ When implementing a feature or breaking down a problem in CELS, use this decisio
 | **Number per App** | Usually 1 (can be 2-3 for background/worker threads) | 1 to several (e.g. main window, inspector window) | Tens to thousands (buttons, rows, cards, panels) |
 | **Lifecycle Control** | Managed by Host `CelsEngine` (`CelsEngineInit`/`End`) | Evaluated dynamically every tick via `CEL_Evaluation` | Mounts and unmounts conditionally within parent composable |
 | **Slot Memory** | Owns the physical `SlotTable` buffer | Starts a root slot group in the session | Owns a sub-group of memory slots (`cel_remember`) |
-| **Reactivity** | Orchestrates double-buffer commit and recompose | Recomposes when watched states or inputs change | Re-executes during recomposition; subscribes via `cel_watch` |
+| **Reactivity** | Orchestrates double-buffer commit and recompose | Recomposes when watched states or inputs change | Re-executes during recomposition; subscribes via `Cel.State.Watch` |
 | **Thread Safety** | Must be confined to a single thread | Confined to the session's thread | Confined to the session's thread |
 
 ---
@@ -250,7 +251,7 @@ CEL_Composition(SubmitButtonComp, void *ctx) {
 
 // CORRECT: Compose widgets as reusable Composables inside a parent Composition
 CEL_Composable(SubmitButton, const FormState*, state) {
-    cel_watch(state);
+    Cel.State.Watch(state);
     if (!state->canSubmit) return;
     RenderButton("Submit");
 }
@@ -274,7 +275,7 @@ CEL_Composable(CounterWidget) {
 CEL_Composable(CounterWidget) {
     // Distinct slot group allocated per callsite in the slot table
     CounterState *s = cel_state(CounterState, { .count = 0 });
-    cel_watch(s);
+    Cel.State.Watch(s);
     // Render counter...
 }
 ```
@@ -290,7 +291,7 @@ bool WindowEval(void *ctx) {
 
 // CORRECT: Conditionally branch inside the composable body
 CEL_Composable(Toolbar, const WindowState*, win) {
-    cel_watch(win);
+    Cel.State.Watch(win);
     RenderToolbarBase();
     if (win->showBadge) {
         // Slot reconciliation automatically mounts/unmounts Badge slots

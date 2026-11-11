@@ -13,7 +13,7 @@ typedef struct LastEventMsg {
  *
  * Demonstrates:
  * - Persistent local slot memory (cel_remember)
- * - Reactive state observation (cel_watch)
+ * - Reactive state observation (Cel.State.Watch)
  * - In-place terminal window rendering
  * - Child component lifecycle & discrete event bubbling
  */
@@ -24,7 +24,7 @@ CEL_ComposableDef(WindowContent, WindowState*, win) {
     LastEventMsg *lastEvent = cel_remember(LastEventMsg, { .text = "No events received yet" });
 
     /* Reactively observe the hoisted window state instance */
-    cel_watch(win);
+    Cel.State.Watch(win);
 
     /* Listen for discrete events bubbling up from child components */
     cel_listen(BadgeNotificationEvent, ev) {
